@@ -18,9 +18,9 @@ ARG DATE=unknown
 
 RUN CGO_ENABLED=0 go build -trimpath \
     -ldflags "-s -w \
-      -X github.com/owner-tbd/network-topology-exporter/internal/version.Version=${VERSION} \
-      -X github.com/owner-tbd/network-topology-exporter/internal/version.Commit=${COMMIT} \
-      -X github.com/owner-tbd/network-topology-exporter/internal/version.BuildDate=${DATE}" \
+      -X github.com/colinedwardwood/network-topology-exporter/internal/version.Version=${VERSION} \
+      -X github.com/colinedwardwood/network-topology-exporter/internal/version.Commit=${COMMIT} \
+      -X github.com/colinedwardwood/network-topology-exporter/internal/version.BuildDate=${DATE}" \
     -o /out/topology-exporter ./cmd/topology-exporter
 
 # ─── runtime ────────────────────────────────────────────────────────────────
@@ -29,7 +29,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 LABEL org.opencontainers.image.title="network-topology-exporter"
 LABEL org.opencontainers.image.description="Network topology discovery exporter for Prometheus / Loki / OTLP."
 LABEL org.opencontainers.image.licenses="Apache-2.0"
-LABEL org.opencontainers.image.source="https://github.com/owner-tbd/network-topology-exporter"
+LABEL org.opencontainers.image.source="https://github.com/colinedwardwood/network-topology-exporter"
 
 USER nonroot:nonroot
 

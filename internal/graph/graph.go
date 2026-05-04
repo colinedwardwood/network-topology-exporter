@@ -5,7 +5,7 @@
 // so cmd/topology-exporter can wire it in incrementally.
 package graph
 
-import "github.com/owner-tbd/network-topology-exporter/internal/discovery"
+import "github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 
 // ChangeKind describes a topology mutation between two cycles.
 type ChangeKind string

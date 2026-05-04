@@ -77,4 +77,4 @@ Apache License 2.0. See [LICENSE](LICENSE).
 
 ## Related
 
-- [`network-o11y-dev`](https://github.com/owner-tbd/network-o11y-dev) — provisioning + dashboards + plugins + packaging that consume this exporter.
+- [`network-o11y-dev`](https://github.com/colinedwardwood/network-o11y-dev) — provisioning + dashboards + plugins + packaging that consume this exporter.

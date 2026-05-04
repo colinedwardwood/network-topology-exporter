@@ -10,7 +10,7 @@ package bgp
 import (
 	"context"
 
-	"github.com/owner-tbd/network-topology-exporter/internal/discovery"
+	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 )
 
 // Walker is the BGP discovery module. Implementation lands per the v1 plan.

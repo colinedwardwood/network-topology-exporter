@@ -19,7 +19,7 @@ package snmp
 import (
 	"context"
 
-	"github.com/owner-tbd/network-topology-exporter/internal/discovery"
+	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 )
 
 // Walker reads the SNMP SYSTEM group and emits one Device per target.

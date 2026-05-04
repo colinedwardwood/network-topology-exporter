@@ -15,7 +15,7 @@ package lldp
 import (
 	"context"
 
-	"github.com/owner-tbd/network-topology-exporter/internal/discovery"
+	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 )
 
 // Walker discovers LLDP neighbors for one device and emits Edge records.
