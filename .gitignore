@@ -1,0 +1,27 @@
+# Build output
+bin/
+dist/
+
+# Test output
+coverage.out
+coverage.html
+*.test
+*.out
+
+# Editor / OS junk
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Local env
+.env
+.env.local
+
+# SBOM output
+sbom/
+*.spdx.json
+
+# go module cache (per-machine)
+vendor/
