@@ -1,0 +1,64 @@
+# network-topology-exporter — example configuration.
+#
+# Each section maps to an internal package. See README.md for the emitted
+# Prometheus / Loki / OTLP signal reference.
+
+# ─── Discovery cycle controls ───────────────────────────────────────────────
+discovery:
+  interval: 60s
+  timeout_per_device: 10s
+  parallelism: 32
+
+# ─── Per-protocol modules ──────────────────────────────────────────────────
+# Each module cites the public spec it derives from; see the corresponding
+# internal/discovery/<module>/<module>.go file header.
+modules:
+  snmp:
+    enabled: true
+    version: v2c               # v2c | v3
+    community_env: SNMP_COMMUNITY
+    # SNMPv3 fields are read from environment when version=v3:
+    #   SNMP_USERNAME, SNMP_AUTH_PROTOCOL, SNMP_AUTH_PASSPHRASE,
+    #   SNMP_PRIV_PROTOCOL, SNMP_PRIV_PASSPHRASE
+  lldp:
+    enabled: true              # IEEE 802.1AB / RFC 4957
+  cdp:
+    enabled: true              # CISCO-CDP-MIB
+  bgp:
+    enabled: false             # RFC 1657
+  ospf:
+    enabled: false             # RFC 4750
+  arp:
+    enabled: true              # IP-MIB / RFC 4293
+  fdb:
+    enabled: true              # BRIDGE-MIB / RFC 4188
+
+# ─── Loki push for topology change events ──────────────────────────────────
+loki:
+  enabled: false
+  url: http://localhost:3100/loki/api/v1/push
+  labels:
+    job: topology-exporter
+
+# ─── OpenTelemetry traces for discovery cycles ─────────────────────────────
+otel:
+  enabled: false
+  endpoint: localhost:4317
+  insecure: true
+
+# ─── Optional NetBox sink (integration, not a signal) ──────────────────────
+netbox:
+  enabled: false
+  url: ""                      # e.g. https://netbox.example.com
+  api_token_env: NETBOX_API_TOKEN
+  default_site: ""
+
+# ─── Discovery targets ─────────────────────────────────────────────────────
+# In production this is typically synced from Git and external IPAM via
+# Grafana Fleet Management; for dev, list devices inline.
+targets:
+  - host: 198.51.100.10
+    port: 161
+    site: lab
+    labels:
+      environment: dev
