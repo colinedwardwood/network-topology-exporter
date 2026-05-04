@@ -6,8 +6,9 @@
 
 1. **Standard signals only.** No bespoke control-plane API, no proprietary RPCs, no project-specific JSON schemas the consumer has to learn. Anything that needs the topology graph queries Prometheus / Mimir; anything that needs a change feed reads Loki; anything that needs cycle profiling consumes the OTLP traces.
 2. **Modular discovery.** Each protocol is an independent package under `internal/discovery/`. Modules emit common `Device` and `Edge` value types; the exporter coordinates and the metrics layer translates to Prometheus series.
-3. **Clean-room development per LD-09.** Every module cites its source RFC / IEEE spec / vendor MIB in its file header. No GPL-licensed monitoring source is consulted at any point.
+3. **Clean-room source-for-spec rule per LD-09.** GPL-licensed monitoring source may be read for behavioural extraction into specifications under `docs/research/` (or in the parent `network-o11y-dev` repo); the Go implementation is then written from those specifications, never from the source. See [`CONTRIBUTING.md`](../CONTRIBUTING.md) for the full guardrails.
 4. **Pattern provenance.** Where structural patterns are borrowed from permissive-licensed projects (e.g. `prometheus/snmp_exporter`'s YAML module schema), the borrowing is noted in code comments with the upstream license.
+5. **Source-attributed reconciliation per LD-10.** Every emitted edge carries `discovery_proto`, `direction`, `confidence`, `link_type`, and `precedence_rank` labels; conflicts between sources are emitted (not silently resolved) via a separate `network_topology_conflict_total` counter. The full precedence ladder lives in [`network-o11y-dev/docs/ARCHITECTURE.md`](https://github.com/colinedwardwood/network-o11y-dev/blob/main/docs/ARCHITECTURE.md) §LD-10; this repo implements it in `internal/graph/`.
 
 ## Module layout
 
@@ -48,7 +49,9 @@
 │        edges = module.Walk(target)                                  │
 │        emit edges as TopologyEdgeInfo series                        │
 │      span.End()                                                     │
+│  graph.Reconcile(edges) → ranked edges per LD-10 precedence ladder  │
 │  graph.Diff(previous, current) → TopologyChangeTotal counter +      │
+│                                  TopologyConflictTotal counter +    │
 │                                  Loki push events                   │
 │  observe cycle_duration_seconds                                     │
 │  optional: netbox.Reconcile(devices) — integration, not a signal    │
