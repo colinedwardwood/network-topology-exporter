@@ -8,7 +8,7 @@ package events
 import (
 	"context"
 
-	"github.com/owner-tbd/network-topology-exporter/internal/graph"
+	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
 )
 
 // Pusher pushes graph diffs to Loki. Construction takes the configured Loki

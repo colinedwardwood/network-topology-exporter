@@ -8,7 +8,7 @@ package netbox
 import (
 	"context"
 
-	"github.com/owner-tbd/network-topology-exporter/internal/discovery"
+	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 )
 
 // Client reconciles discovered devices into a NetBox instance via the REST API.

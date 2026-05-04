@@ -22,7 +22,7 @@ linters:
 
 linters-settings:
   goimports:
-    local-prefixes: github.com/owner-tbd/network-topology-exporter
+    local-prefixes: github.com/colinedwardwood/network-topology-exporter
   revive:
     rules:
       - name: package-comments

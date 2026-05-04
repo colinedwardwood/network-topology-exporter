@@ -1,4 +1,4 @@
-module github.com/owner-tbd/network-topology-exporter
+module github.com/colinedwardwood/network-topology-exporter
 
 go 1.22
 

@@ -20,9 +20,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/owner-tbd/network-topology-exporter/internal/config"
-	"github.com/owner-tbd/network-topology-exporter/internal/metrics"
-	"github.com/owner-tbd/network-topology-exporter/internal/version"
+	"github.com/colinedwardwood/network-topology-exporter/internal/config"
+	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/colinedwardwood/network-topology-exporter/internal/version"
 )
 
 func main() {
