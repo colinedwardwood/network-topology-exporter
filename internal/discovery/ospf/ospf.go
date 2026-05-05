@@ -18,29 +18,156 @@
 //     topology picture; OSPF adjacency is the L3 component for IP-only paths.
 //     https://dl.acm.org/doi/abs/10.1109/TNET.2004.828963
 //
-// # Notes
+// # Critical implementation notes
 //
-//   - OSPF adjacency means the two routers are in the same area and exchange
-//     LSAs. As with BGP, physical adjacency is not implied — OSPF virtual
-//     links and multi-access segments mean adjacencies can traverse multiple
-//     L2 hops. Edges are emitted with Confidence=medium (stronger than BGP
-//     because OSPF is a link-state protocol and adjacencies are typically
-//     between directly-connected routers, but not guaranteed).
-//   - RFC 4750 OSPF-MIB is not widely implemented on modern network OS.
+//  1. Only adjacencies in state full(8) or twoWay(5) are emitted as edges.
+//     States init(3), attempt(2), and down(1) represent incomplete or stale
+//     adjacencies and must be filtered before edge construction.
+//
+//  2. LD-11 CIDR scope enforcement is applied here: ospfNbrIpAddr is an IPv4
+//     address and can be checked against the allow-list. Neighbours outside
+//     the list are surfaced as OutOfScopeNeighbour and never polled.
+//
+//  3. RFC 4750 OSPF-MIB is not widely implemented on modern network OS.
 //     Cisco IOS-XR, Juniper Junos, and Arista EOS have varying levels of
 //     OSPF MIB support. Treat empty walk results as normal, not as an error.
 package ospf
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"strings"
+	"time"
+
+	gsnmp "github.com/gosnmp/gosnmp"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+	snmputil "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
 )
 
-// Walker reads OSPF-MIB neighbour state and emits one Edge per adjacency.
-type Walker struct{}
+const (
+	oidOspfNbrTable = "1.3.6.1.2.1.14.10"
+	precedenceRank  = 5
+)
 
-// Walk returns the OSPF-derived edges for one device. Stub.
-func (w *Walker) Walk(_ context.Context, _ string) ([]discovery.Edge, error) {
-	return nil, nil
+// ospfNbrTable column numbers (RFC 4750 §11.2).
+const (
+	colNbrIpAddr = "1"
+	colNbrState  = "6"
+)
+
+const (
+	stateTwoWay = 5
+	stateFull   = 8
+)
+
+type nbrRow struct {
+	nbrIP net.IP
+	state int
+}
+
+// Walk returns OSPF neighbour edges for the device at p.IP. Only neighbours
+// in state full(8) or twoWay(5) produce edges. Neighbours outside allowedNets
+// go to the OutOfScopeNeighbour slice; pass nil to skip scope enforcement.
+func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
+	client, err := snmputil.Open(p)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ospf %s: %w", p.IP, err)
+	}
+	defer client.Conn.Close()
+
+	rows, err := walkOspfNbrTable(ctx, client)
+	if err != nil {
+		return nil, nil, fmt.Errorf("ospf nbrTable %s: %w", p.IP, err)
+	}
+	edges, oos := buildEdges(localDevice, rows, allowedNets)
+	return edges, oos, nil
+}
+
+func walkOspfNbrTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*nbrRow, error) {
+	pdus, err := snmputil.BulkWalk(ctx, client, oidOspfNbrTable)
+	if err != nil {
+		return nil, err
+	}
+	const prefix = ".1.3.6.1.2.1.14.10.1."
+	rows := make(map[string]*nbrRow)
+	for _, pdu := range pdus {
+		col, key, ok := parseNbrOID(pdu.Name, prefix)
+		if !ok {
+			continue
+		}
+		row := rows[key]
+		if row == nil {
+			row = &nbrRow{}
+			rows[key] = row
+		}
+		switch col {
+		case colNbrIpAddr:
+			if b := snmputil.PDUBytes(pdu); len(b) == 4 {
+				ip := make(net.IP, 4)
+				copy(ip, b)
+				row.nbrIP = ip
+			}
+		case colNbrState:
+			row.state = snmputil.PDUInt(pdu)
+		}
+	}
+	return rows, nil
+}
+
+func buildEdges(localDevice string, rows map[string]*nbrRow, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour) {
+	now := time.Now()
+	var edges []discovery.Edge
+	var oos []discovery.OutOfScopeNeighbour
+
+	for _, row := range rows {
+		if row.nbrIP == nil {
+			continue
+		}
+		if row.state != stateFull && row.state != stateTwoWay {
+			continue
+		}
+		if len(allowedNets) > 0 && !snmputil.IPInNets(row.nbrIP, allowedNets) {
+			oos = append(oos, discovery.OutOfScopeNeighbour{
+				ReportingDevice: localDevice,
+				NeighbourHint:   row.nbrIP.String(),
+				LastSeen:        now,
+			})
+			continue
+		}
+		edges = append(edges, discovery.Edge{
+			SrcDevice:      localDevice,
+			DstDevice:      row.nbrIP.String(),
+			DiscoveryProto: "ospf",
+			Direction:      discovery.DirectionUnidirectional,
+			Confidence:     discovery.ConfidenceMedium,
+			Adjacency:      discovery.AdjacencyDirect,
+			PrecedenceRank: precedenceRank,
+			LinkKind:       "ip",
+			ObservedAt:     now,
+		})
+	}
+	return edges, oos
+}
+
+// parseNbrOID extracts the column string and composite row key from an
+// ospfNbrTable OID suffix. The suffix after the table prefix has the form
+// "<col>.<ip0>.<ip1>.<ip2>.<ip3>.<addressLessIndex>".
+func parseNbrOID(oid, prefix string) (col, key string, ok bool) {
+	if !strings.HasPrefix(oid, prefix) {
+		return "", "", false
+	}
+	rest := oid[len(prefix):]
+	dotIdx := strings.IndexByte(rest, '.')
+	if dotIdx < 0 {
+		return "", "", false
+	}
+	col = rest[:dotIdx]
+	key = rest[dotIdx+1:]
+	// key must be "<ip0>.<ip1>.<ip2>.<ip3>.<addrLessIdx>" — exactly 4 dots.
+	if strings.Count(key, ".") != 4 {
+		return "", "", false
+	}
+	return col, key, true
 }

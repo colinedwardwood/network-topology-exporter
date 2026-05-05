@@ -107,6 +107,72 @@ func TestProfileMissing(t *testing.T) {
 	}
 }
 
+// AcquireTrial returns context.Canceled when the context is already cancelled.
+func TestAcquireTrialContextCancelled(t *testing.T) {
+	r, err := New(config.CredentialsConfig{
+		Profiles:           []config.CredentialProfile{{Name: "p", Type: "snmp_v2c", CommunityEnv: "C"}},
+		FallbackOrder:      []string{"p"},
+		TrialRatePerSecond: 1,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Deplete the single token so the next acquire would block.
+	bg := context.Background()
+	if err := r.AcquireTrial(bg); err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(bg)
+	cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- r.AcquireTrial(ctx) }()
+
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Fatalf("got %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("AcquireTrial did not return after context cancellation")
+	}
+}
+
+// AcquireTrial unblocks and returns context.Canceled when the context is
+// cancelled while the goroutine is blocked waiting for a token.
+func TestAcquireTrialCancelWhileBlocked(t *testing.T) {
+	r, err := New(config.CredentialsConfig{
+		Profiles:           []config.CredentialProfile{{Name: "p", Type: "snmp_v2c", CommunityEnv: "C"}},
+		FallbackOrder:      []string{"p"},
+		TrialRatePerSecond: 1,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	bg := context.Background()
+	if err := r.AcquireTrial(bg); err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(bg)
+	done := make(chan error, 1)
+	go func() { done <- r.AcquireTrial(ctx) }()
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Fatalf("got %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("AcquireTrial did not unblock after cancel")
+	}
+}
+
 // LD-12: trial limiter blocks the call site so the cold-start trial rate
 // stays bounded. With rate=2 and burst=2, three back-to-back acquires take
 // at least one full token-refill window.
