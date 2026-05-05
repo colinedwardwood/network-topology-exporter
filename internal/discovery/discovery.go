@@ -1,26 +1,48 @@
-// Package discovery defines the cross-module Device and Edge value types that
-// every discovery module produces. Concrete walking logic lives in
+// Package discovery defines the Device and Edge value types every protocol
+// module produces. Concrete walking logic lives in
 // internal/discovery/<protocol>/.
 //
-// The Edge schema mirrors the LD-10 reconciliation labels in the parent
-// network-o11y-dev repo (docs/ARCHITECTURE.md §LD-10): every edge carries
-// the source protocol, direction, confidence bucket, NetXMS-style adjacency
-// classification, and precedence rank, so the graph layer can rank without
-// having to recover that information from elsewhere.
+// # Graph model reference
+//
+// The abstract structure (nodes, links, termination-points) follows the
+// conceptual model in RFC 8345 — "A YANG Data Model for Network Topologies"
+// (Clemm et al., 2018, https://datatracker.ietf.org/doc/html/rfc8345).
+// RFC 8345 is the current IETF standard representation for topology data;
+// the Device/Edge naming here is equivalent to its node/link vocabulary.
+//
+// # Edge schema
+//
+// The Edge schema is shaped by LD-10 (network-o11y-dev/docs/ARCHITECTURE.md):
+// every edge carries the source protocol, direction, confidence bucket,
+// direct-vs-indirect adjacency classification, and precedence rank so the
+// graph layer can reconcile without re-deriving that information.
+//
+// The Confidence and Adjacency fields are informed by:
+//   - Bejerano, Breitbart, Garofalakis, Rastogi — "Physical Topology
+//     Discovery for Large Multisubnet Networks", IEEE INFOCOM 2003. The
+//     direct/indirect classification (one MAC on a port = direct; many MACs
+//     = indirect) is the core contribution of that paper.
+//     https://ieeexplore.ieee.org/document/1208686
+//   - Breitbart et al. — "The NetInventory System", IEEE/ACM ToN 2004.
+//     Describes ranking multiple protocol sources for the same physical link;
+//     the precedence ladder in LD-10 follows this approach.
+//     https://dl.acm.org/doi/abs/10.1109/TNET.2004.828963
 package discovery
 
-import "time"
+import (
+	"net"
+	"time"
+)
 
 // Device is the inventory record for one network node.
 type Device struct {
-	ID           string // stable identifier (typically <site>/<host>)
-	Vendor       string
-	Model        string
-	OSVersion    string
-	Site         string
-	ParentDevice string // for topology-aware suppression (TS-09)
-	Uptime       time.Duration
-	Labels       map[string]string // free-form site / role / environment labels
+	ID        string // sysName (normalised lowercase); fallback: management IP
+	Vendor    string
+	Model     string
+	OSVersion string
+	Site      string            // from per-target enrichment config, not SNMP
+	Uptime    time.Duration
+	Labels    map[string]string // free-form labels from per-target enrichment config
 }
 
 // Direction records whether a link was confirmed from both endpoints (the
@@ -71,11 +93,11 @@ type Edge struct {
 
 	// LD-10 reconciliation labels. The metric layer maps these directly onto
 	// `network_topology_edge_info` labels.
-	DiscoveryProto string     // "lldp" | "cdp" | "fdp" | "bgp" | "ospf" | "arp" | "fdb" | "netbox"
+	DiscoveryProto string     // "lldp" | "cdp" | "bgp" | "ospf" | "fdb"
 	Direction      Direction
 	Confidence     Confidence
 	Adjacency      Adjacency
-	PrecedenceRank int // 1 = manual/NetBox; 9 = ARP inference. See LD-10 ladder.
+	PrecedenceRank int // 1 = highest priority. See LD-10 ladder.
 
 	// LinkKind describes the link's transport semantics, independent of how it
 	// was discovered: "ethernet" for L2 LLDP/CDP/FDB observations, "ibgp" or
@@ -83,4 +105,43 @@ type Edge struct {
 	// "logical" for tunnel / VPN endpoints, etc. Not part of the LD-10 label
 	// set; consumed by dashboards that want to filter by transport.
 	LinkKind string
+
+	// LD-14 lifecycle. ObservedAt timestamps the cycle this Edge was emitted;
+	// the graph layer tracks UnconfirmedCycles internally and removes a link
+	// once it has been unidirectional for DiscoveryConfig.UnconfirmedLinkTTLCycles
+	// in a row. The discovery module fills ObservedAt and leaves the counter
+	// at zero — the counter is graph-layer state, not per-cycle state.
+	ObservedAt time.Time
+}
+
+// OutOfScopeNeighbour is the LD-11 surface for neighbours discovered via
+// LLDP/CDP whose IP falls outside the configured CIDR allow-list. The
+// exporter records the report but never polls the neighbour.
+type OutOfScopeNeighbour struct {
+	ReportingDevice string
+	ReportingPort   string
+	NeighbourHint   string // chassis-id, hostname, or IP — whatever the source gave us
+	FirstSeen       time.Time
+	LastSeen        time.Time
+}
+
+// Resolver is the LD-12 credential-resolution contract. Resolve returns the
+// ordered profile list to try for ip; CachedProfile, RecordSuccess, and
+// RecordFailure manage the per-device winning-profile cache that is persisted
+// in the snapshot (LD-13). Cache keys are IP strings, not sysNames, so the
+// fast path is available before the SNMP walk that would reveal the sysName.
+type Resolver interface {
+	Resolve(ip net.IP) []string
+	CachedProfile(id string) (string, bool)
+	RecordSuccess(id, profileName string)
+	RecordFailure(id string)
+}
+
+// Graph is the reconciled view of the network at one point in time. It's
+// what the snapshot writer serialises and what the metric collector reads
+// to build /metrics responses.
+type Graph struct {
+	Devices    []Device
+	Edges      []Edge
+	OutOfScope []OutOfScopeNeighbour
 }
