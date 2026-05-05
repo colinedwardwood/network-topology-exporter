@@ -6,7 +6,11 @@
 //     SMIv2). Obsoletes RFC 1493. Defines dot1dTpFdbTable (OID
 //     1.3.6.1.2.1.17.4.3): dot1dTpFdbAddress (.1) is the learned MAC,
 //     dot1dTpFdbPort (.2) is the bridge port number, dot1dTpFdbStatus (.3)
-//     is the entry state (learned=3, self=4, mgmt=5).
+//     is the entry state (learned=3, self=4, mgmt=5). RFC 4188 §14.8.2 also
+//     defines dot1dStpPortTable (OID 1.3.6.1.2.1.17.2.15): dot1dStpPortState
+//     (.3) is the STP port state (disabled=1, blocking=2, listening=3,
+//     learning=4, forwarding=5, broken=6). Only forwarding(5) ports pass
+//     traffic; entries on all other states are suppressed.
 //   - RFC 2863 — The Interfaces Group MIB (IF-MIB). dot1dTpFdbPort gives a
 //     bridge port number, not an ifIndex. The cross-reference chain is:
 //     dot1dTpFdbPort → dot1dBasePortTable.dot1dBasePortIfIndex
@@ -54,6 +58,11 @@
 //  4. LD-11 CIDR scope enforcement is not applied here: FDB entries carry only
 //     a MAC address, not an IP. Without ARP resolution (excluded by note 2),
 //     there is no IP address to test against the allow-list.
+//
+//  5. Ports absent from dot1dStpPortTable are treated as forwarding. Some
+//     devices do not populate STP state for all ports (access ports on
+//     non-STP VLANs, management ports). Absence of an STP entry is not a
+//     signal of blocking.
 package fdb
 
 import (
@@ -72,9 +81,11 @@ import (
 const (
 	oidFdbTable      = "1.3.6.1.2.1.17.4.3"
 	oidBasePortTable = "1.3.6.1.2.1.17.1.4"
+	oidStpPortTable  = "1.3.6.1.2.1.17.2.15"
 	oidIfName        = "1.3.6.1.2.1.31.1.1.1.1"
 	precedenceRank   = 4
 	fdbStatusLearned = 3
+	stpStateForwarding = 5
 )
 
 // dot1dTpFdbTable column numbers (RFC 4188).
@@ -86,6 +97,9 @@ const (
 
 // dot1dBasePortTable column numbers (RFC 4188).
 const colBasePortIfIndex = 2
+
+// dot1dStpPortTable column numbers (RFC 4188 §14.8.2).
+const colStpPortState = 3
 
 type fdbEntry struct {
 	mac    []byte
@@ -111,11 +125,15 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, _ []*net.I
 	if err != nil {
 		return nil, nil, fmt.Errorf("fdb baseport %s: %w", p.IP, err)
 	}
+	stpStates, err := walkStpPortStates(ctx, client)
+	if err != nil {
+		return nil, nil, fmt.Errorf("fdb stpport %s: %w", p.IP, err)
+	}
 	ifNames, err := walkIfNames(ctx, client)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fdb ifname %s: %w", p.IP, err)
 	}
-	return buildEdges(localDevice, entries, bridgePorts, ifNames), nil, nil
+	return buildEdges(localDevice, entries, bridgePorts, ifNames, stpStates), nil, nil
 }
 
 func walkFdbTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*fdbEntry, error) {
@@ -176,6 +194,35 @@ func walkBasePortTable(ctx context.Context, client *gsnmp.GoSNMP) (map[int]int, 
 	return ports, nil
 }
 
+// walkStpPortStates reads dot1dStpPortTable (RFC 4188 §14.8.2) and returns a
+// map of bridge port number → STP state. Only column 3 (dot1dStpPortState)
+// is consumed. Ports absent from the table are treated as forwarding by the
+// caller; this function never synthesises entries.
+func walkStpPortStates(ctx context.Context, client *gsnmp.GoSNMP) (map[int]int, error) {
+	pdus, err := snmputil.BulkWalk(ctx, client, oidStpPortTable)
+	if err != nil {
+		return nil, err
+	}
+	const prefix = ".1.3.6.1.2.1.17.2.15.1."
+	states := make(map[int]int) // bridgePort → STP state
+	for _, pdu := range pdus {
+		suffix, ok := snmputil.TrimOIDPrefix(pdu.Name, prefix)
+		if !ok {
+			continue
+		}
+		col, portStr, ok := snmputil.SplitOIDComponent(suffix)
+		if !ok || col != colStpPortState {
+			continue
+		}
+		portNum, err := strconv.Atoi(portStr)
+		if err != nil {
+			continue
+		}
+		states[portNum] = snmputil.PDUInt(pdu)
+	}
+	return states, nil
+}
+
 func walkIfNames(ctx context.Context, client *gsnmp.GoSNMP) (map[int]string, error) {
 	pdus, err := snmputil.BulkWalk(ctx, client, oidIfName)
 	if err != nil {
@@ -199,11 +246,18 @@ func walkIfNames(ctx context.Context, client *gsnmp.GoSNMP) (map[int]string, err
 
 // buildEdges applies the Bejerano direct/indirect classification: a port with
 // exactly one learned MAC is AdjacencyDirect (one device); a port with multiple
-// MACs is AdjacencyIndirect (downstream switch or trunk).
-func buildEdges(localDevice string, entries map[string]*fdbEntry, bridgePorts map[int]int, ifNames map[int]string) []discovery.Edge {
+// MACs is AdjacencyIndirect (downstream switch or trunk). Ports with a known
+// STP state other than forwarding(5) are skipped entirely — their FDB entries
+// are stale and do not represent active forwarding paths. Ports absent from
+// stpStates are passed through; not all devices populate STP state for every
+// port (e.g. access ports on non-STP VLANs).
+func buildEdges(localDevice string, entries map[string]*fdbEntry, bridgePorts map[int]int, ifNames map[int]string, stpStates map[int]int) []discovery.Edge {
 	portMACs := make(map[int][]net.HardwareAddr)
 	for _, e := range entries {
 		if e.status != fdbStatusLearned || len(e.mac) != 6 {
+			continue
+		}
+		if state, ok := stpStates[e.port]; ok && state != stpStateForwarding {
 			continue
 		}
 		mac := make(net.HardwareAddr, 6)
