@@ -20,10 +20,11 @@ type Metrics struct {
 	registry *prometheus.Registry
 
 	// Topology inventory.
-	DeviceInfo          *prometheus.GaugeVec
-	DeviceUptimeSeconds *prometheus.GaugeVec
-	TopologyEdgeInfo    *prometheus.GaugeVec
-	TopologyChangeTotal *prometheus.CounterVec
+	DeviceInfo             *prometheus.GaugeVec
+	DeviceUptimeSeconds    *prometheus.GaugeVec
+	TopologyEdgeInfo       *prometheus.GaugeVec
+	TopologyChangeTotal    *prometheus.CounterVec
+	TopologyConflictTotal  *prometheus.CounterVec
 
 	// LD-11: count of out-of-scope neighbours seen in the current cycle.
 	// Detail (which device, which port, what hint) goes in log lines.
@@ -67,6 +68,10 @@ func New() *Metrics {
 			Name: "network_topology_change_total",
 			Help: "Topology mutations between discovery cycles. Resets on restart; use increase() not rate().",
 		}, []string{"change_kind", "discovery_proto"}),
+		TopologyConflictTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "network_topology_conflict_total",
+			Help: "Source disagreements detected during reconciliation, by conflict type.",
+		}, []string{"conflict_type"}),
 		OutOfScopeNeighboursTotal: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "network_topology_out_of_scope_neighbours_total",
 			Help: "Count of LLDP/CDP-discovered neighbours whose IP falls outside the LD-11 CIDR allow-list. Detail in log lines.",
@@ -112,6 +117,7 @@ func New() *Metrics {
 		m.DeviceUptimeSeconds,
 		m.TopologyEdgeInfo,
 		m.TopologyChangeTotal,
+		m.TopologyConflictTotal,
 		m.OutOfScopeNeighboursTotal,
 		m.GraphStale,
 		m.SnapshotLastWrittenUnix,

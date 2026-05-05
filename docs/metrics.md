@@ -12,6 +12,12 @@ All metrics use the `network_` prefix. No metric uses a raw IP address or free-f
 | `network_topology_change_total` | counter | `change_kind` (added\|removed\|updated), `discovery_proto` | Resets on restart. Use `increase()` not `rate()` for alerting on sparse events. |
 | `network_topology_out_of_scope_neighbours_total` | gauge | (none) | Count of distinct neighbours seen this cycle whose IPs fall outside the CIDR allow-list. Detail (device, port, hint) is in log lines. |
 
+## Conflict detection
+
+| Metric | Type | Labels | Notes |
+|--------|------|--------|-------|
+| `network_topology_conflict_total` | counter | `conflict_type` (port_name_mismatch\|neighbour_disagreement\|direction_asymmetry\|documented_vs_observed) | Source disagreements detected during reconciliation. Resets on restart. A sustained rate may indicate protocol config drift (e.g., CDP and LLDP disagree on port name encoding). |
+
 ## Graph freshness (LD-13)
 
 | Metric | Type | Notes |
