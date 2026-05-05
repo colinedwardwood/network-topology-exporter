@@ -50,18 +50,200 @@
 //     that disappeared from the FDB may still be physically present. The graph
 //     layer's LD-14 unconfirmed-link TTL should be set longer than the FDB
 //     aging timer to avoid spurious remove events.
+//
+//  4. LD-11 CIDR scope enforcement is not applied here: FDB entries carry only
+//     a MAC address, not an IP. Without ARP resolution (excluded by note 2),
+//     there is no IP address to test against the allow-list.
 package fdb
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"strconv"
+	"time"
+
+	gsnmp "github.com/gosnmp/gosnmp"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+	snmputil "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
 )
 
-// Walker reads dot1dTpFdbTable and emits one Edge per learned MAC.
-type Walker struct{}
+const (
+	oidFdbTable      = "1.3.6.1.2.1.17.4.3"
+	oidBasePortTable = "1.3.6.1.2.1.17.1.4"
+	oidIfName        = "1.3.6.1.2.1.31.1.1.1.1"
+	precedenceRank   = 4
+	fdbStatusLearned = 3
+)
 
-// Walk returns the FDB-derived edges for one device. Stub.
-func (w *Walker) Walk(_ context.Context, _ string) ([]discovery.Edge, error) {
-	return nil, nil
+// dot1dTpFdbTable column numbers (RFC 4188).
+const (
+	colFdbAddress = 1
+	colFdbPort    = 2
+	colFdbStatus  = 3
+)
+
+// dot1dBasePortTable column numbers (RFC 4188).
+const colBasePortIfIndex = 2
+
+type fdbEntry struct {
+	mac    []byte
+	port   int
+	status int
+}
+
+// Walk returns FDB-derived edges for the device at p.IP. localDevice is the
+// sysName from the SNMP SYSTEM walk. allowedNets is accepted for interface
+// compatibility but not applied — FDB entries carry no IP address to check.
+func Walk(ctx context.Context, p snmputil.Params, localDevice string, _ []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
+	client, err := snmputil.Open(p)
+	if err != nil {
+		return nil, nil, fmt.Errorf("fdb %s: %w", p.IP, err)
+	}
+	defer client.Conn.Close()
+
+	entries, err := walkFdbTable(ctx, client)
+	if err != nil {
+		return nil, nil, fmt.Errorf("fdb table %s: %w", p.IP, err)
+	}
+	bridgePorts, err := walkBasePortTable(ctx, client)
+	if err != nil {
+		return nil, nil, fmt.Errorf("fdb baseport %s: %w", p.IP, err)
+	}
+	ifNames, err := walkIfNames(ctx, client)
+	if err != nil {
+		return nil, nil, fmt.Errorf("fdb ifname %s: %w", p.IP, err)
+	}
+	return buildEdges(localDevice, entries, bridgePorts, ifNames), nil, nil
+}
+
+func walkFdbTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*fdbEntry, error) {
+	pdus, err := snmputil.BulkWalk(ctx, client, oidFdbTable)
+	if err != nil {
+		return nil, err
+	}
+	const prefix = ".1.3.6.1.2.1.17.4.3.1."
+	entries := make(map[string]*fdbEntry)
+	for _, pdu := range pdus {
+		suffix, ok := snmputil.TrimOIDPrefix(pdu.Name, prefix)
+		if !ok {
+			continue
+		}
+		col, macKey, ok := snmputil.SplitOIDComponent(suffix)
+		if !ok || macKey == "" {
+			continue
+		}
+		e := entries[macKey]
+		if e == nil {
+			e = &fdbEntry{}
+			entries[macKey] = e
+		}
+		switch col {
+		case colFdbAddress:
+			e.mac = snmputil.PDUBytes(pdu)
+		case colFdbPort:
+			e.port = snmputil.PDUInt(pdu)
+		case colFdbStatus:
+			e.status = snmputil.PDUInt(pdu)
+		}
+	}
+	return entries, nil
+}
+
+func walkBasePortTable(ctx context.Context, client *gsnmp.GoSNMP) (map[int]int, error) {
+	pdus, err := snmputil.BulkWalk(ctx, client, oidBasePortTable)
+	if err != nil {
+		return nil, err
+	}
+	const prefix = ".1.3.6.1.2.1.17.1.4.1."
+	ports := make(map[int]int) // bridgePort → ifIndex
+	for _, pdu := range pdus {
+		suffix, ok := snmputil.TrimOIDPrefix(pdu.Name, prefix)
+		if !ok {
+			continue
+		}
+		col, portStr, ok := snmputil.SplitOIDComponent(suffix)
+		if !ok || col != colBasePortIfIndex {
+			continue
+		}
+		portNum, err := strconv.Atoi(portStr)
+		if err != nil {
+			continue
+		}
+		ports[portNum] = snmputil.PDUInt(pdu)
+	}
+	return ports, nil
+}
+
+func walkIfNames(ctx context.Context, client *gsnmp.GoSNMP) (map[int]string, error) {
+	pdus, err := snmputil.BulkWalk(ctx, client, oidIfName)
+	if err != nil {
+		return nil, err
+	}
+	const prefix = ".1.3.6.1.2.1.31.1.1.1.1."
+	names := make(map[int]string, len(pdus))
+	for _, pdu := range pdus {
+		idxStr, ok := snmputil.TrimOIDPrefix(pdu.Name, prefix)
+		if !ok {
+			continue
+		}
+		idx, err := strconv.Atoi(idxStr)
+		if err != nil {
+			continue
+		}
+		names[idx] = snmputil.PDUString(pdu)
+	}
+	return names, nil
+}
+
+// buildEdges applies the Bejerano direct/indirect classification: a port with
+// exactly one learned MAC is AdjacencyDirect (one device); a port with multiple
+// MACs is AdjacencyIndirect (downstream switch or trunk).
+func buildEdges(localDevice string, entries map[string]*fdbEntry, bridgePorts map[int]int, ifNames map[int]string) []discovery.Edge {
+	portMACs := make(map[int][]net.HardwareAddr)
+	for _, e := range entries {
+		if e.status != fdbStatusLearned || len(e.mac) != 6 {
+			continue
+		}
+		mac := make(net.HardwareAddr, 6)
+		copy(mac, e.mac)
+		portMACs[e.port] = append(portMACs[e.port], mac)
+	}
+
+	now := time.Now()
+	var edges []discovery.Edge
+	for bridgePort, macs := range portMACs {
+		ifIdx, ok := bridgePorts[bridgePort]
+		if !ok {
+			continue
+		}
+		localPort := ifNames[ifIdx]
+		if localPort == "" {
+			localPort = strconv.Itoa(ifIdx)
+		}
+
+		adjacency := discovery.AdjacencyDirect
+		confidence := discovery.ConfidenceMedium
+		if len(macs) > 1 {
+			adjacency = discovery.AdjacencyIndirect
+			confidence = discovery.ConfidenceLow
+		}
+
+		for _, mac := range macs {
+			edges = append(edges, discovery.Edge{
+				SrcDevice:      localDevice,
+				SrcPort:        localPort,
+				DstDevice:      mac.String(),
+				DiscoveryProto: "fdb",
+				Direction:      discovery.DirectionUnidirectional,
+				Confidence:     confidence,
+				Adjacency:      adjacency,
+				PrecedenceRank: precedenceRank,
+				LinkKind:       "ethernet",
+				ObservedAt:     now,
+			})
+		}
+	}
+	return edges
 }

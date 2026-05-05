@@ -27,6 +27,7 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/cdp"
+	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/fdb"
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/lldp"
 	snmpwalk "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
 	"github.com/colinedwardwood/network-topology-exporter/internal/events"
@@ -344,6 +345,7 @@ func runCycle(
 			mods := []module{
 				{"lldp", cfg.Modules.LLDP.Enabled, lldp.Walk},
 				{"cdp", cfg.Modules.CDP.Enabled, cdp.Walk},
+				{"fdb", cfg.Modules.FDB.Enabled, fdb.Walk},
 			}
 			for _, mod := range mods {
 				if !mod.enabled {
