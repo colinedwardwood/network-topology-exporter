@@ -149,6 +149,76 @@ credentials:
 	}
 }
 
+func TestCredentialsRejectUnknownAuthProtocol(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+credentials:
+  profiles:
+    - name: core-v3
+      type: snmp_v3
+      username_env: SNMP_V3_USER
+      auth_protocol: SHA256
+  fallback_order: [core-v3]
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unknown auth protocol")
+	}
+}
+
+func TestCredentialsRejectUnknownPrivProtocol(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+credentials:
+  profiles:
+    - name: core-v3
+      type: snmp_v3
+      username_env: SNMP_V3_USER
+      priv_protocol: AES256
+  fallback_order: [core-v3]
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unknown priv protocol")
+	}
+}
+
+func TestCredentialsNormalizesProtocolCase(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+credentials:
+  profiles:
+    - name: core-v3
+      type: snmp_v3
+      username_env: SNMP_V3_USER
+      auth_protocol: sha-256
+      priv_protocol: aes-256
+  fallback_order: [core-v3]
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := c.Credentials.Profiles[0].AuthProtocol; got != "SHA-256" {
+		t.Fatalf("AuthProtocol = %q, want SHA-256", got)
+	}
+	if got := c.Credentials.Profiles[0].PrivProtocol; got != "AES-256" {
+		t.Fatalf("PrivProtocol = %q, want AES-256", got)
+	}
+}
+
 // LD-13: snapshot always active; default path applied when path is unset.
 func TestSnapshotDefaultPath(t *testing.T) {
 	dir := t.TempDir()

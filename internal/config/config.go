@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -98,9 +99,9 @@ type CredentialProfile struct {
 	Type           string `yaml:"type"` // snmp_v2c | snmp_v3
 	CommunityEnv   string `yaml:"community_env,omitempty"`
 	UsernameEnv    string `yaml:"username_env,omitempty"`
-	AuthProtocol   string `yaml:"auth_protocol,omitempty"` // SHA | SHA-256 | ...
+	AuthProtocol   string `yaml:"auth_protocol,omitempty"` // SHA (recommended) | SHA-256 | SHA-384 | SHA-512 | MD5 (deprecated, broken)
 	AuthKeyEnv     string `yaml:"auth_key_env,omitempty"`
-	PrivProtocol   string `yaml:"priv_protocol,omitempty"` // AES | AES-256 | ...
+	PrivProtocol   string `yaml:"priv_protocol,omitempty"` // AES (recommended) | AES-192 | AES-256 | DES (deprecated, broken)
 	PrivKeyEnv     string `yaml:"priv_key_env,omitempty"`
 }
 
@@ -251,7 +252,8 @@ func (c *Config) validateCredentials() error {
 		return nil // legacy single-community path; ModuleSNMP.CommunityEnv applies.
 	}
 	known := make(map[string]CredentialProfile, len(c.Credentials.Profiles))
-	for _, p := range c.Credentials.Profiles {
+	for i := range c.Credentials.Profiles {
+		p := c.Credentials.Profiles[i]
 		if p.Name == "" {
 			return errors.New("credentials.profiles[].name is required")
 		}
@@ -267,9 +269,20 @@ func (c *Config) validateCredentials() error {
 			if p.UsernameEnv == "" {
 				return fmt.Errorf("profile %q (snmp_v3) requires username_env", p.Name)
 			}
+			authProto, err := normalizeAuthProtocol(p.AuthProtocol)
+			if err != nil {
+				return fmt.Errorf("profile %q: %w", p.Name, err)
+			}
+			privProto, err := normalizePrivProtocol(p.PrivProtocol)
+			if err != nil {
+				return fmt.Errorf("profile %q: %w", p.Name, err)
+			}
+			p.AuthProtocol = authProto
+			p.PrivProtocol = privProto
 		default:
 			return fmt.Errorf("profile %q has unknown type %q", p.Name, p.Type)
 		}
+		c.Credentials.Profiles[i] = p
 		known[p.Name] = p
 	}
 	for _, a := range c.Credentials.Assignments {
@@ -299,6 +312,32 @@ func (c *Config) validateCredentials() error {
 		return errors.New("credentials.trial_rate_per_second must be >= 1")
 	}
 	return nil
+}
+
+func normalizeAuthProtocol(raw string) (string, error) {
+	switch v := strings.ToUpper(strings.TrimSpace(raw)); v {
+	case "":
+		return "", nil
+	case "SHA", "SHA-256", "SHA-384", "SHA-512":
+		return v, nil
+	case "MD5":
+		return "", errors.New("auth_protocol MD5 is cryptographically broken; use SHA or SHA-256")
+	default:
+		return "", fmt.Errorf("unknown auth_protocol %q; allowed: SHA, SHA-256, SHA-384, SHA-512", raw)
+	}
+}
+
+func normalizePrivProtocol(raw string) (string, error) {
+	switch v := strings.ToUpper(strings.TrimSpace(raw)); v {
+	case "":
+		return "", nil
+	case "AES", "AES-192", "AES-256":
+		return v, nil
+	case "DES":
+		return "", errors.New("priv_protocol DES is cryptographically broken; use AES or AES-256")
+	default:
+		return "", fmt.Errorf("unknown priv_protocol %q; allowed: AES, AES-192, AES-256", raw)
+	}
 }
 
 func (c *Config) validateTargets() error {

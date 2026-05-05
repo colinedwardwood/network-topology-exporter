@@ -2,8 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"sort"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -93,6 +98,115 @@ func TestRunCycleTwoDevices(t *testing.T) {
 	if ids[1] != "sw-02" {
 		t.Errorf("expected device ID sw-02, got %q", ids[1])
 	}
+}
+
+func TestHealthzHandlerNilStatus(t *testing.T) {
+	var status atomic.Pointer[cycleStatus]
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", newHealthzHandler(&status))
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if m["status"] != "ok" {
+		t.Errorf("status field = %q, want ok", m["status"])
+	}
+}
+
+func TestHealthzHandlerPopulatedStatus(t *testing.T) {
+	var status atomic.Pointer[cycleStatus]
+	now := time.Now()
+	status.Store(&cycleStatus{LastCycleAt: now, DeviceErrors: 2})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", newHealthzHandler(&status))
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if m["device_errors"] != float64(2) {
+		t.Errorf("device_errors = %v, want 2", m["device_errors"])
+	}
+}
+
+func TestProfileToParams(t *testing.T) {
+	ip := net.ParseIP("192.0.2.1")
+	timeout := 5 * time.Second
+	port := uint16(161)
+
+	t.Run("v2c_ok", func(t *testing.T) {
+		t.Setenv("TEST_COMM", "secret")
+		p := config.CredentialProfile{Type: config.ProfileTypeSNMPv2c, CommunityEnv: "TEST_COMM"}
+		params, err := profileToParams(ip, port, timeout, p)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if params.Community != "secret" {
+			t.Errorf("Community = %q, want secret", params.Community)
+		}
+	})
+
+	t.Run("v2c_empty_env", func(t *testing.T) {
+		t.Setenv("TEST_COMM_EMPTY", "")
+		p := config.CredentialProfile{Type: config.ProfileTypeSNMPv2c, CommunityEnv: "TEST_COMM_EMPTY"}
+		_, err := profileToParams(ip, port, timeout, p)
+		if err == nil {
+			t.Fatal("expected error for empty community env, got nil")
+		}
+	})
+
+	t.Run("v3_ok", func(t *testing.T) {
+		t.Setenv("TEST_USER", "admin")
+		p := config.CredentialProfile{
+			Type:        config.ProfileTypeSNMPv3,
+			UsernameEnv: "TEST_USER",
+		}
+		params, err := profileToParams(ip, port, timeout, p)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !params.V3 {
+			t.Error("V3 should be true")
+		}
+		if params.Username != "admin" {
+			t.Errorf("Username = %q, want admin", params.Username)
+		}
+	})
+
+	t.Run("v3_empty_username", func(t *testing.T) {
+		t.Setenv("TEST_USER_EMPTY", "")
+		p := config.CredentialProfile{
+			Type:        config.ProfileTypeSNMPv3,
+			UsernameEnv: "TEST_USER_EMPTY",
+		}
+		_, err := profileToParams(ip, port, timeout, p)
+		if err == nil {
+			t.Fatal("expected error for empty username env, got nil")
+		}
+	})
+
+	t.Run("unknown_type", func(t *testing.T) {
+		p := config.CredentialProfile{Type: "snmp_v1"}
+		_, err := profileToParams(ip, port, timeout, p)
+		if err == nil {
+			t.Fatal("expected error for unknown profile type, got nil")
+		}
+	})
 }
 
 func lldpPDUs(localPortName string, remoteDeviceName string) []gsnmp.SnmpPDU {
