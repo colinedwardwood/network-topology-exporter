@@ -2,6 +2,7 @@ package graph
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
@@ -321,5 +322,106 @@ func TestEdgeKeysToAges(t *testing.T) {
 	}
 	if got["sw-c|Gi0/3|sw-d|Gi0/4"] != 1 {
 		t.Errorf("ages[sw-c|...] = %d, want 1", got["sw-c|Gi0/3|sw-d|Gi0/4"])
+	}
+}
+
+// Reconcile: two sources naming different neighbours for the same local port
+// produce a ConflictNeighbourDisagreement and both edges are preserved.
+func TestReconcileConflictNeighbourDisagreement(t *testing.T) {
+	lldpEdge := discovery.Edge{
+		SrcDevice: "sw-01", SrcPort: "Gi0/1",
+		DstDevice: "sw-02", DstPort: "Gi0/1",
+		DiscoveryProto: "lldp", PrecedenceRank: 1,
+	}
+	cdpEdge := discovery.Edge{
+		SrcDevice: "sw-01", SrcPort: "Gi0/1",
+		DstDevice: "sw-03", DstPort: "Gi0/1",
+		DiscoveryProto: "cdp", PrecedenceRank: 1,
+	}
+
+	edges, conflicts := Reconcile([]discovery.Edge{lldpEdge, cdpEdge})
+
+	if len(edges) != 2 {
+		t.Fatalf("expected 2 reconciled edges, got %d", len(edges))
+	}
+	if len(conflicts) != 1 {
+		t.Fatalf("expected 1 conflict, got %d", len(conflicts))
+	}
+	c := conflicts[0]
+	if c.Kind != ConflictNeighbourDisagreement {
+		t.Errorf("conflict kind = %q, want %q", c.Kind, ConflictNeighbourDisagreement)
+	}
+	if c.SrcDevice != "sw-01" {
+		t.Errorf("conflict SrcDevice = %q, want sw-01", c.SrcDevice)
+	}
+	if c.SrcPort != "Gi0/1" {
+		t.Errorf("conflict SrcPort = %q, want Gi0/1", c.SrcPort)
+	}
+	if !slices.Contains(c.Sources, "lldp") {
+		t.Errorf("Sources %v missing lldp", c.Sources)
+	}
+	if !slices.Contains(c.Sources, "cdp") {
+		t.Errorf("Sources %v missing cdp", c.Sources)
+	}
+}
+
+// Reconcile: two edges for the same device pair with different port-name
+// encodings produce a ConflictPortNameMismatch.
+func TestReconcileConflictPortNameMismatch(t *testing.T) {
+	lldpEdge := discovery.Edge{
+		SrcDevice: "sw-01", SrcPort: "Gi0/1",
+		DstDevice: "sw-02", DstPort: "Eth0/1",
+		DiscoveryProto: "lldp", PrecedenceRank: 1,
+	}
+	cdpEdge := discovery.Edge{
+		SrcDevice: "sw-01", SrcPort: "GigabitEthernet0/1",
+		DstDevice: "sw-02", DstPort: "Ethernet0/1",
+		DiscoveryProto: "cdp", PrecedenceRank: 1,
+	}
+
+	edges, conflicts := Reconcile([]discovery.Edge{lldpEdge, cdpEdge})
+
+	if len(edges) != 2 {
+		t.Fatalf("expected 2 reconciled edges, got %d", len(edges))
+	}
+	found := false
+	for _, c := range conflicts {
+		if c.Kind == ConflictPortNameMismatch {
+			found = true
+			if c.SrcDevice != "sw-01" && c.SrcDevice != "sw-02" {
+				t.Errorf("conflict SrcDevice = %q, want sw-01 or sw-02", c.SrcDevice)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected at least one ConflictPortNameMismatch, got %v", conflicts)
+	}
+}
+
+// Reconcile: the same edge from two different protocols must not produce
+// conflicts — they are collapsed normally with the higher-priority proto winning.
+func TestReconcileNoConflictSamePort(t *testing.T) {
+	lldpEdge := discovery.Edge{
+		SrcDevice: "sw-01", SrcPort: "Gi0/1",
+		DstDevice: "sw-02", DstPort: "Gi0/2",
+		DiscoveryProto: "lldp", PrecedenceRank: 1,
+	}
+	cdpEdge := discovery.Edge{
+		SrcDevice: "sw-01", SrcPort: "Gi0/1",
+		DstDevice: "sw-02", DstPort: "Gi0/2",
+		DiscoveryProto: "cdp", PrecedenceRank: 2,
+	}
+
+	edges, conflicts := Reconcile([]discovery.Edge{lldpEdge, cdpEdge})
+
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 reconciled edge, got %d", len(edges))
+	}
+	if edges[0].DiscoveryProto != "lldp" {
+		t.Errorf("proto = %q, want lldp (lower rank wins)", edges[0].DiscoveryProto)
+	}
+	if len(conflicts) != 0 {
+		t.Errorf("expected no conflicts for same-port same-neighbour edges, got %v", conflicts)
 	}
 }

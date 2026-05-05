@@ -234,6 +234,144 @@ func TestWalkEndToEnd(t *testing.T) {
 	}
 }
 
+func TestParseQBridgeIndex(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantKey string
+		wantMAC []byte
+		wantOK  bool
+	}{
+		{
+			name:    "valid fdbId=1",
+			input:   "1.0.10.187.204.221.238",
+			wantKey: "0.10.187.204.221.238",
+			wantMAC: []byte{0, 10, 187, 204, 221, 238},
+			wantOK:  true,
+		},
+		{
+			name:    "valid fdbId=100",
+			input:   "100.0.1.2.3.4.5",
+			wantKey: "0.1.2.3.4.5",
+			wantMAC: []byte{0, 1, 2, 3, 4, 5},
+			wantOK:  true,
+		},
+		{
+			name:   "too short — only 6 components",
+			input:  "1.2.3.4.5.6",
+			wantOK: false,
+		},
+		{
+			name:   "non-numeric component",
+			input:  "1.x.1.2.3.4.5",
+			wantOK: false,
+		},
+		{
+			name:   "out of range octet",
+			input:  "1.0.1.2.3.4.999",
+			wantOK: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			key, mac, ok := parseQBridgeIndex(tc.input)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if !tc.wantOK {
+				return
+			}
+			if key != tc.wantKey {
+				t.Errorf("key = %q, want %q", key, tc.wantKey)
+			}
+			if len(mac) != len(tc.wantMAC) {
+				t.Fatalf("mac len = %d, want %d", len(mac), len(tc.wantMAC))
+			}
+			for i := range tc.wantMAC {
+				if mac[i] != tc.wantMAC[i] {
+					t.Errorf("mac[%d] = %d, want %d", i, mac[i], tc.wantMAC[i])
+				}
+			}
+		})
+	}
+}
+
+// Walk: end-to-end with B-MIB and Q-BRIDGE PDUs. B-MIB contributes one MAC,
+// Q-BRIDGE contributes a second MAC on the same port → two direct edges.
+func TestWalkEndToEndQBridge(t *testing.T) {
+	pdus := buildQBridgeAgentPDUs()
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{
+		IP:        ip,
+		Port:      port,
+		Community: "public",
+		Timeout:   3 * time.Second,
+	}
+
+	edges, oos, err := Walk(context.Background(), p, "sw-01", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(oos) != 0 {
+		t.Errorf("unexpected out-of-scope entries: %v", oos)
+	}
+	if len(edges) != 2 {
+		t.Fatalf("expected 2 edges, got %d: %v", len(edges), edges)
+	}
+
+	seen := make(map[string]bool)
+	for _, e := range edges {
+		seen[e.DstDevice] = true
+	}
+	if !seen["00:0a:bb:cc:dd:ee"] {
+		t.Errorf("expected DstDevice 00:0a:bb:cc:dd:ee in edges")
+	}
+	if !seen["00:aa:bb:cc:dd:01"] {
+		t.Errorf("expected DstDevice 00:aa:bb:cc:dd:01 in edges")
+	}
+}
+
+// buildQBridgeAgentPDUs builds PDUs with one B-MIB entry and one Q-BRIDGE entry.
+//
+// dot1dTpFdbTable: MAC 00:0a:bb:cc:dd:ee on bridge port 1 (learned)
+// dot1qTpFdbTable: MAC 00:aa:bb:cc:dd:01 on bridge port 1, VLAN FDB ID 10 (learned)
+// dot1dBasePortTable: bridge port 1 → ifIndex 2
+// dot1dStpPortTable: bridge port 1 → forwarding(5)
+// ifXTable.ifName: ifIndex 2 → "GigabitEthernet0/1"
+func buildQBridgeAgentPDUs() []gsnmp.SnmpPDU {
+	fdbBase      := ".1.3.6.1.2.1.17.4.3.1."
+	qBridgeBase  := ".1.3.6.1.2.1.17.7.1.2.2."
+	basePortBase := ".1.3.6.1.2.1.17.1.4.1."
+	stpPortBase  := ".1.3.6.1.2.1.17.2.15.1."
+	ifNameBase   := ".1.3.6.1.2.1.31.1.1.1.1."
+
+	bmibSuffix   := "0.10.187.204.221.238"
+	// Q-BRIDGE index: fdbId=10, MAC=00:aa:bb:cc:dd:01
+	qSuffix := "10.0.170.187.204.221.1"
+
+	return []gsnmp.SnmpPDU{
+		// dot1dTpFdbTable: MAC 00:0a:bb:cc:dd:ee
+		{Name: fdbBase + "1." + bmibSuffix, Type: gsnmp.OctetString, Value: []byte{0, 10, 187, 204, 221, 238}},
+		{Name: fdbBase + "2." + bmibSuffix, Type: gsnmp.Integer, Value: 1},
+		{Name: fdbBase + "3." + bmibSuffix, Type: gsnmp.Integer, Value: fdbStatusLearned},
+
+		// dot1qTpFdbTable: MAC 00:aa:bb:cc:dd:01, VLAN FDB ID 10
+		{Name: qBridgeBase + "2." + qSuffix, Type: gsnmp.Integer, Value: 1},
+		{Name: qBridgeBase + "3." + qSuffix, Type: gsnmp.Integer, Value: fdbStatusLearned},
+
+		// dot1dBasePortTable: bridge port 1 → ifIndex 2
+		{Name: basePortBase + "2.1", Type: gsnmp.Integer, Value: 2},
+
+		// dot1dStpPortTable: bridge port 1 → forwarding(5)
+		{Name: stpPortBase + "3.1", Type: gsnmp.Integer, Value: stpStateForwarding},
+
+		// ifXTable.ifName: ifIndex 2 → "GigabitEthernet0/1"
+		{Name: ifNameBase + "2", Type: gsnmp.OctetString, Value: []byte("GigabitEthernet0/1")},
+	}
+}
+
 // buildFdbAgentPDUs builds the minimal PDU set for one learned FDB entry.
 //
 // dot1dTpFdbTable (1.3.6.1.2.1.17.4.3.1.{col}.{mac_octets}):

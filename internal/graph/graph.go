@@ -175,7 +175,132 @@ func Reconcile(edges []discovery.Edge) ([]discovery.Edge, []Conflict) {
 		return compareEdgeKey(Key(a), Key(b))
 	})
 
-	return result, nil
+	var conflicts []Conflict
+
+	// Index 1: portNeighbours — groups EdgeKeys by (SrcDevice, SrcPort) to find
+	// cases where a single local port claims different neighbour devices.
+	type portKey struct{ SrcDevice, SrcPort string }
+	portNeighbours := make(map[portKey][]EdgeKey, len(groups))
+	for k := range groups {
+		pk := portKey{SrcDevice: k.SrcDevice, SrcPort: k.SrcPort}
+		portNeighbours[pk] = append(portNeighbours[pk], k)
+	}
+	for pk, keys := range portNeighbours {
+		if len(keys) < 2 {
+			continue
+		}
+		// Check whether the DstDevice values actually differ.
+		dst := keys[0].DstDevice
+		allSame := true
+		for _, k := range keys[1:] {
+			if k.DstDevice != dst {
+				allSame = false
+				break
+			}
+		}
+		if allSame {
+			continue
+		}
+		// Collect deduped sources and the chosen edges from each conflicting group.
+		seenProto := make(map[string]bool)
+		var sources []string
+		var conflictEdges []discovery.Edge
+		for _, k := range keys {
+			g := groups[k]
+			for _, c := range g.byRank[g.minRank] {
+				if !seenProto[c.DiscoveryProto] {
+					seenProto[c.DiscoveryProto] = true
+					sources = append(sources, c.DiscoveryProto)
+				}
+			}
+			// Find the chosen edge for this key from result.
+			for _, e := range result {
+				if Key(e) == k {
+					conflictEdges = append(conflictEdges, e)
+					break
+				}
+			}
+		}
+		slices.Sort(sources)
+		conflicts = append(conflicts, Conflict{
+			SrcDevice: pk.SrcDevice,
+			SrcPort:   pk.SrcPort,
+			Kind:      ConflictNeighbourDisagreement,
+			Sources:   sources,
+			Edges:     conflictEdges,
+		})
+	}
+
+	// Index 2: devicePair — groups EdgeKeys by canonical (SrcDevice, DstDevice)
+	// pair (A < B) to find port-name mismatches across protocols.
+	type pairKey struct{ A, B string }
+	devicePair := make(map[pairKey][]EdgeKey, len(groups))
+	for k := range groups {
+		var pk pairKey
+		if k.SrcDevice <= k.DstDevice {
+			pk = pairKey{A: k.SrcDevice, B: k.DstDevice}
+		} else {
+			pk = pairKey{A: k.DstDevice, B: k.SrcDevice}
+		}
+		devicePair[pk] = append(devicePair[pk], k)
+	}
+	for _, keys := range devicePair {
+		if len(keys) < 2 {
+			continue
+		}
+		// Confirm that ports actually differ (not just ordering variation).
+		first := keys[0]
+		mismatch := false
+		for _, k := range keys[1:] {
+			if k.SrcPort != first.SrcPort || k.DstPort != first.DstPort {
+				mismatch = true
+				break
+			}
+		}
+		if !mismatch {
+			continue
+		}
+		var conflictEdges []discovery.Edge
+		for _, k := range keys {
+			for _, e := range result {
+				if Key(e) == k {
+					conflictEdges = append(conflictEdges, e)
+					break
+				}
+			}
+		}
+		// Use the canonical (alphabetically first) device pair for SrcDevice/SrcPort.
+		slices.SortFunc(conflictEdges, func(a, b discovery.Edge) int {
+			return compareEdgeKey(Key(a), Key(b))
+		})
+		ref := conflictEdges[0]
+		conflicts = append(conflicts, Conflict{
+			SrcDevice: ref.SrcDevice,
+			SrcPort:   ref.SrcPort,
+			Kind:      ConflictPortNameMismatch,
+			Edges:     conflictEdges,
+		})
+	}
+
+	if len(conflicts) == 0 {
+		return result, nil
+	}
+	slices.SortFunc(conflicts, func(a, b Conflict) int {
+		if a.SrcDevice != b.SrcDevice {
+			if a.SrcDevice < b.SrcDevice {
+				return -1
+			}
+			return 1
+		}
+		if a.SrcPort < b.SrcPort {
+			return -1
+		}
+		if a.SrcPort > b.SrcPort {
+			return 1
+		}
+		return 0
+	})
+	return result, conflicts
 }
 
 // Diff returns the changes between two reconciled edge sets. Both slices must
