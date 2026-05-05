@@ -160,7 +160,7 @@ func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Conf
 			Edges:      snap.Edges,
 			OutOfScope: snap.OutOfScope,
 		}
-		ages = snapshotAgesToEdgeKeys(snap.UnconfirmedAges)
+		ages = graph.AgesToEdgeKeys(snap.UnconfirmedAges)
 		logger.Info("snapshot loaded",
 			"devices", len(snap.Devices),
 			"edges", len(snap.Edges),
@@ -180,7 +180,7 @@ func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Conf
 	}
 
 	// Parse CIDR allow-list once; the config is immutable at runtime.
-	allowedNets := parseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
+	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
 
 	// Run one cycle immediately, then on the configured interval.
 	cycle := func() {
@@ -215,7 +215,7 @@ func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Conf
 			Edges:           newGraph.Edges,
 			OutOfScope:      newGraph.OutOfScope,
 			CredentialCache: credCache,
-			UnconfirmedAges: edgeKeysToSnapshotAges(ages),
+			UnconfirmedAges: graph.EdgeKeysToAges(ages),
 		}
 		if err := snapshot.Write(cfg.Snapshot.Path, f); err != nil {
 			logger.Error("snapshot write failed", "error", err)
@@ -408,17 +408,6 @@ func runCycle(
 	}, ages
 }
 
-func parseCIDRs(cidrs []string) []*net.IPNet {
-	nets := make([]*net.IPNet, 0, len(cidrs))
-	for _, s := range cidrs {
-		_, n, err := net.ParseCIDR(s)
-		if err == nil {
-			nets = append(nets, n)
-		}
-	}
-	return nets
-}
-
 // resolveParams builds an snmpwalk.Params for the given target IP.
 // Returns (params, profileName, true) on success, ("", "", false) when no
 // usable credential is found.
@@ -475,13 +464,13 @@ func profileToParams(ip net.IP, port uint16, timeout time.Duration, p config.Cre
 		Timeout: timeout,
 	}
 	switch p.Type {
-	case "snmp_v2c":
+	case config.ProfileTypeSNMPv2c:
 		community := os.Getenv(p.CommunityEnv)
 		if community == "" {
 			return params, fmt.Errorf("env %q is empty", p.CommunityEnv)
 		}
 		params.Community = community
-	case "snmp_v3":
+	case config.ProfileTypeSNMPv3:
 		params.V3 = true
 		params.Username = os.Getenv(p.UsernameEnv)
 		if params.Username == "" {
@@ -523,30 +512,6 @@ func publishInventoryMetrics(g discovery.Graph, m *metrics.Metrics) {
 	}
 
 	m.OutOfScopeNeighboursTotal.Set(float64(len(g.OutOfScope)))
-}
-
-// snapshotAgesToEdgeKeys converts the string-keyed snapshot map back to
-// the graph.EdgeKey-keyed map used by AgeUnconfirmed.
-func snapshotAgesToEdgeKeys(in map[string]int) map[graph.EdgeKey]int {
-	out := make(map[graph.EdgeKey]int, len(in))
-	for s, v := range in {
-		k, err := graph.EdgeKeyFromString(s)
-		if err != nil {
-			continue // silently skip malformed keys on snapshot load
-		}
-		out[k] = v
-	}
-	return out
-}
-
-// edgeKeysToSnapshotAges converts the graph.EdgeKey map back to the
-// string-keyed form the snapshot serialises.
-func edgeKeysToSnapshotAges(in map[graph.EdgeKey]int) map[string]int {
-	out := make(map[string]int, len(in))
-	for k, v := range in {
-		out[graph.EdgeKeyString(k)] = v
-	}
-	return out
 }
 
 type moduleWalkFn func(context.Context, snmpwalk.Params, string, []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error)

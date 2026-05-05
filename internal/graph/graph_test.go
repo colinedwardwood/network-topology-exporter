@@ -274,3 +274,52 @@ func TestDiffNoChange(t *testing.T) {
 		t.Errorf("expected no changes for identical graphs, got %v", changes)
 	}
 }
+
+// AgesToEdgeKeys round-trips a string map through the snapshot encoding.
+func TestAgesToEdgeKeys(t *testing.T) {
+	in := map[string]int{
+		"sw-a|Gi0/1|sw-b|Gi0/2": 2,
+		"sw-c|Gi0/3|sw-d|Gi0/4": 1,
+	}
+	got := AgesToEdgeKeys(in)
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	k1 := EdgeKey{SrcDevice: "sw-a", SrcPort: "Gi0/1", DstDevice: "sw-b", DstPort: "Gi0/2"}
+	if got[k1] != 2 {
+		t.Errorf("ages[%v] = %d, want 2", k1, got[k1])
+	}
+	k2 := EdgeKey{SrcDevice: "sw-c", SrcPort: "Gi0/3", DstDevice: "sw-d", DstPort: "Gi0/4"}
+	if got[k2] != 1 {
+		t.Errorf("ages[%v] = %d, want 1", k2, got[k2])
+	}
+}
+
+// AgesToEdgeKeys silently drops entries whose key is malformed.
+func TestAgesToEdgeKeysMalformed(t *testing.T) {
+	in := map[string]int{
+		"sw-a|Gi0/1|sw-b|Gi0/2": 1,
+		"bad-key":                99,
+	}
+	got := AgesToEdgeKeys(in)
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1 (malformed key must be dropped)", len(got))
+	}
+}
+
+// EdgeKeysToAges round-trips an EdgeKey map through the snapshot encoding.
+func TestEdgeKeysToAges(t *testing.T) {
+	k1 := EdgeKey{SrcDevice: "sw-a", SrcPort: "Gi0/1", DstDevice: "sw-b", DstPort: "Gi0/2"}
+	k2 := EdgeKey{SrcDevice: "sw-c", SrcPort: "Gi0/3", DstDevice: "sw-d", DstPort: "Gi0/4"}
+	in := map[EdgeKey]int{k1: 3, k2: 1}
+	got := EdgeKeysToAges(in)
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	if got["sw-a|Gi0/1|sw-b|Gi0/2"] != 3 {
+		t.Errorf("ages[sw-a|...] = %d, want 3", got["sw-a|Gi0/1|sw-b|Gi0/2"])
+	}
+	if got["sw-c|Gi0/3|sw-d|Gi0/4"] != 1 {
+		t.Errorf("ages[sw-c|...] = %d, want 1", got["sw-c|Gi0/3|sw-d|Gi0/4"])
+	}
+}

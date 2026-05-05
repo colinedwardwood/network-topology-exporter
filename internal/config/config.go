@@ -85,6 +85,12 @@ type CredentialsConfig struct {
 	TrialRatePerSecond int                      `yaml:"trial_rate_per_second"`
 }
 
+// Profile type constants for CredentialProfile.Type.
+const (
+	ProfileTypeSNMPv2c = "snmp_v2c"
+	ProfileTypeSNMPv3  = "snmp_v3"
+)
+
 // CredentialProfile is one named credential the exporter can try against
 // a device. Type selects which *Env fields are consulted.
 type CredentialProfile struct {
@@ -253,11 +259,11 @@ func (c *Config) validateCredentials() error {
 			return fmt.Errorf("credentials.profiles: duplicate name %q", p.Name)
 		}
 		switch p.Type {
-		case "snmp_v2c":
+		case ProfileTypeSNMPv2c:
 			if p.CommunityEnv == "" {
 				return fmt.Errorf("profile %q (snmp_v2c) requires community_env", p.Name)
 			}
-		case "snmp_v3":
+		case ProfileTypeSNMPv3:
 			if p.UsernameEnv == "" {
 				return fmt.Errorf("profile %q (snmp_v3) requires username_env", p.Name)
 			}

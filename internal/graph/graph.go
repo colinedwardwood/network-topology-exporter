@@ -306,6 +306,31 @@ func AgeUnconfirmed(current []discovery.Edge, ages map[EdgeKey]int, ttl int) []E
 	return expired
 }
 
+// AgesToEdgeKeys converts the string-keyed map from snapshot.File.UnconfirmedAges
+// back to the EdgeKey-keyed form used by AgeUnconfirmed. Entries whose key
+// does not parse (malformed snapshot) are silently dropped.
+func AgesToEdgeKeys(in map[string]int) map[EdgeKey]int {
+	out := make(map[EdgeKey]int, len(in))
+	for s, v := range in {
+		k, err := EdgeKeyFromString(s)
+		if err != nil {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// EdgeKeysToAges converts the EdgeKey-keyed counter map back to the
+// string-keyed form that snapshot.File serialises to JSON.
+func EdgeKeysToAges(in map[EdgeKey]int) map[string]int {
+	out := make(map[string]int, len(in))
+	for k, v := range in {
+		out[EdgeKeyString(k)] = v
+	}
+	return out
+}
+
 func compareEdgeKey(a, b EdgeKey) int {
 	switch {
 	case a.SrcDevice < b.SrcDevice:

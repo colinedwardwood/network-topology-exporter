@@ -95,3 +95,16 @@ func IPInNets(ip net.IP, nets []*net.IPNet) bool {
 func NormaliseName(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
+
+// ParseCIDRs parses a slice of CIDR strings and returns the corresponding
+// IPNet values. Entries that fail to parse are silently skipped.
+func ParseCIDRs(cidrs []string) []*net.IPNet {
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for _, s := range cidrs {
+		_, n, err := net.ParseCIDR(s)
+		if err == nil {
+			nets = append(nets, n)
+		}
+	}
+	return nets
+}
