@@ -1,61 +1,87 @@
 # network-topology-exporter — example configuration.
 #
-# Each section maps to an internal package. See README.md for the emitted
-# Prometheus / Loki / OTLP signal reference.
+# Output contract: Prometheus metrics on /metrics, structured JSON log lines
+# to stderr. Change events are log lines; ship them to Loki/Elasticsearch with
+# the collector agent already in your stack (Promtail, Alloy, Fluentd, etc.).
+# See README.md for the full metric reference.
 
 # ─── Discovery cycle controls ───────────────────────────────────────────────
 discovery:
   interval: 60s
   timeout_per_device: 10s
-  parallelism: 32
+  parallelism: 20
+
+  # LD-11: hard polling-scope guard. The exporter polls only IPs within this
+  # allow-list. LLDP/CDP-discovered neighbours whose IPs fall outside surface
+  # as network_topology_out_of_scope_neighbours_total (and a log line) but are
+  # never polled. Required when targets: is set.
+  scope:
+    cidr_allow_list:
+      - 198.51.100.0/24
+
+  # LD-14: a unidirectional link is removed from the graph after this many
+  # consecutive unconfirmed cycles. Default 3.
+  unconfirmed_link_ttl_cycles: 3
 
 # ─── Per-protocol modules ──────────────────────────────────────────────────
-# Each module cites the public spec it derives from; see the corresponding
-# internal/discovery/<module>/<module>.go file header.
 modules:
   snmp:
     enabled: true
     version: v2c               # v2c | v3
+    # Legacy single-community path. Production deployments should leave this
+    # unset and use credentials.profiles below (LD-12).
     community_env: SNMP_COMMUNITY
-    # SNMPv3 fields are read from environment when version=v3:
-    #   SNMP_USERNAME, SNMP_AUTH_PROTOCOL, SNMP_AUTH_PASSPHRASE,
-    #   SNMP_PRIV_PROTOCOL, SNMP_PRIV_PASSPHRASE
   lldp:
     enabled: true              # IEEE 802.1AB / RFC 4957
   cdp:
     enabled: true              # CISCO-CDP-MIB
   bgp:
-    enabled: false             # RFC 1657
+    enabled: false             # RFC 1657 BGP4-MIB — v0.2+
   ospf:
-    enabled: false             # RFC 4750
-  arp:
-    enabled: true              # IP-MIB / RFC 4293
+    enabled: false             # RFC 4750 OSPF-MIB — v0.2+
   fdb:
-    enabled: true              # BRIDGE-MIB / RFC 4188
+    enabled: false             # RFC 4188 BRIDGE-MIB — noisy without filtering; disabled by default
 
-# ─── Loki push for topology change events ──────────────────────────────────
-loki:
-  enabled: false
-  url: http://localhost:3100/loki/api/v1/push
-  labels:
-    job: topology-exporter
+# ─── LD-12 credential management ───────────────────────────────────────────
+# Named profiles, per-IP/CIDR assignment, ordered fallback, and a global
+# trial rate limit. Secret values are dereferenced from environment variables.
+# Cold-start lockout runbook: docs/operator/cold-start-credentials.md
+credentials:
+  profiles:
+    - name: edge-v2c
+      type: snmp_v2c
+      community_env: SNMP_COMMUNITY
+    - name: core-v3
+      type: snmp_v3
+      username_env: SNMP_V3_USER
+      auth_protocol: SHA-256
+      auth_key_env: SNMP_V3_AUTH_KEY
+      priv_protocol: AES-256
+      priv_key_env: SNMP_V3_PRIV_KEY
+  assignments:
+    - cidr: 198.51.100.0/25
+      profiles: [core-v3]
+    - ip: 198.51.100.10
+      profiles: [edge-v2c]
+  fallback_order: [edge-v2c]
+  # Token bucket shared across all device polls. Caps the cold-start trial
+  # rate so a fresh exporter does not trigger SNMP auth-lockout policies.
+  trial_rate_per_second: 5
 
-# ─── OpenTelemetry traces for discovery cycles ─────────────────────────────
-otel:
-  enabled: false
-  endpoint: localhost:4317
-  insecure: true
+# ─── LD-13 graph snapshot ──────────────────────────────────────────────────
+# Versioned JSON snapshot of the reconciled graph plus the credential cache.
+# Loaded on startup; serves stale-but-valid metrics with
+# network_topology_graph_stale=1 until the first live cycle completes.
+# Snapshot is always active. Set path to override the default location:
+#   /var/lib/network-topology-exporter/snapshot.json
+snapshot:
+  path: /var/lib/network-topology-exporter/snapshot.json
 
-# ─── Optional NetBox sink (integration, not a signal) ──────────────────────
-netbox:
-  enabled: false
-  url: ""                      # e.g. https://netbox.example.com
-  api_token_env: NETBOX_API_TOKEN
-  default_site: ""
-
-# ─── Discovery targets ─────────────────────────────────────────────────────
-# In production this is typically synced from Git and external IPAM via
-# Grafana Fleet Management; for dev, list devices inline.
+# ─── Per-device enrichment ─────────────────────────────────────────────────
+# Targets provide enrichment metadata (SNMP port, site label, custom labels)
+# for devices discovered within the CIDR allow-list. The CIDR drives what
+# gets polled; targets attach metadata to matching IPs. A target IP outside
+# the allow-list is rejected at startup (LD-11).
 targets:
   - host: 198.51.100.10
     port: 161
