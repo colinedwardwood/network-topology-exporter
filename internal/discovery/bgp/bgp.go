@@ -21,6 +21,9 @@
 //     and their limitations; the key lesson is that BGP peers are often not
 //     directly connected at L2.
 //     https://ieeexplore.ieee.org/document/6970764/
+//   - prometheus/snmp_exporter (Apache 2.0) — BulkWalk table subtree,
+//     group columns by index key.
+//     https://github.com/prometheus/snmp_exporter
 //
 // # Notes
 //
@@ -33,20 +36,146 @@
 //     post-18.x). SNMP BGP walks may return empty results on modern gear.
 //     Streaming telemetry (gNMI) is the preferred path for BGP adjacency
 //     on those platforms, but is out of scope for v1.
-//   - iBGP vs eBGP is determined by comparing bgpPeerRemoteAs to the local
-//     bgpLocalAs (1.3.6.1.2.1.15.2.0). Same AS = iBGP edge; different = eBGP.
+//   - iBGP vs eBGP classification is not emitted in v1. bgpPeerRemoteAs is
+//     read from the walk results but the distinction is not reflected in
+//     LinkKind ("ip" is used for all peers). A follow-up can set LinkKind to
+//     "ibgp" or "ebgp" once the graph layer consumes that field.
 package bgp
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"time"
+
+	gsnmp "github.com/gosnmp/gosnmp"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+	snmputil "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
 )
 
-// Walker reads BGP4-MIB peer state and emits one Edge per peer relationship.
-type Walker struct{}
+const (
+	oidBgpPeerTable = "1.3.6.1.2.1.15.3"
+	precedenceRank  = 6
+)
 
-// Walk returns the BGP-derived edges for one device. Stub.
-func (w *Walker) Walk(_ context.Context, _ string) ([]discovery.Edge, error) {
-	return nil, nil
+// bgpPeerTable column numbers (RFC 1657 §3.4).
+const (
+	colBgpPeerState      = 2
+	colBgpPeerRemoteAddr = 7
+	colBgpPeerRemoteAs   = 9
+)
+
+const bgpStateEstablished = 6
+
+type bgpPeer struct {
+	state    int
+	remoteIP net.IP
+	remoteAS int
+}
+
+// Walk returns BGP-peer edges for the device at p.IP. Only peers in
+// state established(6) produce edges. Peers outside allowedNets go to the
+// OutOfScopeNeighbour slice; pass nil to skip scope enforcement.
+func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
+	client, err := snmputil.Open(p)
+	if err != nil {
+		return nil, nil, fmt.Errorf("bgp %s: %w", p.IP, err)
+	}
+	defer client.Conn.Close()
+
+	peers, err := walkBgpPeerTable(ctx, client)
+	if err != nil {
+		return nil, nil, fmt.Errorf("bgp peer table %s: %w", p.IP, err)
+	}
+
+	edges, oos := buildEdges(localDevice, peers, allowedNets)
+	return edges, oos, nil
+}
+
+func walkBgpPeerTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*bgpPeer, error) {
+	pdus, err := snmputil.BulkWalk(ctx, client, oidBgpPeerTable)
+	if err != nil {
+		return nil, err
+	}
+	const prefix = ".1.3.6.1.2.1.15.3.1."
+	peers := make(map[string]*bgpPeer)
+	for _, pdu := range pdus {
+		suffix, ok := snmputil.TrimOIDPrefix(pdu.Name, prefix)
+		if !ok {
+			continue
+		}
+		col, ipKey, ok := snmputil.SplitOIDComponent(suffix)
+		if !ok || ipKey == "" {
+			continue
+		}
+		peer := peers[ipKey]
+		if peer == nil {
+			peer = &bgpPeer{}
+			peers[ipKey] = peer
+		}
+		switch col {
+		case colBgpPeerState:
+			peer.state = snmputil.PDUInt(pdu)
+		case colBgpPeerRemoteAddr:
+			peer.remoteIP = pduIP(pdu)
+		case colBgpPeerRemoteAs:
+			peer.remoteAS = snmputil.PDUInt(pdu)
+		}
+	}
+	return peers, nil
+}
+
+// pduIP extracts an IPv4 address from an SNMP PDU. gosnmp decodes IpAddress
+// type OIDs as a dotted-decimal string; some test harnesses encode them as raw
+// 4-byte slices. Both representations are handled.
+func pduIP(pdu gsnmp.SnmpPDU) net.IP {
+	switch v := pdu.Value.(type) {
+	case string:
+		if ip := net.ParseIP(v); ip != nil {
+			return ip.To4()
+		}
+	case []byte:
+		if len(v) == 4 {
+			return net.IP(append([]byte(nil), v...))
+		}
+	}
+	return nil
+}
+
+func buildEdges(localDevice string, peers map[string]*bgpPeer, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour) {
+	now := time.Now()
+	var edges []discovery.Edge
+	var oos []discovery.OutOfScopeNeighbour
+
+	for _, peer := range peers {
+		if peer.state != bgpStateEstablished {
+			continue
+		}
+		if peer.remoteIP == nil {
+			continue
+		}
+
+		if len(allowedNets) > 0 && !snmputil.IPInNets(peer.remoteIP, allowedNets) {
+			oos = append(oos, discovery.OutOfScopeNeighbour{
+				ReportingDevice: localDevice,
+				NeighbourHint:   peer.remoteIP.String(),
+				LastSeen:        now,
+			})
+			continue
+		}
+
+		edges = append(edges, discovery.Edge{
+			SrcDevice:      localDevice,
+			DstDevice:      peer.remoteIP.String(),
+			DiscoveryProto: "bgp",
+			Direction:      discovery.DirectionUnidirectional,
+			Confidence:     discovery.ConfidenceLow,
+			Adjacency:      discovery.AdjacencyUnknown,
+			PrecedenceRank: precedenceRank,
+			LinkKind:       "ip",
+			ObservedAt:     now,
+		})
+	}
+	return edges, oos
 }

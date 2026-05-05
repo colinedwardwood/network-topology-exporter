@@ -419,3 +419,32 @@ func TestBulkWalk(t *testing.T) {
 		t.Errorf("BulkWalk returned %d PDUs, want at least 2", len(results))
 	}
 }
+
+// Walk: wrong community causes a timeout and returns a non-nil error.
+// Real devices silently drop packets from unknown communities; our test agent
+// does the same. The client exhausts its retries and Walk returns an error.
+func TestWalkWrongCommunity(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.1.5.0", Type: gsnmp.OctetString, Value: []byte("sw-01")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := Params{
+		IP:        ip,
+		Port:      port,
+		Community: "wrong",
+		Timeout:   200 * time.Millisecond,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	dev, err := Walk(ctx, p)
+	if err == nil {
+		t.Fatalf("expected error for wrong community, got device %+v", dev)
+	}
+	if dev != nil {
+		t.Errorf("expected nil device on auth failure, got %+v", dev)
+	}
+}
