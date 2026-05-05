@@ -70,6 +70,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	gsnmp "github.com/gosnmp/gosnmp"
@@ -79,12 +80,13 @@ import (
 )
 
 const (
-	oidFdbTable      = "1.3.6.1.2.1.17.4.3"
-	oidBasePortTable = "1.3.6.1.2.1.17.1.4"
-	oidStpPortTable  = "1.3.6.1.2.1.17.2.15"
-	oidIfName        = "1.3.6.1.2.1.31.1.1.1.1"
-	precedenceRank   = 4
-	fdbStatusLearned = 3
+	oidFdbTable        = "1.3.6.1.2.1.17.4.3"
+	oidBasePortTable   = "1.3.6.1.2.1.17.1.4"
+	oidStpPortTable    = "1.3.6.1.2.1.17.2.15"
+	oidIfName          = "1.3.6.1.2.1.31.1.1.1.1"
+	oidQBridgeFdbTable = "1.3.6.1.2.1.17.7.1.2.2"
+	precedenceRank     = 4
+	fdbStatusLearned   = 3
 	stpStateForwarding = 5
 )
 
@@ -93,6 +95,12 @@ const (
 	colFdbAddress = 1
 	colFdbPort    = 2
 	colFdbStatus  = 3
+)
+
+// dot1qTpFdbTable column numbers (RFC 4363).
+const (
+	colQBridgePort   = 2
+	colQBridgeStatus = 3
 )
 
 // dot1dBasePortTable column numbers (RFC 4188).
@@ -121,6 +129,9 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, _ []*net.I
 	if err != nil {
 		return nil, nil, fmt.Errorf("fdb table %s: %w", p.IP, err)
 	}
+	// Q-BRIDGE walk failures are non-fatal: devices that implement only B-MIB
+	// return an empty result or a no-such-object error, both of which are fine.
+	_ = walkQBridgeFdbTable(ctx, client, entries)
 	bridgePorts, err := walkBasePortTable(ctx, client)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fdb baseport %s: %w", p.IP, err)
@@ -167,6 +178,67 @@ func walkFdbTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*fdbEnt
 		}
 	}
 	return entries, nil
+}
+
+// parseQBridgeIndex parses a Q-BRIDGE OID instance suffix of the form
+// "{fdbId}.{mac1}.{mac2}.{mac3}.{mac4}.{mac5}.{mac6}". At least 7 dot-separated
+// components are required. The last six are the MAC octets; the remainder is the
+// fdbId (VLAN forwarding-database identifier), which is ignored by the caller.
+func parseQBridgeIndex(rest string) (key string, mac []byte, ok bool) {
+	parts := strings.Split(rest, ".")
+	if len(parts) < 7 {
+		return "", nil, false
+	}
+	macParts := parts[len(parts)-6:]
+	macBytes := make([]byte, 6)
+	for i, p := range macParts {
+		v, err := strconv.Atoi(p)
+		if err != nil || v < 0 || v > 255 {
+			return "", nil, false
+		}
+		macBytes[i] = byte(v)
+	}
+	return strings.Join(macParts, "."), macBytes, true
+}
+
+func walkQBridgeFdbTable(ctx context.Context, client *gsnmp.GoSNMP, entries map[string]*fdbEntry) error {
+	pdus, err := snmputil.BulkWalk(ctx, client, oidQBridgeFdbTable)
+	if err != nil {
+		return err
+	}
+	const prefix = ".1.3.6.1.2.1.17.7.1.2.2."
+	for _, pdu := range pdus {
+		suffix, ok := snmputil.TrimOIDPrefix(pdu.Name, prefix)
+		if !ok {
+			continue
+		}
+		col, rest, ok := snmputil.SplitOIDComponent(suffix)
+		if !ok || rest == "" {
+			continue
+		}
+		if col != colQBridgePort && col != colQBridgeStatus {
+			continue
+		}
+		macKey, macBytes, ok := parseQBridgeIndex(rest)
+		if !ok {
+			continue
+		}
+		e := entries[macKey]
+		if e == nil {
+			e = &fdbEntry{}
+			entries[macKey] = e
+		}
+		switch col {
+		case colQBridgePort:
+			e.port = snmputil.PDUInt(pdu)
+		case colQBridgeStatus:
+			e.status = snmputil.PDUInt(pdu)
+		}
+		if e.mac == nil {
+			e.mac = macBytes
+		}
+	}
+	return nil
 }
 
 func walkBasePortTable(ctx context.Context, client *gsnmp.GoSNMP) (map[int]int, error) {

@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -38,6 +39,11 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/snapshot"
 	"github.com/colinedwardwood/network-topology-exporter/internal/version"
 )
+
+type cycleStatus struct {
+	LastCycleAt  time.Time
+	DeviceErrors int64
+}
 
 func main() {
 	var (
@@ -75,11 +81,21 @@ func main() {
 
 	m := metrics.New()
 
+	var status atomic.Pointer[cycleStatus]
+
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(m.Registry(), promhttp.HandlerOpts{Registry: m.Registry()}))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		s := status.Load()
+		if s == nil {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok","last_cycle_at":null,"device_errors":null}` + "\n"))
+			return
+		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok\n"))
+		_, _ = fmt.Fprintf(w, `{"status":"ok","last_cycle_at":%q,"device_errors":%d}`+"\n",
+			s.LastCycleAt.UTC().Format(time.RFC3339), s.DeviceErrors)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -102,7 +118,7 @@ func main() {
 	discoveryDone.Add(1)
 	go func() {
 		defer discoveryDone.Done()
-		runDiscoveryLoop(ctx, logger, cfg, m)
+		runDiscoveryLoop(ctx, logger, cfg, m, &status)
 	}()
 
 	go func() {
@@ -137,7 +153,7 @@ func main() {
 // under the LD-12 rate limiter, reconciles the resulting graph, diffs
 // against the previous cycle, emits change events, updates metrics, and
 // writes a new snapshot.
-func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Config, m *metrics.Metrics) {
+func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Config, m *metrics.Metrics, status *atomic.Pointer[cycleStatus]) {
 	evLogger := events.New(logger)
 
 	// LD-13: load snapshot, serve stale-but-valid metrics until first live cycle.
@@ -189,6 +205,10 @@ func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Conf
 		if ctx.Err() != nil {
 			return
 		}
+		status.Store(&cycleStatus{
+			LastCycleAt:  time.Now(),
+			DeviceErrors: int64(len(cfg.Targets) - len(newGraph.Devices)),
+		})
 		changes := graph.Diff(prevGraph.Edges, newGraph.Edges)
 		if len(changes) > 0 {
 			evLogger.Emit(ctx, changes)
