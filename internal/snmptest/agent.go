@@ -66,6 +66,91 @@ func ParseAddr(addr string) (net.IP, uint16) {
 	return net.ParseIP(host), uint16(p)
 }
 
+// StartMultiCommunity launches an SNMPv2c agent on a random local UDP port
+// that dispatches requests based on the community string in each packet.
+// The keys of communities are the accepted community strings; packets whose
+// community is not in the map are silently dropped. t.Cleanup stops the agent.
+// Returns the address as "127.0.0.1:PORT".
+func StartMultiCommunity(t *testing.T, communities map[string][]gsnmp.SnmpPDU) string {
+	t.Helper()
+
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("snmptest.StartMultiCommunity: listen: %v", err)
+	}
+
+	sorted := make(map[string][]gsnmp.SnmpPDU, len(communities))
+	for comm, pdus := range communities {
+		s := make([]gsnmp.SnmpPDU, len(pdus))
+		copy(s, pdus)
+		sort.Slice(s, func(i, j int) bool {
+			return oidLess(s[i].Name, s[j].Name)
+		})
+		sorted[comm] = s
+	}
+
+	decoder := &gsnmp.GoSNMP{
+		Version: gsnmp.Version2c,
+	}
+
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		conn.Close()
+		<-done
+	})
+
+	go func() {
+		defer close(done)
+		serveMulti(conn, sorted, decoder)
+	}()
+
+	return conn.LocalAddr().String()
+}
+
+func serveMulti(conn net.PacketConn, communities map[string][]gsnmp.SnmpPDU, decoder *gsnmp.GoSNMP) {
+	buf := make([]byte, 65535)
+	for {
+		n, src, err := conn.ReadFrom(buf)
+		if err != nil {
+			return
+		}
+
+		pkt, err := decoder.SnmpDecodePacket(buf[:n])
+		if err != nil {
+			continue
+		}
+		pdus, ok := communities[pkt.Community]
+		if !ok {
+			continue
+		}
+
+		var resp []gsnmp.SnmpPDU
+		switch pkt.PDUType {
+		case gsnmp.GetRequest:
+			resp = handleGet(pdus, pkt.Variables)
+		case gsnmp.GetNextRequest:
+			resp = handleGetNext(pdus, pkt.Variables)
+		case gsnmp.GetBulkRequest:
+			resp = handleBulk(pdus, pkt.Variables, int(pkt.NonRepeaters), int(pkt.MaxRepetitions))
+		default:
+			continue
+		}
+
+		reply := &gsnmp.SnmpPacket{
+			Version:   gsnmp.Version2c,
+			Community: pkt.Community,
+			PDUType:   gsnmp.GetResponse,
+			RequestID: pkt.RequestID,
+			Variables: resp,
+		}
+		raw, err := reply.MarshalMsg()
+		if err != nil {
+			continue
+		}
+		_, _ = conn.WriteTo(raw, src)
+	}
+}
+
 func serve(conn net.PacketConn, community string, pdus []gsnmp.SnmpPDU, decoder *gsnmp.GoSNMP) {
 	buf := make([]byte, 65535)
 	for {
