@@ -1,9 +1,9 @@
-// Command topology-exporter discovers network topology over SNMP / LLDP / CDP
-// / BGP / OSPF / ARP / FDB and emits Prometheus metrics, Loki push events,
-// and OpenTelemetry traces.
+// Command topology-exporter discovers network topology over SNMP, LLDP,
+// CDP, BGP, OSPF, and FDB, and emits the result as Prometheus metrics and
+// structured log lines.
 //
-// See README.md for the emitted-signal reference and CONTRIBUTING.md for the
-// LD-09 clean-room development commitments.
+// README.md documents the emitted-signal contract; CONTRIBUTING.md documents
+// the LD-09 clean-room development rules.
 package main
 
 import (
@@ -12,16 +12,27 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"maps"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
+	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
+	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/cdp"
+	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/lldp"
+	snmpwalk "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
+	"github.com/colinedwardwood/network-topology-exporter/internal/events"
+	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/colinedwardwood/network-topology-exporter/internal/snapshot"
 	"github.com/colinedwardwood/network-topology-exporter/internal/version"
 )
 
@@ -84,7 +95,12 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	go runDiscoveryLoop(ctx, logger, cfg, m)
+	var discoveryDone sync.WaitGroup
+	discoveryDone.Add(1)
+	go func() {
+		defer discoveryDone.Done()
+		runDiscoveryLoop(ctx, logger, cfg, m)
+	}()
 
 	go func() {
 		logger.Info("http server listening", "addr", *listenAddr)
@@ -102,33 +118,112 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("http shutdown error", "error", err)
 	}
+	drainDone := make(chan struct{})
+	go func() { discoveryDone.Wait(); close(drainDone) }()
+	select {
+	case <-drainDone:
+	case <-time.After(cfg.Discovery.TimeoutPerDevice + 5*time.Second):
+		logger.Warn("discovery drain timed out, forcing exit")
+	}
 	logger.Info("clean shutdown complete")
 }
 
-// runDiscoveryLoop is the v0.1 placeholder discovery loop. It seeds one
-// network_device_info series per configured target so the /metrics surface
-// is non-empty end to end. Real walking arrives Day 2 per the v1 plan.
+// runDiscoveryLoop is the main discovery scheduler. It loads the LD-13
+// snapshot on startup, starts the credential resolver, and then runs
+// periodic cycles. Each cycle probes all configured targets concurrently
+// under the LD-12 rate limiter, reconciles the resulting graph, diffs
+// against the previous cycle, emits change events, updates metrics, and
+// writes a new snapshot.
 func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Config, m *metrics.Metrics) {
-	tick := time.NewTicker(cfg.Discovery.Interval)
-	defer tick.Stop()
+	evLogger := events.New(logger)
 
+	// LD-13: load snapshot, serve stale-but-valid metrics until first live cycle.
+	m.GraphStale.Set(1)
+	snap, err := snapshot.Load(cfg.Snapshot.Path)
+	if err != nil {
+		if errors.Is(err, snapshot.ErrVersionMismatch) {
+			logger.Warn("snapshot version mismatch, cold start", "path", cfg.Snapshot.Path, "error", err)
+		} else {
+			logger.Warn("snapshot load failed, cold start", "path", cfg.Snapshot.Path, "error", err)
+		}
+	}
+
+	var prevGraph discovery.Graph
+	ages := make(map[graph.EdgeKey]int)
+
+	if snap != nil {
+		prevGraph = discovery.Graph{
+			Devices:    snap.Devices,
+			Edges:      snap.Edges,
+			OutOfScope: snap.OutOfScope,
+		}
+		ages = snapshotAgesToEdgeKeys(snap.UnconfirmedAges)
+		logger.Info("snapshot loaded",
+			"devices", len(snap.Devices),
+			"edges", len(snap.Edges),
+		)
+		m.SnapshotLoadedDevicesTotal.Set(float64(len(snap.Devices)))
+		publishInventoryMetrics(prevGraph, m)
+	}
+
+	// LD-12: credential resolver.
+	resolver, err := credentials.New(cfg.Credentials)
+	if err != nil {
+		logger.Error("building credential resolver", "error", err)
+		os.Exit(1)
+	}
+	if snap != nil {
+		resolver.LoadCache(snap.CredentialCache)
+	}
+
+	// Parse CIDR allow-list once; the config is immutable at runtime.
+	allowedNets := parseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
+
+	// Run one cycle immediately, then on the configured interval.
 	cycle := func() {
 		start := time.Now()
-		var ok int
-		for _, t := range cfg.Targets {
-			deviceID := t.Host
-			m.DeviceInfo.WithLabelValues(deviceID, "unknown", "unknown", "unknown", t.Site, "").Set(1)
-			ok++
+		newGraph, newAges := runCycle(ctx, logger, cfg, m, resolver, allowedNets, ages)
+		if ctx.Err() != nil {
+			return
 		}
-		m.DiscoveryDevicesTotal.WithLabelValues("success").Set(float64(ok))
+		changes := graph.Diff(prevGraph.Edges, newGraph.Edges)
+		if len(changes) > 0 {
+			evLogger.Emit(ctx, changes)
+			for _, c := range changes {
+				proto := ""
+				if c.After != nil {
+					proto = c.After.DiscoveryProto
+				} else if c.Before != nil {
+					proto = c.Before.DiscoveryProto
+				}
+				m.TopologyChangeTotal.WithLabelValues(string(c.Kind), proto).Inc()
+			}
+		}
+		prevGraph = newGraph
+		ages = newAges
+		publishInventoryMetrics(newGraph, m)
+		m.GraphStale.Set(0)
 		m.DiscoveryCycleDuration.Observe(time.Since(start).Seconds())
-		logger.Info("discovery cycle complete",
-			"devices_ok", ok,
-			"duration_seconds", time.Since(start).Seconds(),
-		)
+
+		// LD-13: write snapshot.
+		credCache := resolver.SnapshotCache()
+		f := snapshot.File{
+			Devices:         newGraph.Devices,
+			Edges:           newGraph.Edges,
+			OutOfScope:      newGraph.OutOfScope,
+			CredentialCache: credCache,
+			UnconfirmedAges: edgeKeysToSnapshotAges(ages),
+		}
+		if err := snapshot.Write(cfg.Snapshot.Path, f); err != nil {
+			logger.Error("snapshot write failed", "error", err)
+		} else {
+			m.SnapshotLastWrittenUnix.Set(float64(time.Now().Unix()))
+		}
 	}
 
 	cycle()
+	tick := time.NewTicker(cfg.Discovery.Interval)
+	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -137,6 +232,326 @@ func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Conf
 			cycle()
 		}
 	}
+}
+
+// runCycle probes all configured targets concurrently and returns the
+// resulting graph and updated unconfirmed-age counters.
+func runCycle(
+	ctx context.Context,
+	logger *slog.Logger,
+	cfg *config.Config,
+	m *metrics.Metrics,
+	resolver *credentials.Resolver,
+	allowedNets []*net.IPNet,
+	prevAges map[graph.EdgeKey]int,
+) (discovery.Graph, map[graph.EdgeKey]int) {
+	type probeResult struct {
+		device     *discovery.Device
+		edges      []discovery.Edge
+		outOfScope []discovery.OutOfScopeNeighbour
+	}
+
+	results := make([]probeResult, 0, len(cfg.Targets))
+	var mu sync.Mutex
+	sem := make(chan struct{}, cfg.Discovery.Parallelism)
+	var wg sync.WaitGroup
+	var okCount, failCount int64
+
+	for _, t := range cfg.Targets {
+		target := t
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+
+			ip := net.ParseIP(target.Host)
+			if ip == nil {
+				addrs, err := net.DefaultResolver.LookupHost(ctx, target.Host)
+				if err != nil || len(addrs) == 0 {
+					logger.Warn("host resolution failed", "host", target.Host, "error", err)
+					mu.Lock()
+					failCount++
+					mu.Unlock()
+					return
+				}
+				ip = net.ParseIP(addrs[0])
+			}
+
+			// LD-11: enforce CIDR allow-list for hostname-based targets whose
+			// IP is only known after DNS resolution.
+			if len(allowedNets) > 0 && !snmpwalk.IPInNets(ip, allowedNets) {
+				logger.Warn("resolved target outside allow-list, skipping",
+					"host", target.Host, "ip", ip)
+				mu.Lock()
+				failCount++
+				mu.Unlock()
+				return
+			}
+
+			if err := resolver.AcquireTrial(ctx); err != nil {
+				return
+			}
+
+			params, profileName, ok := resolveParams(cfg, resolver, ip, target)
+			if !ok {
+				logger.Warn("no credential profile found", "target", target.Host)
+				m.CredentialTrialsTotal.WithLabelValues("failed").Inc()
+				mu.Lock()
+				failCount++
+				mu.Unlock()
+				return
+			}
+
+			devCtx, cancel := context.WithTimeout(ctx, cfg.Discovery.TimeoutPerDevice)
+			defer cancel()
+
+			dev, err := snmpwalk.Walk(devCtx, params)
+			if err != nil {
+				logger.Debug("snmp walk failed", "target", target.Host, "error", err)
+				// Don't invalidate the credential cache on context cancellation
+				// (SIGTERM, timeout): those are not auth failures.
+				if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+					resolver.RecordFailure(ip.String())
+				}
+				m.CredentialTrialsTotal.WithLabelValues("failed").Inc()
+				m.SNMPWalksTotal.WithLabelValues("error").Inc()
+				mu.Lock()
+				failCount++
+				mu.Unlock()
+				return
+			}
+
+			resolver.RecordSuccess(ip.String(), profileName)
+			m.CredentialTrialsTotal.WithLabelValues("ok").Inc()
+			m.SNMPWalksTotal.WithLabelValues("ok").Inc()
+
+			dev.Site = target.Site
+			for k, v := range target.Labels {
+				if dev.Labels == nil {
+					dev.Labels = make(map[string]string)
+				}
+				dev.Labels[k] = v
+			}
+
+			var allEdges []discovery.Edge
+			var allOOS []discovery.OutOfScopeNeighbour
+
+			if cfg.Modules.LLDP.Enabled {
+				edges, oos, err := lldp.Walk(devCtx, params, dev.ID, allowedNets)
+				if err != nil {
+					logger.Debug("lldp walk failed", "target", target.Host, "error", err)
+					m.SNMPWalksTotal.WithLabelValues("error").Inc()
+				} else {
+					m.SNMPWalksTotal.WithLabelValues("ok").Inc()
+					allEdges = append(allEdges, edges...)
+					allOOS = append(allOOS, oos...)
+				}
+			}
+
+			if cfg.Modules.CDP.Enabled {
+				edges, oos, err := cdp.Walk(devCtx, params, dev.ID, allowedNets)
+				if err != nil {
+					logger.Debug("cdp walk failed", "target", target.Host, "error", err)
+					m.SNMPWalksTotal.WithLabelValues("error").Inc()
+				} else {
+					m.SNMPWalksTotal.WithLabelValues("ok").Inc()
+					allEdges = append(allEdges, edges...)
+					allOOS = append(allOOS, oos...)
+				}
+			}
+
+			mu.Lock()
+			results = append(results, probeResult{device: dev, edges: allEdges, outOfScope: allOOS})
+			okCount++
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+
+	m.DiscoveryDevicesTotal.WithLabelValues("success").Set(float64(okCount))
+	m.DiscoveryDevicesTotal.WithLabelValues("failed").Set(float64(failCount))
+
+	var devices []discovery.Device
+	var rawEdges []discovery.Edge
+	var allOOS []discovery.OutOfScopeNeighbour
+	for _, r := range results {
+		if r.device != nil {
+			devices = append(devices, *r.device)
+		}
+		rawEdges = append(rawEdges, r.edges...)
+		allOOS = append(allOOS, r.outOfScope...)
+	}
+
+	reconciledEdges, _ := graph.Reconcile(rawEdges)
+
+	// LD-14: advance unconfirmed-link age counters and drop expired edges.
+	ages := maps.Clone(prevAges)
+	expired := graph.AgeUnconfirmed(reconciledEdges, ages, cfg.Discovery.UnconfirmedLinkTTLCycles)
+	if len(expired) > 0 {
+		expiredSet := make(map[graph.EdgeKey]bool, len(expired))
+		for _, k := range expired {
+			expiredSet[k] = true
+		}
+		kept := reconciledEdges[:0]
+		for _, e := range reconciledEdges {
+			if !expiredSet[graph.Key(e)] {
+				kept = append(kept, e)
+			}
+		}
+		reconciledEdges = kept
+	}
+
+	return discovery.Graph{
+		Devices:    devices,
+		Edges:      reconciledEdges,
+		OutOfScope: allOOS,
+	}, ages
+}
+
+func parseCIDRs(cidrs []string) []*net.IPNet {
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for _, s := range cidrs {
+		_, n, err := net.ParseCIDR(s)
+		if err == nil {
+			nets = append(nets, n)
+		}
+	}
+	return nets
+}
+
+// resolveParams builds an snmpwalk.Params for the given target IP.
+// Returns (params, profileName, true) on success, ("", "", false) when no
+// usable credential is found.
+func resolveParams(cfg *config.Config, resolver *credentials.Resolver, ip net.IP, t config.TargetConfig) (snmpwalk.Params, string, bool) {
+	port := uint16(t.Port)
+	if port == 0 {
+		port = 161
+	}
+
+	// Fast path: cached winning profile from a previous cycle.
+	if profileName, ok := resolver.CachedProfile(ip.String()); ok {
+		if p, found := resolver.Profile(profileName); found {
+			params, err := profileToParams(ip, port, cfg.Discovery.TimeoutPerDevice, p)
+			if err == nil {
+				return params, profileName, true
+			}
+		}
+	}
+
+	// No profiles configured — fall back to legacy single-community from
+	// modules.snmp.community_env for dev-time convenience.
+	if len(cfg.Credentials.Profiles) == 0 {
+		community := os.Getenv(cfg.Modules.SNMP.CommunityEnv)
+		if community == "" {
+			community = "public"
+		}
+		return snmpwalk.Params{
+			IP:        ip,
+			Port:      port,
+			Timeout:   cfg.Discovery.TimeoutPerDevice,
+			Community: community,
+		}, "", true
+	}
+
+	// Trial path: try each profile in resolve order.
+	names := resolver.Resolve(ip)
+	for _, name := range names {
+		p, ok := resolver.Profile(name)
+		if !ok {
+			continue
+		}
+		params, err := profileToParams(ip, port, cfg.Discovery.TimeoutPerDevice, p)
+		if err == nil {
+			return params, name, true
+		}
+	}
+	return snmpwalk.Params{}, "", false
+}
+
+func profileToParams(ip net.IP, port uint16, timeout time.Duration, p config.CredentialProfile) (snmpwalk.Params, error) {
+	params := snmpwalk.Params{
+		IP:      ip,
+		Port:    port,
+		Timeout: timeout,
+	}
+	switch p.Type {
+	case "snmp_v2c":
+		community := os.Getenv(p.CommunityEnv)
+		if community == "" {
+			return params, fmt.Errorf("env %q is empty", p.CommunityEnv)
+		}
+		params.Community = community
+	case "snmp_v3":
+		params.V3 = true
+		params.Username = os.Getenv(p.UsernameEnv)
+		if params.Username == "" {
+			return params, fmt.Errorf("env %q is empty", p.UsernameEnv)
+		}
+		params.AuthKey = os.Getenv(p.AuthKeyEnv)
+		params.PrivKey = os.Getenv(p.PrivKeyEnv)
+		// Auth/priv protocol names are config-level (not secret); passed as
+		// strings so main.go doesn't need to import gosnmp directly.
+		params.AuthProto = p.AuthProtocol
+		params.PrivProto = p.PrivProtocol
+	default:
+		return params, fmt.Errorf("unknown profile type %q", p.Type)
+	}
+	return params, nil
+}
+
+// publishInventoryMetrics replaces the Prometheus gauge sets for the current
+// graph. Reset() followed by re-population removes stale device/edge series.
+// There is a brief window between Reset and re-population where a concurrent
+// scrape sees empty gauges; this is a known trade-off of the Reset pattern.
+func publishInventoryMetrics(g discovery.Graph, m *metrics.Metrics) {
+	m.DeviceInfo.Reset()
+	m.DeviceUptimeSeconds.Reset()
+	for _, d := range g.Devices {
+		m.DeviceInfo.WithLabelValues(d.ID, d.Vendor, d.Model, d.OSVersion, d.Site).Set(1)
+		m.DeviceUptimeSeconds.WithLabelValues(d.ID).Set(d.Uptime.Seconds())
+	}
+
+	m.TopologyEdgeInfo.Reset()
+	for _, e := range g.Edges {
+		m.TopologyEdgeInfo.WithLabelValues(
+			e.SrcDevice, e.SrcPort,
+			e.DstDevice, e.DstPort,
+			e.DiscoveryProto,
+			e.LinkKind,
+			string(e.Direction),
+		).Set(1)
+	}
+
+	m.OutOfScopeNeighboursTotal.Set(float64(len(g.OutOfScope)))
+}
+
+// snapshotAgesToEdgeKeys converts the string-keyed snapshot map back to
+// the graph.EdgeKey-keyed map used by AgeUnconfirmed.
+func snapshotAgesToEdgeKeys(in map[string]int) map[graph.EdgeKey]int {
+	out := make(map[graph.EdgeKey]int, len(in))
+	for s, v := range in {
+		k, err := graph.EdgeKeyFromString(s)
+		if err != nil {
+			continue // silently skip malformed keys on snapshot load
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// edgeKeysToSnapshotAges converts the graph.EdgeKey map back to the
+// string-keyed form the snapshot serialises.
+func edgeKeysToSnapshotAges(in map[graph.EdgeKey]int) map[string]int {
+	out := make(map[string]int, len(in))
+	for k, v := range in {
+		out[graph.EdgeKeyString(k)] = v
+	}
+	return out
 }
 
 func newLogger(level string) *slog.Logger {
