@@ -1,0 +1,119 @@
+// Package snapshot implements LD-13: versioned JSON persistence of the
+// reconciled graph plus the LD-12 credential cache. The exporter loads the
+// snapshot at startup so /metrics serves the previous-cycle graph immediately
+// (with network_topology_graph_stale=1) instead of going dark while the
+// first live cycle runs.
+//
+// On-disk layout is a single JSON document. Writes go via tmp → fsync →
+// rename, so a crash mid-write leaves either the previous good snapshot or
+// the new one — never a half-written file.
+package snapshot
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+)
+
+// CurrentVersion is the on-disk schema version. Bump when the persisted
+// shape changes; older snapshots are discarded with a warning rather than
+// silently mis-parsed.
+const CurrentVersion = 1
+
+// File is the on-disk representation. Public fields and field tags are part
+// of the persistence contract; treat schema changes the same as a database
+// migration.
+type File struct {
+	Version          int                            `json:"version"`
+	WrittenAt        time.Time                      `json:"written_at"`
+	Devices          []discovery.Device             `json:"devices"`
+	Edges            []discovery.Edge               `json:"edges"`
+	OutOfScope       []discovery.OutOfScopeNeighbour `json:"out_of_scope"`
+	CredentialCache  map[string]string              `json:"credential_cache"`  // IP string → profile name (LD-12)
+	UnconfirmedAges  map[string]int                 `json:"unconfirmed_ages"`  // edge-id → consecutive unconfirmed cycles (LD-14)
+}
+
+// ErrVersionMismatch is reported when the on-disk version is unrecognised.
+// Callers treat this as cold-start: log, discard the file, continue with
+// an empty graph. Falling back is the documented behaviour, not an error
+// the operator should escalate.
+var ErrVersionMismatch = errors.New("snapshot: unrecognised version")
+
+// Load reads the snapshot at path. Returns (nil, nil) when the file does
+// not exist — first run is not an error. Returns ErrVersionMismatch wrapped
+// when the file exists but its version is unknown.
+func Load(path string) (*File, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read snapshot %q: %w", path, err)
+	}
+	var f File
+	if err := json.Unmarshal(b, &f); err != nil {
+		return nil, fmt.Errorf("parse snapshot %q: %w", path, err)
+	}
+	if f.Version != CurrentVersion {
+		return nil, fmt.Errorf("%w: got %d, want %d", ErrVersionMismatch, f.Version, CurrentVersion)
+	}
+	return &f, nil
+}
+
+// Write persists f to path atomically. The temp file lives next to the
+// final path so rename is on the same filesystem; rename is atomic on POSIX
+// and replace-on-rename on Windows. fsync runs on the data file before the
+// rename so a power loss between write and rename can't promote a partial
+// write to the final path.
+func Write(path string, f File) error {
+	if f.Version == 0 {
+		f.Version = CurrentVersion
+	}
+	if f.WrittenAt.IsZero() {
+		f.WrittenAt = time.Now().UTC()
+	}
+	b, err := json.Marshal(f)
+	if err != nil {
+		return fmt.Errorf("marshal snapshot: %w", err)
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("ensure snapshot dir %q: %w", dir, err)
+	}
+	tmp, err := os.CreateTemp(dir, ".snapshot-*.json.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp snapshot: %w", err)
+	}
+	tmpName := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpName) }
+	if _, err := tmp.Write(b); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("write temp snapshot: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("fsync temp snapshot: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return fmt.Errorf("close temp snapshot: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		cleanup()
+		return fmt.Errorf("rename temp snapshot to %q: %w", path, err)
+	}
+	// Fsync the parent directory so the renamed directory entry is durable.
+	// Best-effort: some filesystems (NFS, FAT) don't support directory fsync.
+	if fd, err := os.Open(dir); err == nil {
+		_ = fd.Sync()
+		_ = fd.Close()
+	}
+	return nil
+}
