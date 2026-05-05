@@ -1,21 +1,66 @@
-// Package events pushes topology change events to Loki via the standard
-// /loki/api/v1/push API. There is no bespoke event channel — the consumer
-// queries Loki with their existing tooling.
+// Package events writes topology change records as structured log lines.
 //
-// Implementation lands per the v1 plan; this stub fixes the public surface.
+// Change events are emitted to the process logger (slog, JSON to stderr) so
+// operators can ship them to any log aggregator — Loki, Elasticsearch, Splunk —
+// using the collector agent already present in their stack. There is no
+// bespoke HTTP push here: that coupling belongs in the shipping agent, not in
+// the exporter.
+//
+// The counter (network_topology_change_total) is what alerts fire on.
+// The log line carries the full before/after edge record so the operator can
+// answer "which edge changed?" without joining metric series.
 package events
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
 )
 
-// Pusher pushes graph diffs to Loki. Construction takes the configured Loki
-// URL and label set from internal/config.
-type Pusher struct{}
+// Logger writes EdgeChange records to a slog.Logger.
+type Logger struct {
+	log *slog.Logger
+}
 
-// Push emits one log line per change. Stub.
-func (p *Pusher) Push(_ context.Context, _ []graph.EdgeChange) error {
-	return nil
+// New returns a Logger that writes change events to l.
+func New(l *slog.Logger) *Logger {
+	return &Logger{log: l}
+}
+
+// Emit writes one structured log line per EdgeChange. The log level is Info
+// for added/updated edges and Warn for removed edges so removal events stand
+// out in operator dashboards without requiring a separate alert channel.
+func (l *Logger) Emit(ctx context.Context, changes []graph.EdgeChange) {
+	for _, c := range changes {
+		lvl := slog.LevelInfo
+		if c.Kind == graph.ChangeRemoved {
+			lvl = slog.LevelWarn
+		}
+
+		args := []any{
+			"change_kind", c.Kind,
+		}
+		if c.Before != nil {
+			args = append(args,
+				"before_src_device", c.Before.SrcDevice,
+				"before_src_port", c.Before.SrcPort,
+				"before_dst_device", c.Before.DstDevice,
+				"before_dst_port", c.Before.DstPort,
+				"before_proto", c.Before.DiscoveryProto,
+				"before_direction", c.Before.Direction,
+			)
+		}
+		if c.After != nil {
+			args = append(args,
+				"after_src_device", c.After.SrcDevice,
+				"after_src_port", c.After.SrcPort,
+				"after_dst_device", c.After.DstDevice,
+				"after_dst_port", c.After.DstPort,
+				"after_proto", c.After.DiscoveryProto,
+				"after_direction", c.After.Direction,
+			)
+		}
+		l.log.Log(ctx, lvl, "topology change", args...)
+	}
 }
