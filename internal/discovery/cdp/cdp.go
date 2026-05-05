@@ -1,22 +1,202 @@
-// Package cdp implements CDP-based topology discovery.
+// Package cdp discovers Cisco-proprietary neighbour relationships via CDP.
 //
-// Specification sources (public, no vendor source code consulted):
-//   - CISCO-CDP-MIB (vendor-published, public). SNMP walk: 1.3.6.1.4.1.9.9.23.1.2 (cdpCacheTable)
+// Specification sources:
+//   - CISCO-CDP-MIB (vendor-published) — cdpCacheTable at
+//     1.3.6.1.4.1.9.9.23.1.2.1.1. Index is (ifIndex, neighbourIndex).
+//     cdpCacheDeviceId (.6), cdpCacheDevicePort (.7), cdpCachePlatform (.8),
+//     cdpCacheAddress (.4) / cdpCacheAddressType (.3).
+//   - RFC 2863 — IF-MIB ifXTable. ifName (1.3.6.1.2.1.31.1.1.1.1.{ifIndex})
+//     maps the ifIndex from the CDP OID index to a human-readable port name.
 //
-// LD-09: this header lists the only sources consulted. Add citations before
-// extending to additional sub-OIDs.
+// Design references:
+//   - arXiv:1709.02209, 2017 — BFS via cdpCacheTable is equivalent to
+//     lldpRemTable for Cisco-only environments.
+//
+// CDP is Cisco-proprietary; only Cisco devices respond. If LLDP is also
+// enabled and both protocols report the same link, the graph layer ranks
+// LLDP above CDP (lower PrecedenceRank) per the LD-10 ladder.
 package cdp
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"strconv"
+	"time"
+
+	gsnmp "github.com/gosnmp/gosnmp"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+	snmputil "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
 )
 
-// Walker is the CDP discovery module. Implementation lands per the v1 plan.
-type Walker struct{}
+const (
+	oidCDPCacheTable = "1.3.6.1.4.1.9.9.23.1.2.1"
+	oidIfName        = "1.3.6.1.2.1.31.1.1.1.1"
+	precedenceRank   = 3
+)
 
-// Walk returns the CDP-discovered edges for the device at host.
-func (w *Walker) Walk(_ context.Context, _ string) ([]discovery.Edge, error) {
-	return nil, nil
+// cdpCacheTable column numbers (CISCO-CDP-MIB).
+const (
+	colAddressType = 3
+	colAddress     = 4
+	colDeviceID    = 6
+	colDevicePort  = 7
+)
+
+type cacheKey struct{ ifIndex, neighIndex int }
+
+type cacheEntry struct {
+	addrType int
+	addr     []byte
+	deviceID string
+	devPort  string
 }
+
+// Walk returns CDP-discovered edges for the device at p.IP. localDevice is
+// the sysName from the SNMP SYSTEM walk.
+func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
+	client, err := snmputil.Open(p)
+	if err != nil {
+		return nil, nil, fmt.Errorf("cdp %s: %w", p.IP, err)
+	}
+	defer client.Conn.Close()
+
+	ifNames, err := walkIfNames(ctx, client)
+	if err != nil {
+		return nil, nil, fmt.Errorf("cdp ifname %s: %w", p.IP, err)
+	}
+
+	entries, err := walkCacheTable(ctx, client)
+	if err != nil {
+		return nil, nil, fmt.Errorf("cdp cache %s: %w", p.IP, err)
+	}
+
+	return buildEdges(localDevice, ifNames, entries, allowedNets)
+}
+
+func walkIfNames(ctx context.Context, client *gsnmp.GoSNMP) (map[int]string, error) {
+	pdus, err := snmputil.BulkWalk(ctx, client, oidIfName)
+	if err != nil {
+		return nil, err
+	}
+
+	const prefix = ".1.3.6.1.2.1.31.1.1.1.1."
+	names := make(map[int]string, len(pdus))
+	for _, pdu := range pdus {
+		idxStr, ok := snmputil.TrimOIDPrefix(pdu.Name, prefix)
+		if !ok {
+			continue
+		}
+		idx, err := strconv.Atoi(idxStr)
+		if err != nil {
+			continue
+		}
+		names[idx] = snmputil.PDUString(pdu)
+	}
+	return names, nil
+}
+
+func walkCacheTable(ctx context.Context, client *gsnmp.GoSNMP) (map[cacheKey]*cacheEntry, error) {
+	pdus, err := snmputil.BulkWalk(ctx, client, oidCDPCacheTable)
+	if err != nil {
+		return nil, err
+	}
+
+	const prefix = ".1.3.6.1.4.1.9.9.23.1.2.1.1."
+	entries := make(map[cacheKey]*cacheEntry)
+	for _, pdu := range pdus {
+		suffix, ok := snmputil.TrimOIDPrefix(pdu.Name, prefix)
+		if !ok {
+			continue
+		}
+		// suffix: col.ifIndex.neighIndex
+		col, rest, ok := snmputil.SplitOIDComponent(suffix)
+		if !ok {
+			continue
+		}
+		ifIdx, neighStr, ok := snmputil.SplitOIDComponent(rest)
+		if !ok {
+			continue
+		}
+		neighIdx, err := strconv.Atoi(neighStr)
+		if err != nil {
+			continue
+		}
+
+		k := cacheKey{ifIdx, neighIdx}
+		e := entries[k]
+		if e == nil {
+			e = &cacheEntry{}
+			entries[k] = e
+		}
+		switch col {
+		case colAddressType:
+			e.addrType = snmputil.PDUInt(pdu)
+		case colAddress:
+			e.addr = snmputil.PDUBytes(pdu)
+		case colDeviceID:
+			e.deviceID = snmputil.NormaliseName(snmputil.PDUString(pdu))
+		case colDevicePort:
+			e.devPort = snmputil.PDUString(pdu)
+		}
+	}
+	return entries, nil
+}
+
+func buildEdges(localDevice string, ifNames map[int]string, entries map[cacheKey]*cacheEntry, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
+	var edges []discovery.Edge
+	var oos []discovery.OutOfScopeNeighbour
+	now := time.Now()
+
+	for k, e := range entries {
+		if e.deviceID == "" || e.devPort == "" {
+			continue
+		}
+
+		localPort := ifNames[k.ifIndex]
+		if localPort == "" {
+			localPort = strconv.Itoa(k.ifIndex)
+		}
+
+		// LD-11: cdpCacheAddress with addrType 1 (IPv4) gives the neighbor IP.
+		if remIP := cdpNeighborIP(e); remIP != nil {
+			if len(allowedNets) > 0 && !snmputil.IPInNets(remIP, allowedNets) {
+				oos = append(oos, discovery.OutOfScopeNeighbour{
+					ReportingDevice: localDevice,
+					ReportingPort:   localPort,
+					NeighbourHint:   e.deviceID,
+					FirstSeen:       now,
+					LastSeen:        now,
+				})
+				continue
+			}
+		}
+
+		edges = append(edges, discovery.Edge{
+			SrcDevice:      localDevice,
+			SrcPort:        localPort,
+			DstDevice:      e.deviceID,
+			DstPort:        e.devPort,
+			DiscoveryProto: "cdp",
+			Direction:      discovery.DirectionUnidirectional,
+			Confidence:     discovery.ConfidenceHigh,
+			Adjacency:      discovery.AdjacencyDirect,
+			PrecedenceRank: precedenceRank,
+			LinkKind:       "ethernet",
+			ObservedAt:     now,
+		})
+	}
+
+	return edges, oos, nil
+}
+
+// cdpNeighborIP extracts the IPv4 address from cdpCacheAddress when
+// cdpCacheAddressType is 1 (ip). Returns nil for all other address types.
+func cdpNeighborIP(e *cacheEntry) net.IP {
+	if e.addrType != 1 || len(e.addr) != 4 {
+		return nil
+	}
+	return append(net.IP{}, e.addr...)
+}
+
