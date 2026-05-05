@@ -20,7 +20,7 @@ func TestBuildEdgesDirectAdjacency(t *testing.T) {
 	bridgePorts := map[int]int{1: 2}
 	ifNames := map[int]string{2: "GigabitEthernet0/1"}
 
-	edges := buildEdges("sw-01", entries, bridgePorts, ifNames)
+	edges := buildEdges("sw-01", entries, bridgePorts, ifNames, nil)
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d", len(edges))
 	}
@@ -57,7 +57,7 @@ func TestBuildEdgesIndirectAdjacency(t *testing.T) {
 	bridgePorts := map[int]int{1: 3}
 	ifNames := map[int]string{3: "Ethernet1/1"}
 
-	edges := buildEdges("sw-01", entries, bridgePorts, ifNames)
+	edges := buildEdges("sw-01", entries, bridgePorts, ifNames, nil)
 	if len(edges) != 2 {
 		t.Fatalf("expected 2 edges, got %d", len(edges))
 	}
@@ -81,7 +81,7 @@ func TestBuildEdgesFiltersNonLearned(t *testing.T) {
 	bridgePorts := map[int]int{1: 2}
 	ifNames := map[int]string{2: "Gi0/1"}
 
-	edges := buildEdges("sw", entries, bridgePorts, ifNames)
+	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge (only learned), got %d", len(edges))
 	}
@@ -99,7 +99,7 @@ func TestBuildEdgesSkipsInvalidMAC(t *testing.T) {
 	bridgePorts := map[int]int{1: 2}
 	ifNames := map[int]string{2: "Gi0/1"}
 
-	edges := buildEdges("sw", entries, bridgePorts, ifNames)
+	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge (invalid MAC skipped), got %d", len(edges))
 	}
@@ -113,7 +113,7 @@ func TestBuildEdgesMissingBridgePort(t *testing.T) {
 	bridgePorts := map[int]int{} // port 99 not present
 	ifNames := map[int]string{}
 
-	edges := buildEdges("sw", entries, bridgePorts, ifNames)
+	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
 	if len(edges) != 0 {
 		t.Fatalf("expected 0 edges when bridge port unmapped, got %d", len(edges))
 	}
@@ -127,12 +127,72 @@ func TestBuildEdgesFallbackPortName(t *testing.T) {
 	bridgePorts := map[int]int{1: 7}
 	ifNames := map[int]string{} // ifIndex 7 has no name
 
-	edges := buildEdges("sw", entries, bridgePorts, ifNames)
+	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d", len(edges))
 	}
 	if edges[0].SrcPort != "7" {
 		t.Errorf("SrcPort = %q, want \"7\" (fallback to ifIndex)", edges[0].SrcPort)
+	}
+}
+
+// buildEdges: port in STP forwarding state produces an edge.
+func TestBuildEdgesStpForwardingAllowed(t *testing.T) {
+	entries := map[string]*fdbEntry{
+		"0.1.2.3.4.5": {mac: []byte{0, 1, 2, 3, 4, 5}, port: 2, status: fdbStatusLearned},
+	}
+	bridgePorts := map[int]int{2: 4}
+	ifNames := map[int]string{4: "Ethernet0/2"}
+	stpStates := map[int]int{2: stpStateForwarding}
+
+	edges := buildEdges("sw", entries, bridgePorts, ifNames, stpStates)
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge for forwarding STP port, got %d", len(edges))
+	}
+}
+
+// buildEdges: port in STP blocking state produces no edges.
+func TestBuildEdgesStpBlockingFiltered(t *testing.T) {
+	entries := map[string]*fdbEntry{
+		"0.1.2.3.4.5": {mac: []byte{0, 1, 2, 3, 4, 5}, port: 3, status: fdbStatusLearned},
+	}
+	bridgePorts := map[int]int{3: 5}
+	ifNames := map[int]string{5: "Ethernet0/3"}
+	stpStates := map[int]int{3: 2} // blocking(2)
+
+	edges := buildEdges("sw", entries, bridgePorts, ifNames, stpStates)
+	if len(edges) != 0 {
+		t.Fatalf("expected 0 edges for blocking STP port, got %d", len(edges))
+	}
+}
+
+// buildEdges: port absent from stpStates produces an edge (treat as forwarding).
+func TestBuildEdgesStpAbsentAllowed(t *testing.T) {
+	entries := map[string]*fdbEntry{
+		"0.1.2.3.4.5": {mac: []byte{0, 1, 2, 3, 4, 5}, port: 4, status: fdbStatusLearned},
+	}
+	bridgePorts := map[int]int{4: 6}
+	ifNames := map[int]string{6: "Ethernet0/4"}
+	stpStates := map[int]int{} // port 4 not present
+
+	edges := buildEdges("sw", entries, bridgePorts, ifNames, stpStates)
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge when port absent from STP table, got %d", len(edges))
+	}
+}
+
+// buildEdges: port in STP learning state (not yet forwarding) is filtered.
+func TestBuildEdgesStpLearningFiltered(t *testing.T) {
+	entries := map[string]*fdbEntry{
+		"0.1.2.3.4.5": {mac: []byte{0, 1, 2, 3, 4, 5}, port: 5, status: fdbStatusLearned},
+	}
+	bridgePorts := map[int]int{5: 7}
+	ifNames := map[int]string{7: "Ethernet0/5"}
+	stpStates := map[int]int{5: 4} // learning(4)
+
+	edges := buildEdges("sw", entries, bridgePorts, ifNames, stpStates)
+	if len(edges) != 0 {
+		t.Fatalf("expected 0 edges for learning STP port, got %d", len(edges))
 	}
 }
 
@@ -186,6 +246,10 @@ func TestWalkEndToEnd(t *testing.T) {
 //
 //	port 1 → ifIndex 2
 //
+// dot1dStpPortTable (1.3.6.1.2.1.17.2.15.1.3.{portNum}):
+//
+//	port 1 → forwarding(5)
+//
 // ifXTable.ifName (1.3.6.1.2.1.31.1.1.1.1.{ifIndex}):
 //
 //	ifIndex 2 → "GigabitEthernet0/1"
@@ -193,6 +257,7 @@ func buildFdbAgentPDUs() []gsnmp.SnmpPDU {
 	macSuffix := "0.10.187.204.221.238"
 	fdbBase := ".1.3.6.1.2.1.17.4.3.1."
 	basePortBase := ".1.3.6.1.2.1.17.1.4.1."
+	stpPortBase := ".1.3.6.1.2.1.17.2.15.1."
 	ifNameBase := ".1.3.6.1.2.1.31.1.1.1.1."
 
 	return []gsnmp.SnmpPDU{
@@ -203,6 +268,9 @@ func buildFdbAgentPDUs() []gsnmp.SnmpPDU {
 
 		// dot1dBasePortTable: bridge port 1 → ifIndex 2
 		{Name: basePortBase + "2.1", Type: gsnmp.Integer, Value: 2},
+
+		// dot1dStpPortTable: bridge port 1 → forwarding(5)
+		{Name: stpPortBase + "3.1", Type: gsnmp.Integer, Value: stpStateForwarding},
 
 		// ifXTable.ifName: ifIndex 2 → "GigabitEthernet0/1"
 		{Name: ifNameBase + "2", Type: gsnmp.OctetString, Value: []byte("GigabitEthernet0/1")},
