@@ -341,28 +341,17 @@ func runCycle(
 			var allEdges []discovery.Edge
 			var allOOS []discovery.OutOfScopeNeighbour
 
-			if cfg.Modules.LLDP.Enabled {
-				edges, oos, err := lldp.Walk(devCtx, params, dev.ID, allowedNets)
-				if err != nil {
-					logger.Debug("lldp walk failed", "target", target.Host, "error", err)
-					m.SNMPWalksTotal.WithLabelValues("error").Inc()
-				} else {
-					m.SNMPWalksTotal.WithLabelValues("ok").Inc()
-					allEdges = append(allEdges, edges...)
-					allOOS = append(allOOS, oos...)
-				}
+			mods := []module{
+				{"lldp", cfg.Modules.LLDP.Enabled, lldp.Walk},
+				{"cdp", cfg.Modules.CDP.Enabled, cdp.Walk},
 			}
-
-			if cfg.Modules.CDP.Enabled {
-				edges, oos, err := cdp.Walk(devCtx, params, dev.ID, allowedNets)
-				if err != nil {
-					logger.Debug("cdp walk failed", "target", target.Host, "error", err)
-					m.SNMPWalksTotal.WithLabelValues("error").Inc()
-				} else {
-					m.SNMPWalksTotal.WithLabelValues("ok").Inc()
-					allEdges = append(allEdges, edges...)
-					allOOS = append(allOOS, oos...)
+			for _, mod := range mods {
+				if !mod.enabled {
+					continue
 				}
+				edges, oos := runModuleWalk(devCtx, logger, m, mod.proto, target.Host, mod.walk, params, dev.ID, allowedNets)
+				allEdges = append(allEdges, edges...)
+				allOOS = append(allOOS, oos...)
 			}
 
 			mu.Lock()
@@ -552,6 +541,25 @@ func edgeKeysToSnapshotAges(in map[graph.EdgeKey]int) map[string]int {
 		out[graph.EdgeKeyString(k)] = v
 	}
 	return out
+}
+
+type moduleWalkFn func(context.Context, snmpwalk.Params, string, []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error)
+
+type module struct {
+	proto   string
+	enabled bool
+	walk    moduleWalkFn
+}
+
+func runModuleWalk(ctx context.Context, logger *slog.Logger, m *metrics.Metrics, proto, target string, fn moduleWalkFn, params snmpwalk.Params, devID string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour) {
+	edges, oos, err := fn(ctx, params, devID, allowedNets)
+	if err != nil {
+		logger.Debug(proto+" walk failed", "target", target, "error", err)
+		m.SNMPWalksTotal.WithLabelValues("error").Inc()
+		return nil, nil
+	}
+	m.SNMPWalksTotal.WithLabelValues("ok").Inc()
+	return edges, oos
 }
 
 func newLogger(level string) *slog.Logger {
