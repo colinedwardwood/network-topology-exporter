@@ -45,6 +45,21 @@ type cycleStatus struct {
 	DeviceErrors int64
 }
 
+func newHealthzHandler(status *atomic.Pointer[cycleStatus]) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		s := status.Load()
+		if s == nil {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok","last_cycle_at":null,"device_errors":null}` + "\n"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"status":"ok","last_cycle_at":%q,"device_errors":%d}`+"\n",
+			s.LastCycleAt.UTC().Format(time.RFC3339), s.DeviceErrors)
+	}
+}
+
 func main() {
 	var (
 		configPath = flag.String("config.file", "/etc/topology-exporter/config.yaml", "Path to the YAML configuration file.")
@@ -85,18 +100,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(m.Registry(), promhttp.HandlerOpts{Registry: m.Registry()}))
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		s := status.Load()
-		if s == nil {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"status":"ok","last_cycle_at":null,"device_errors":null}` + "\n"))
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"status":"ok","last_cycle_at":%q,"device_errors":%d}`+"\n",
-			s.LastCycleAt.UTC().Format(time.RFC3339), s.DeviceErrors)
-	})
+	mux.HandleFunc("/healthz", newHealthzHandler(&status))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -198,7 +202,6 @@ func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Conf
 	// Parse CIDR allow-list once; the config is immutable at runtime.
 	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
 
-	// Run one cycle immediately, then on the configured interval.
 	cycle := func() {
 		start := time.Now()
 		newGraph, newAges, conflicts := runCycle(ctx, logger, cfg, m, resolver, allowedNets, ages)
@@ -348,7 +351,11 @@ func runCycle(
 					resolver.RecordFailure(ip.String())
 				}
 				m.CredentialTrialsTotal.WithLabelValues("failed").Inc()
-				m.SNMPWalksTotal.WithLabelValues("error").Inc()
+				if errors.Is(err, context.DeadlineExceeded) {
+					m.SNMPWalksTotal.WithLabelValues("timeout").Inc()
+				} else {
+					m.SNMPWalksTotal.WithLabelValues("error").Inc()
+				}
 				mu.Lock()
 				failCount++
 				mu.Unlock()
@@ -381,7 +388,19 @@ func runCycle(
 				if !mod.enabled {
 					continue
 				}
-				edges, oos := runModuleWalk(devCtx, logger, m, mod.proto, target.Host, mod.walk, params, dev.ID, allowedNets)
+				modStart := time.Now()
+				edges, oos, err := mod.walk(devCtx, params, dev.ID, allowedNets)
+				m.DiscoveryModuleDuration.WithLabelValues(mod.proto).Observe(time.Since(modStart).Seconds())
+				if err != nil {
+					logger.Debug(mod.proto+" walk failed", "target", target.Host, "error", err)
+					if errors.Is(err, context.DeadlineExceeded) {
+						m.SNMPWalksTotal.WithLabelValues("timeout").Inc()
+					} else {
+						m.SNMPWalksTotal.WithLabelValues("error").Inc()
+					}
+					continue
+				}
+				m.SNMPWalksTotal.WithLabelValues("ok").Inc()
 				allEdges = append(allEdges, edges...)
 				allOOS = append(allOOS, oos...)
 			}
@@ -546,17 +565,6 @@ type module struct {
 	proto   string
 	enabled bool
 	walk    moduleWalkFn
-}
-
-func runModuleWalk(ctx context.Context, logger *slog.Logger, m *metrics.Metrics, proto, target string, fn moduleWalkFn, params snmpwalk.Params, devID string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour) {
-	edges, oos, err := fn(ctx, params, devID, allowedNets)
-	if err != nil {
-		logger.Debug(proto+" walk failed", "target", target, "error", err)
-		m.SNMPWalksTotal.WithLabelValues("error").Inc()
-		return nil, nil
-	}
-	m.SNMPWalksTotal.WithLabelValues("ok").Inc()
-	return edges, oos
 }
 
 func newLogger(level string) *slog.Logger {
