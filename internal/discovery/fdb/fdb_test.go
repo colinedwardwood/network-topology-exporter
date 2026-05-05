@@ -333,6 +333,90 @@ func TestWalkEndToEndQBridge(t *testing.T) {
 	}
 }
 
+// TestDiscoverVlanIDs verifies that discoverVlanIDs parses dot1qVlanCurrentTable
+// OID suffixes and returns a sorted, deduplicated slice of valid VLAN IDs.
+func TestDiscoverVlanIDs(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		// .1.3.6.1.2.1.17.7.1.4.2.3.0.1 (col=3, timeMark=0, vlanId=1)
+		{Name: ".1.3.6.1.2.1.17.7.1.4.2.3.0.1", Type: gsnmp.Integer, Value: 1},
+		// .1.3.6.1.2.1.17.7.1.4.2.3.0.10 (col=3, timeMark=0, vlanId=10)
+		{Name: ".1.3.6.1.2.1.17.7.1.4.2.3.0.10", Type: gsnmp.Integer, Value: 10},
+		// .1.3.6.1.2.1.17.7.1.4.2.3.0.100 (col=3, timeMark=0, vlanId=100)
+		{Name: ".1.3.6.1.2.1.17.7.1.4.2.3.0.100", Type: gsnmp.Integer, Value: 100},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{
+		IP:        ip,
+		Port:      port,
+		Community: "public",
+		Timeout:   3 * time.Second,
+	}
+
+	ids := discoverVlanIDs(context.Background(), p)
+	want := []int{1, 10, 100}
+	if len(ids) != len(want) {
+		t.Fatalf("discoverVlanIDs returned %v, want %v", ids, want)
+	}
+	for i, v := range want {
+		if ids[i] != v {
+			t.Errorf("ids[%d] = %d, want %d", i, ids[i], v)
+		}
+	}
+}
+
+// TestWalkVlanCommunityFdbDiscovery verifies that walkVlanCommunityFdbs discovers
+// VLANs via dot1qVlanCurrentTable and then walks dot1dTpFdbTable for each VLAN
+// using community-string indexing (community@vlanId).
+func TestWalkVlanCommunityFdbDiscovery(t *testing.T) {
+	vlanTablePDUs := []gsnmp.SnmpPDU{
+		// dot1qVlanCurrentTable: VLAN 10 active
+		{Name: ".1.3.6.1.2.1.17.7.1.4.2.3.0.10", Type: gsnmp.Integer, Value: 10},
+		// dot1dBasePortTable: bridge port 1 → ifIndex 2
+		{Name: ".1.3.6.1.2.1.17.1.4.1.2.1", Type: gsnmp.Integer, Value: 2},
+		// ifXTable.ifName: ifIndex 2 → "GigabitEthernet0/2"
+		{Name: ".1.3.6.1.2.1.31.1.1.1.1.2", Type: gsnmp.OctetString, Value: []byte("GigabitEthernet0/2")},
+	}
+
+	// B-MIB FDB PDUs for MAC 00:aa:bb:cc:dd:ee on bridge port 1 (learned)
+	vlan10PDUs := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.17.4.3.1.1.0.170.187.204.221.238", Type: gsnmp.OctetString, Value: []byte{0, 170, 187, 204, 221, 238}},
+		{Name: ".1.3.6.1.2.1.17.4.3.1.2.0.170.187.204.221.238", Type: gsnmp.Integer, Value: 1},
+		{Name: ".1.3.6.1.2.1.17.4.3.1.3.0.170.187.204.221.238", Type: gsnmp.Integer, Value: fdbStatusLearned},
+	}
+
+	communities := map[string][]gsnmp.SnmpPDU{
+		"public":    vlanTablePDUs,
+		"public@10": vlan10PDUs,
+	}
+	addr := snmptest.StartMultiCommunity(t, communities)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{
+		IP:        ip,
+		Port:      port,
+		Community: "public",
+		Timeout:   3 * time.Second,
+	}
+
+	edges, _, err := Walk(context.Background(), p, "sw-01", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+
+	found := false
+	for _, e := range edges {
+		if e.DstDevice == "00:aa:bb:cc:dd:ee" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected edge with DstDevice 00:aa:bb:cc:dd:ee, got %v", edges)
+	}
+}
+
 // buildQBridgeAgentPDUs builds PDUs with one B-MIB entry and one Q-BRIDGE entry.
 //
 // dot1dTpFdbTable: MAC 00:0a:bb:cc:dd:ee on bridge port 1 (learned)

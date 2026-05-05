@@ -69,6 +69,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -85,6 +86,7 @@ const (
 	oidStpPortTable    = "1.3.6.1.2.1.17.2.15"
 	oidIfName          = "1.3.6.1.2.1.31.1.1.1.1"
 	oidQBridgeFdbTable = "1.3.6.1.2.1.17.7.1.2.2"
+	oidVlanCurrentTable = "1.3.6.1.2.1.17.7.1.4.2"
 	precedenceRank     = 4
 	fdbStatusLearned   = 3
 	stpStateForwarding = 5
@@ -132,6 +134,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, _ []*net.I
 	// Q-BRIDGE walk failures are non-fatal: devices that implement only B-MIB
 	// return an empty result or a no-such-object error, both of which are fine.
 	_ = walkQBridgeFdbTable(ctx, client, entries)
+	walkVlanCommunityFdbs(ctx, p, entries)
 	bridgePorts, err := walkBasePortTable(ctx, client)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fdb baseport %s: %w", p.IP, err)
@@ -148,12 +151,16 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, _ []*net.I
 }
 
 func walkFdbTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*fdbEntry, error) {
+	entries := make(map[string]*fdbEntry)
+	return entries, walkFdbTableInto(ctx, client, entries)
+}
+
+func walkFdbTableInto(ctx context.Context, client *gsnmp.GoSNMP, entries map[string]*fdbEntry) error {
 	pdus, err := snmputil.BulkWalk(ctx, client, oidFdbTable)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	const prefix = ".1.3.6.1.2.1.17.4.3.1."
-	entries := make(map[string]*fdbEntry)
 	for _, pdu := range pdus {
 		suffix, ok := snmputil.TrimOIDPrefix(pdu.Name, prefix)
 		if !ok {
@@ -177,7 +184,7 @@ func walkFdbTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*fdbEnt
 			e.status = snmputil.PDUInt(pdu)
 		}
 	}
-	return entries, nil
+	return nil
 }
 
 // parseQBridgeIndex parses a Q-BRIDGE OID instance suffix of the form
@@ -239,6 +246,82 @@ func walkQBridgeFdbTable(ctx context.Context, client *gsnmp.GoSNMP, entries map[
 		}
 	}
 	return nil
+}
+
+// discoverVlanIDs walks dot1qVlanCurrentTable and returns a deduplicated,
+// sorted list of active VLAN IDs. Returns nil on any error so the caller can
+// treat nil as "no VLANs found" without propagating a non-fatal failure.
+func discoverVlanIDs(ctx context.Context, p snmputil.Params) []int {
+	client, err := snmputil.Open(p)
+	if err != nil {
+		return nil
+	}
+	defer client.Conn.Close()
+
+	pdus, err := snmputil.BulkWalk(ctx, client, oidVlanCurrentTable)
+	if err != nil {
+		return nil
+	}
+	const prefix = ".1.3.6.1.2.1.17.7.1.4.2."
+	seen := make(map[int]struct{})
+	for _, pdu := range pdus {
+		suffix, ok := snmputil.TrimOIDPrefix(pdu.Name, prefix)
+		if !ok {
+			continue
+		}
+		// OID instance suffix: {col}.{timeMark}.{vlanId}
+		_, rest, ok := snmputil.SplitOIDComponent(suffix) // skip col
+		if !ok || rest == "" {
+			continue
+		}
+		_, vlanStr, ok := snmputil.SplitOIDComponent(rest) // skip timeMark
+		if !ok || vlanStr == "" {
+			continue
+		}
+		vlanID, err := strconv.Atoi(vlanStr)
+		if err != nil || vlanID < 1 || vlanID > 4094 {
+			continue
+		}
+		seen[vlanID] = struct{}{}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	ids := make([]int, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	return ids
+}
+
+// walkVlanCommunityFdbs uses VLAN community-string indexing (community@vlanId)
+// to walk dot1dTpFdbTable for each active VLAN on classic Cisco IOS devices.
+// These devices maintain one BRIDGE-MIB instance per VLAN and expose it only
+// through community-string indexing; Q-BRIDGE is not available on IOS 12.x/15.x.
+// Entries already present in the map (from B-MIB or Q-BRIDGE) are not overwritten.
+func walkVlanCommunityFdbs(ctx context.Context, p snmputil.Params, entries map[string]*fdbEntry) {
+	// Community-string indexing is a v2c-only mechanism.
+	if p.V3 || p.Community == "" {
+		return
+	}
+	vlanIDs := discoverVlanIDs(ctx, p)
+	for _, vlanID := range vlanIDs {
+		vp := p
+		vp.Community = fmt.Sprintf("%s@%d", p.Community, vlanID)
+		client, err := snmputil.Open(vp)
+		if err != nil {
+			continue
+		}
+		vlanEntries := make(map[string]*fdbEntry)
+		_ = walkFdbTableInto(ctx, client, vlanEntries)
+		client.Conn.Close()
+		for key, e := range vlanEntries {
+			if _, exists := entries[key]; !exists {
+				entries[key] = e
+			}
+		}
+	}
 }
 
 func walkBasePortTable(ctx context.Context, client *gsnmp.GoSNMP) (map[int]int, error) {

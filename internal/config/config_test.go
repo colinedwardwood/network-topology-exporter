@@ -253,3 +253,261 @@ func TestUnconfirmedLinkTTLDefault(t *testing.T) {
 		t.Errorf("UnconfirmedLinkTTLCycles default = %d, want 3", c.Discovery.UnconfirmedLinkTTLCycles)
 	}
 }
+
+func TestCredentialsRejectV2cMissingCommunityEnv(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+credentials:
+  profiles:
+    - name: p1
+      type: snmp_v2c
+  fallback_order: [p1]
+  trial_rate_per_second: 1
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for snmp_v2c profile without community_env")
+	}
+}
+
+func TestCredentialsDuplicateProfileName(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+credentials:
+  profiles:
+    - name: p1
+      type: snmp_v2c
+      community_env: C
+    - name: p1
+      type: snmp_v2c
+      community_env: C
+  fallback_order: [p1]
+  trial_rate_per_second: 1
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for duplicate profile name")
+	}
+}
+
+func TestCredentialsRejectUnknownProfileType(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+credentials:
+  profiles:
+    - name: p1
+      type: telnet
+  fallback_order: []
+  trial_rate_per_second: 1
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unknown profile type")
+	}
+}
+
+func TestCredentialsRejectAssignmentNeitherIPNorCIDR(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+credentials:
+  profiles:
+    - name: p1
+      type: snmp_v2c
+      community_env: C
+  assignments:
+    - profiles: [p1]
+  fallback_order: [p1]
+  trial_rate_per_second: 1
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for assignment with neither ip nor cidr")
+	}
+}
+
+func TestCredentialsRejectAssignmentInvalidIP(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+credentials:
+  profiles:
+    - name: p1
+      type: snmp_v2c
+      community_env: C
+  assignments:
+    - ip: "999.0.0.1"
+      profiles: [p1]
+  fallback_order: [p1]
+  trial_rate_per_second: 1
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for assignment with invalid ip")
+	}
+}
+
+func TestCredentialsRejectAssignmentInvalidCIDR(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+credentials:
+  profiles:
+    - name: p1
+      type: snmp_v2c
+      community_env: C
+  assignments:
+    - cidr: "not-a-cidr"
+      profiles: [p1]
+  fallback_order: [p1]
+  trial_rate_per_second: 1
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for assignment with invalid cidr")
+	}
+}
+
+// applyDefaults only replaces 0 with 5, so a negative value bypasses defaulting
+// and reaches the validation check directly.
+func TestCredentialsRejectLowTrialRate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+credentials:
+  profiles:
+    - name: p1
+      type: snmp_v2c
+      community_env: C
+  fallback_order: [p1]
+  trial_rate_per_second: -1
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for trial_rate_per_second < 1")
+	}
+}
+
+// applyDefaults only replaces 0 with 32, so a negative value reaches validate().
+func TestValidateParallelismZero(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+discovery:
+  parallelism: -1
+targets: []
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for discovery.parallelism < 1")
+	}
+}
+
+// applyDefaults only replaces 0 with 3, so a negative value reaches validate().
+func TestValidateUnconfirmedLinkTTLZero(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+discovery:
+  unconfirmed_link_ttl_cycles: -1
+targets: []
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for discovery.unconfirmed_link_ttl_cycles < 1")
+	}
+}
+
+func TestScopeRejectsInvalidCIDR(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+discovery:
+  scope:
+    cidr_allow_list:
+      - "bad-cidr"
+targets:
+  - host: 10.0.0.1
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for invalid cidr_allow_list entry")
+	}
+}
+
+func TestCredentialsRejectEmptyProfileName(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+credentials:
+  profiles:
+    - name: ""
+      type: snmp_v2c
+      community_env: C
+  fallback_order: []
+  trial_rate_per_second: 1
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for profile with empty name")
+	}
+}
+
+// TestCredentialsRejectUnknownProfileReference covers assignments; this covers
+// fallback_order specifically.
+func TestCredentialsFallbackRejectsUnknownName(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+credentials:
+  profiles:
+    - name: p1
+      type: snmp_v2c
+      community_env: C
+  fallback_order: [p2]
+  trial_rate_per_second: 1
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for fallback_order referencing undefined profile")
+	}
+}
