@@ -201,7 +201,7 @@ func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Conf
 	// Run one cycle immediately, then on the configured interval.
 	cycle := func() {
 		start := time.Now()
-		newGraph, newAges := runCycle(ctx, logger, cfg, m, resolver, allowedNets, ages)
+		newGraph, newAges, conflicts := runCycle(ctx, logger, cfg, m, resolver, allowedNets, ages)
 		if ctx.Err() != nil {
 			return
 		}
@@ -220,6 +220,12 @@ func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Conf
 					proto = c.Before.DiscoveryProto
 				}
 				m.TopologyChangeTotal.WithLabelValues(string(c.Kind), proto).Inc()
+			}
+		}
+		if len(conflicts) > 0 {
+			evLogger.EmitConflicts(ctx, conflicts)
+			for _, c := range conflicts {
+				m.TopologyConflictTotal.WithLabelValues(string(c.Kind)).Inc()
 			}
 		}
 		prevGraph = newGraph
@@ -267,7 +273,7 @@ func runCycle(
 	resolver *credentials.Resolver,
 	allowedNets []*net.IPNet,
 	prevAges map[graph.EdgeKey]int,
-) (discovery.Graph, map[graph.EdgeKey]int) {
+) (discovery.Graph, map[graph.EdgeKey]int, []graph.Conflict) {
 	type probeResult struct {
 		device     *discovery.Device
 		edges      []discovery.Edge
@@ -402,7 +408,7 @@ func runCycle(
 		allOOS = append(allOOS, r.outOfScope...)
 	}
 
-	reconciledEdges, _ := graph.Reconcile(rawEdges)
+	reconciledEdges, conflicts := graph.Reconcile(rawEdges)
 
 	// LD-14: advance unconfirmed-link age counters and drop expired edges.
 	ages := maps.Clone(prevAges)
@@ -425,7 +431,7 @@ func runCycle(
 		Devices:    devices,
 		Edges:      reconciledEdges,
 		OutOfScope: allOOS,
-	}, ages
+	}, ages, conflicts
 }
 
 // resolveParams builds an snmpwalk.Params for the given target IP.

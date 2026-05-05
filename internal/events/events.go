@@ -28,6 +28,21 @@ func New(l *slog.Logger) *Logger {
 	return &Logger{log: l}
 }
 
+// EmitConflicts writes one structured log line per Conflict at Warn level.
+// Conflicts indicate source disagreements and warrant operator attention, but
+// the exporter can still proceed — hence Warn rather than Error.
+func (l *Logger) EmitConflicts(ctx context.Context, conflicts []graph.Conflict) {
+	for _, c := range conflicts {
+		l.log.Log(ctx, slog.LevelWarn, "topology conflict",
+			"conflict_type", c.Kind,
+			"src_device", c.SrcDevice,
+			"src_port", c.SrcPort,
+			"sources", c.Sources,
+			"edge_count", len(c.Edges),
+		)
+	}
+}
+
 // Emit writes one structured log line per EdgeChange. The log level is Info
 // for added/updated edges and Warn for removed edges so removal events stand
 // out in operator dashboards without requiring a separate alert channel.

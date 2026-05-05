@@ -22,6 +22,21 @@ network_device_info{device_id="dev-1",model="C9300",os_version="17.6.4",site="la
 	}
 }
 
+func TestTopologyConflictTotalIsRegistered(t *testing.T) {
+	m := New()
+
+	m.TopologyConflictTotal.WithLabelValues("port_name_mismatch").Inc()
+
+	const want = `
+# HELP network_topology_conflict_total Source disagreements detected during reconciliation, by conflict type.
+# TYPE network_topology_conflict_total counter
+network_topology_conflict_total{conflict_type="port_name_mismatch"} 1
+`
+	if err := testutil.GatherAndCompare(m.Registry(), strings.NewReader(want), "network_topology_conflict_total"); err != nil {
+		t.Fatalf("metric mismatch: %v", err)
+	}
+}
+
 func TestMetricNamespaceConsistency(t *testing.T) {
 	m := New()
 	mfs, err := m.Registry().Gather()
