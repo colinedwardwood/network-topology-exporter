@@ -27,7 +27,6 @@ const (
 	maxEdgesPerPush   = 50_000
 )
 
-
 type spokeEntry struct {
 	payload  SpokePayload
 	lastSeen time.Time
@@ -38,14 +37,14 @@ type spokeEntry struct {
 // Prometheus metrics with the unified topology. Per LD-16, spokes push;
 // the hub never polls spokes.
 type Hub struct {
-	cfg             config.FederationConfig
-	mu              sync.Mutex
-	publishMu       sync.Mutex // serialises Reset+repopulate to prevent interleaved scrape gaps
-	spokes          map[string]spokeEntry
-	m               *metrics.Metrics
-	logger          *slog.Logger
-	snapshotPath    string
-	firstLive       atomic.Bool // set to true on the first live publishMetrics call
+	cfg                  config.FederationConfig
+	mu                   sync.Mutex
+	publishMu            sync.Mutex // serialises Reset+repopulate to prevent interleaved scrape gaps
+	spokes               map[string]spokeEntry
+	m                    *metrics.Metrics
+	logger               *slog.Logger
+	snapshotPath         string
+	firstLive            atomic.Bool // set to true on the first live publishMetrics call
 	snapshotWriteFn      func(string, snapshot.File) error
 	snapshotWriteTimeout time.Duration
 }
