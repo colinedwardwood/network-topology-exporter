@@ -1,0 +1,494 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "topology-exporter Helm chart values",
+  "type": "object",
+  "properties": {
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of topology-exporter pod replicas."
+    },
+
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Container image repository."
+        },
+        "tag": {
+          "type": "string",
+          "description": "Image tag. Defaults to Chart.appVersion when empty."
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"],
+          "description": "Kubernetes image pull policy."
+        }
+      },
+      "required": ["repository", "pullPolicy"]
+    },
+
+    "imagePullSecrets": {
+      "type": "array",
+      "description": "List of image pull secret references.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+
+    "nameOverride": {
+      "type": "string",
+      "description": "Partial name override for chart resources."
+    },
+
+    "fullnameOverride": {
+      "type": "string",
+      "description": "Full name override for chart resources."
+    },
+
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": {
+          "type": "boolean",
+          "description": "Create a dedicated ServiceAccount."
+        },
+        "annotations": {
+          "type": "object",
+          "description": "Annotations to add to the ServiceAccount.",
+          "additionalProperties": { "type": "string" }
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the ServiceAccount to use. Auto-generated when empty and create is true."
+        }
+      }
+    },
+
+    "podAnnotations": {
+      "type": "object",
+      "description": "Annotations added to every pod.",
+      "additionalProperties": { "type": "string" }
+    },
+
+    "podSecurityContext": {
+      "type": "object",
+      "description": "Pod-level security context (PodSecurityContext).",
+      "properties": {
+        "runAsNonRoot": { "type": "boolean" },
+        "runAsUser": { "type": "integer", "minimum": 0 },
+        "runAsGroup": { "type": "integer", "minimum": 0 },
+        "fsGroup": { "type": "integer", "minimum": 0 },
+        "supplementalGroups": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0 }
+        },
+        "sysctls": {
+          "type": "array",
+          "items": { "type": "object" }
+        }
+      },
+      "additionalProperties": true
+    },
+
+    "securityContext": {
+      "type": "object",
+      "description": "Container-level security context (SecurityContext).",
+      "properties": {
+        "readOnlyRootFilesystem": { "type": "boolean" },
+        "allowPrivilegeEscalation": { "type": "boolean" },
+        "runAsNonRoot": { "type": "boolean" },
+        "runAsUser": { "type": "integer", "minimum": 0 },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "add": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "drop": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["ClusterIP", "NodePort", "LoadBalancer"],
+          "description": "Kubernetes Service type."
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Primary metrics/scrape port."
+        },
+        "hubPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Port for the spoke-push listener (hub mode only)."
+        },
+        "hubEnabled": {
+          "type": "boolean",
+          "description": "Expose the hub listener port on the Service."
+        }
+      },
+      "required": ["type", "port"]
+    },
+
+    "serviceMonitor": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Prometheus ServiceMonitor resource (requires prometheus-operator).",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Create a ServiceMonitor resource."
+        },
+        "namespace": {
+          "type": "string",
+          "description": "Namespace for the ServiceMonitor. Defaults to the release namespace."
+        },
+        "interval": {
+          "type": "string",
+          "description": "Scrape interval (e.g. 60s)."
+        },
+        "scrapeTimeout": {
+          "type": "string",
+          "description": "Scrape timeout (e.g. 30s). Must be shorter than interval."
+        },
+        "labels": {
+          "type": "object",
+          "description": "Extra labels for the ServiceMonitor.",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "required": ["enabled"]
+    },
+
+    "prometheusRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "PrometheusRule resource for bundled alert rules (requires prometheus-operator).",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Create a PrometheusRule resource."
+        },
+        "namespace": {
+          "type": "string",
+          "description": "Namespace for the PrometheusRule. Defaults to the release namespace."
+        },
+        "labels": {
+          "type": "object",
+          "description": "Extra labels for the PrometheusRule.",
+          "additionalProperties": { "type": "string" }
+        },
+        "cycleThresholdSeconds": {
+          "type": "number",
+          "minimum": 1,
+          "description": "Discovery-cycle p99 latency threshold (seconds) that triggers the slowness alert."
+        }
+      },
+      "required": ["enabled"]
+    },
+
+    "resources": {
+      "type": "object",
+      "description": "CPU/memory resource requests and limits.",
+      "additionalProperties": false,
+      "properties": {
+        "requests": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+
+    "livenessProbe": {
+      "type": "object",
+      "description": "Liveness probe configuration.",
+      "additionalProperties": true
+    },
+
+    "readinessProbe": {
+      "type": "object",
+      "description": "Readiness probe configuration.",
+      "additionalProperties": true
+    },
+
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "PersistentVolumeClaim for snapshot storage.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Create and mount a PVC at /var/lib/topology-exporter."
+        },
+        "storageClass": {
+          "type": "string",
+          "description": "StorageClass name. Empty string uses the cluster default."
+        },
+        "accessMode": {
+          "type": "string",
+          "enum": ["ReadWriteOnce", "ReadWriteMany", "ReadOnlyMany"],
+          "description": "PVC access mode."
+        },
+        "size": {
+          "type": "string",
+          "description": "PVC storage request size (e.g. 100Mi)."
+        },
+        "existingClaim": {
+          "type": "string",
+          "description": "Name of an existing PVC to use instead of creating one."
+        }
+      },
+      "required": ["enabled"]
+    },
+
+    "federation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Federation TLS secret reference.",
+      "properties": {
+        "tlsSecret": {
+          "type": "string",
+          "description": "Name of a Secret containing tls.crt, tls.key, and ca.crt. Required for spoke and hub roles."
+        }
+      }
+    },
+
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Full topology-exporter configuration document.",
+      "properties": {
+
+        "discovery": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "interval": {
+              "type": "string",
+              "description": "How often a full discovery cycle runs (e.g. 60s)."
+            },
+            "timeout_per_device": {
+              "type": "string",
+              "description": "Per-device query timeout (e.g. 10s)."
+            },
+            "parallelism": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Maximum number of concurrent device queries."
+            },
+            "unconfirmed_link_ttl_cycles": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Number of cycles before an unconfirmed link is pruned."
+            },
+            "scope": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "cidr_allow_list": {
+                  "type": "array",
+                  "description": "CIDR ranges to include in discovery. Empty means all.",
+                  "items": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+
+        "modules": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Discovery module toggles.",
+          "properties": {
+            "snmp": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "version": {
+                  "type": "string",
+                  "enum": ["v1", "v2c", "v3"],
+                  "description": "SNMP protocol version."
+                }
+              }
+            },
+            "lldp": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" }
+              }
+            },
+            "cdp": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" }
+              }
+            },
+            "bgp": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" }
+              }
+            },
+            "ospf": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" }
+              }
+            },
+            "fdb": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" }
+              }
+            }
+          }
+        },
+
+        "credentials": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "profiles": {
+              "type": "array",
+              "description": "Named credential profiles.",
+              "items": { "type": "object", "additionalProperties": true }
+            },
+            "assignments": {
+              "type": "array",
+              "description": "Mappings of targets to credential profiles.",
+              "items": { "type": "object", "additionalProperties": true }
+            },
+            "fallback_order": {
+              "type": "array",
+              "description": "Ordered list of profile names tried when no assignment matches.",
+              "items": { "type": "string" }
+            },
+            "trial_rate_per_second": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Rate limit for credential trial attempts (trials per second)."
+            }
+          }
+        },
+
+        "snapshot": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Filesystem path for the topology snapshot file. Must match the persistence mount point when persistence is enabled."
+            }
+          }
+        },
+
+        "federation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "role": {
+              "type": "string",
+              "enum": ["standalone", "uncoordinated", "spoke", "hub"],
+              "description": "Federation role for this instance."
+            },
+            "spoke_timeout": {
+              "type": "string",
+              "description": "How long the hub waits for a spoke push before declaring it stale (e.g. 3m)."
+            },
+            "known_inter_domain_links": {
+              "type": "array",
+              "description": "Statically configured inter-domain links.",
+              "items": { "type": "object", "additionalProperties": true }
+            }
+          }
+        },
+
+        "targets": {
+          "type": "array",
+          "description": "Static device targets to always include in discovery.",
+          "items": { "type": "object", "additionalProperties": true }
+        }
+      }
+    },
+
+    "extraEnv": {
+      "type": "array",
+      "description": "Extra environment variables injected into the container.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "value": { "type": "string" },
+          "valueFrom": { "type": "object", "additionalProperties": true }
+        }
+      }
+    },
+
+    "extraVolumes": {
+      "type": "array",
+      "description": "Additional volumes to add to the Pod spec.",
+      "items": { "type": "object", "additionalProperties": true }
+    },
+
+    "extraVolumeMounts": {
+      "type": "array",
+      "description": "Additional volume mounts to add to the topology-exporter container.",
+      "items": { "type": "object", "additionalProperties": true }
+    },
+
+    "nodeSelector": {
+      "type": "object",
+      "description": "Node selector labels for pod scheduling.",
+      "additionalProperties": { "type": "string" }
+    },
+
+    "tolerations": {
+      "type": "array",
+      "description": "Tolerations for pod scheduling.",
+      "items": { "type": "object", "additionalProperties": true }
+    },
+
+    "affinity": {
+      "type": "object",
+      "description": "Affinity rules for pod scheduling.",
+      "additionalProperties": true
+    }
+  }
+}
