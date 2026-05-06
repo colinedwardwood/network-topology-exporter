@@ -1,0 +1,26 @@
+name: nte-e2e
+
+# 3-node spine-leaf topology using Nokia SR Linux.
+# SR Linux ships with SNMPv2c (community "public", port 161) and LLDP
+# pre-configured — no post-boot provisioning required.
+#
+# Pin the image to a known-good release for CI reproducibility.
+# To upgrade: update the image tag below and in .github/workflows/ci.yml.
+
+topology:
+  nodes:
+    spine1:
+      kind: srl
+      image: ghcr.io/nokia/srlinux:24.7.2
+    leaf1:
+      kind: srl
+      image: ghcr.io/nokia/srlinux:24.7.2
+    leaf2:
+      kind: srl
+      image: ghcr.io/nokia/srlinux:24.7.2
+
+  links:
+    # spine1 e1-1 ↔ leaf1 e1-1
+    - endpoints: ["spine1:e1-1", "leaf1:e1-1"]
+    # spine1 e1-2 ↔ leaf2 e1-1
+    - endpoints: ["spine1:e1-2", "leaf2:e1-1"]
