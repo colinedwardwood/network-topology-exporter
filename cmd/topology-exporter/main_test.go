@@ -80,7 +80,7 @@ func TestRunCycleTwoDevices(t *testing.T) {
 
 	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
 
-	g, _, _ := runCycle(context.Background(), slog.Default(), cfg, metrics.New(), resolver, allowedNets, nil)
+	g, _, _, _ := runCycle(context.Background(), slog.Default(), cfg, metrics.New(), resolver, allowedNets, nil)
 
 	if len(g.Devices) != 2 {
 		t.Fatalf("expected 2 devices, got %d", len(g.Devices))
@@ -97,6 +97,63 @@ func TestRunCycleTwoDevices(t *testing.T) {
 	}
 	if ids[1] != "sw-02" {
 		t.Errorf("expected device ID sw-02, got %q", ids[1])
+	}
+}
+
+func TestRunCycleTriesFallbackCredentialProfiles(t *testing.T) {
+	t.Setenv("BAD_COMMUNITY", "wrong")
+	t.Setenv("GOOD_COMMUNITY", "public")
+
+	addr := snmptest.Start(t, "public", systemPDUs("sw-01"))
+	_, port := snmptest.ParseAddr(addr)
+
+	cfg := &config.Config{
+		Discovery: config.DiscoveryConfig{
+			Interval:                 60 * time.Second,
+			TimeoutPerDevice:         5 * time.Second,
+			Parallelism:              1,
+			UnconfirmedLinkTTLCycles: 3,
+			Scope: config.ScopeConfig{
+				CIDRAllowList: []string{"127.0.0.0/8"},
+			},
+		},
+		Modules: config.ModulesConfig{
+			SNMP: config.ModuleSNMP{Enabled: true, Version: "v2c"},
+		},
+		Credentials: config.CredentialsConfig{
+			TrialRatePerSecond: 100,
+			Profiles: []config.CredentialProfile{
+				{
+					Name:         "bad",
+					Type:         config.ProfileTypeSNMPv2c,
+					CommunityEnv: "BAD_COMMUNITY",
+				},
+				{
+					Name:         "good",
+					Type:         config.ProfileTypeSNMPv2c,
+					CommunityEnv: "GOOD_COMMUNITY",
+				},
+			},
+			FallbackOrder: []string{"bad", "good"},
+		},
+		Targets: []config.TargetConfig{
+			{Host: "127.0.0.1", Port: int(port)},
+		},
+	}
+
+	resolver, err := credentials.New(cfg.Credentials)
+	if err != nil {
+		t.Fatalf("credentials.New: %v", err)
+	}
+
+	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
+	g, _, _, _ := runCycle(context.Background(), slog.Default(), cfg, metrics.New(), resolver, allowedNets, nil)
+
+	if len(g.Devices) != 1 {
+		t.Fatalf("expected fallback credential to discover 1 device, got %d", len(g.Devices))
+	}
+	if profile, ok := resolver.CachedProfile("127.0.0.1"); !ok || profile != "good" {
+		t.Fatalf("cached profile = (%q, %v), want (good, true)", profile, ok)
 	}
 }
 
@@ -282,7 +339,7 @@ func TestRunCycleLLDPEdge(t *testing.T) {
 
 	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
 
-	g, _, _ := runCycle(context.Background(), slog.Default(), cfg, metrics.New(), resolver, allowedNets, nil)
+	g, _, _, _ := runCycle(context.Background(), slog.Default(), cfg, metrics.New(), resolver, allowedNets, nil)
 
 	if len(g.Devices) != 2 {
 		t.Fatalf("expected 2 devices, got %d", len(g.Devices))
@@ -307,5 +364,89 @@ func TestRunCycleLLDPEdge(t *testing.T) {
 
 	if target.Direction != discovery.DirectionBidirectional {
 		t.Errorf("edge direction = %q, want %q", target.Direction, discovery.DirectionBidirectional)
+	}
+}
+
+// LD-15: canonical pair ordering.
+func TestCanonicalPair(t *testing.T) {
+	tests := []struct {
+		a, b       string
+		wantA, wantB string
+	}{
+		{"sw-a", "sw-b", "sw-a", "sw-b"},
+		{"sw-b", "sw-a", "sw-a", "sw-b"},
+		{"z", "a", "a", "z"},
+		{"same", "same", "same", "same"},
+	}
+	for _, tc := range tests {
+		gotA, gotB := canonicalPair(tc.a, tc.b)
+		if gotA != tc.wantA || gotB != tc.wantB {
+			t.Errorf("canonicalPair(%q, %q) = (%q, %q), want (%q, %q)",
+				tc.a, tc.b, gotA, gotB, tc.wantA, tc.wantB)
+		}
+	}
+}
+
+// LD-15: emitBoundaryObservations resets and repopulates on each call.
+func TestEmitBoundaryObservations(t *testing.T) {
+	m := metrics.New()
+	oos := []discovery.OutOfScopeNeighbour{
+		{ReportingDevice: "sw-b", ReportingPort: "Gi0/1", NeighbourHint: "sw-a", Proto: "lldp"},
+		{ReportingDevice: "sw-c", ReportingPort: "Gi0/2", NeighbourHint: "sw-a", Proto: "cdp"},
+	}
+	emitBoundaryObservations(oos, m)
+
+	// Gather and count BoundaryObservationInfo series.
+	mfs, err := m.Registry().Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	var count int
+	for _, mf := range mfs {
+		if mf.GetName() == "network_topology_boundary_observation_info" {
+			count = len(mf.GetMetric())
+		}
+	}
+	if count != 2 {
+		t.Errorf("series count = %d, want 2", count)
+	}
+
+	// After a second call with one fewer entry, the count should drop.
+	emitBoundaryObservations(oos[:1], m)
+	mfs, _ = m.Registry().Gather()
+	for _, mf := range mfs {
+		if mf.GetName() == "network_topology_boundary_observation_info" {
+			count = len(mf.GetMetric())
+		}
+	}
+	if count != 1 {
+		t.Errorf("after reset, series count = %d, want 1", count)
+	}
+}
+
+// TestEmitBoundaryObservationsCanonicalOrder verifies peer_a is always
+// alphabetically smaller regardless of which device reported first.
+func TestEmitBoundaryObservationsCanonicalOrder(t *testing.T) {
+	m := metrics.New()
+	oos := []discovery.OutOfScopeNeighbour{
+		{ReportingDevice: "sw-z", ReportingPort: "Gi0/1", NeighbourHint: "sw-a", Proto: "lldp"},
+	}
+	emitBoundaryObservations(oos, m)
+
+	mfs, _ := m.Registry().Gather()
+	for _, mf := range mfs {
+		if mf.GetName() != "network_topology_boundary_observation_info" {
+			continue
+		}
+		for _, metric := range mf.GetMetric() {
+			for _, lp := range metric.GetLabel() {
+				if lp.GetName() == "peer_a" && lp.GetValue() != "sw-a" {
+					t.Errorf("peer_a = %q, want sw-a (alphabetically smaller)", lp.GetValue())
+				}
+				if lp.GetName() == "peer_b" && lp.GetValue() != "sw-z" {
+					t.Errorf("peer_b = %q, want sw-z", lp.GetValue())
+				}
+			}
+		}
 	}
 }
