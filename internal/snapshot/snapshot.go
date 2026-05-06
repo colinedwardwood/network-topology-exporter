@@ -29,13 +29,13 @@ const CurrentVersion = 1
 // of the persistence contract; treat schema changes the same as a database
 // migration.
 type File struct {
-	Version          int                            `json:"version"`
-	WrittenAt        time.Time                      `json:"written_at"`
-	Devices          []discovery.Device             `json:"devices"`
-	Edges            []discovery.Edge               `json:"edges"`
-	OutOfScope       []discovery.OutOfScopeNeighbour `json:"out_of_scope"`
-	CredentialCache  map[string]string              `json:"credential_cache"`  // IP string → profile name (LD-12)
-	UnconfirmedAges  map[string]int                 `json:"unconfirmed_ages"`  // edge-id → consecutive unconfirmed cycles (LD-14)
+	Version         int                             `json:"version"`
+	WrittenAt       time.Time                       `json:"written_at"`
+	Devices         []discovery.Device              `json:"devices"`
+	Edges           []discovery.Edge                `json:"edges"`
+	OutOfScope      []discovery.OutOfScopeNeighbour `json:"out_of_scope"`
+	CredentialCache map[string]string               `json:"credential_cache"` // IP string → profile name (LD-12)
+	UnconfirmedAges map[string]int                  `json:"unconfirmed_ages"` // edge-id → consecutive unconfirmed cycles (LD-14)
 }
 
 // ErrVersionMismatch is reported when the on-disk version is unrecognised.
@@ -57,12 +57,40 @@ func Load(path string) (*File, error) {
 	}
 	var f File
 	if err := json.Unmarshal(b, &f); err != nil {
+		_ = quarantine(path, b)
 		return nil, fmt.Errorf("parse snapshot %q: %w", path, err)
 	}
 	if f.Version != CurrentVersion {
+		_ = quarantine(path, b)
 		return nil, fmt.Errorf("%w: got %d, want %d", ErrVersionMismatch, f.Version, CurrentVersion)
 	}
 	return &f, nil
+}
+
+func quarantine(path string, contents []byte) error {
+	for i := 0; ; i++ {
+		dst := path + ".bad"
+		if i > 0 {
+			dst = fmt.Sprintf("%s.bad.%d", path, i)
+		}
+		f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := f.Write(contents); err != nil {
+			_ = f.Close()
+			_ = os.Remove(dst)
+			return err
+		}
+		if err := f.Close(); err != nil {
+			_ = os.Remove(dst)
+			return err
+		}
+		return os.Remove(path)
+	}
 }
 
 // Write persists f to path atomically. The temp file lives next to the
@@ -82,7 +110,7 @@ func Write(path string, f File) error {
 		return fmt.Errorf("marshal snapshot: %w", err)
 	}
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("ensure snapshot dir %q: %w", dir, err)
 	}
 	tmp, err := os.CreateTemp(dir, ".snapshot-*.json.tmp")
