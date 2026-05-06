@@ -50,6 +50,23 @@ type cycleStatus struct {
 	DeviceErrors int64
 }
 
+// newReadyzHandler returns an HTTP handler for /readyz. It returns 200 once
+// isReady() is true (first live cycle or first spoke push received) and 503
+// during startup so Kubernetes does not route traffic before the process has
+// meaningful topology data to serve.
+func newReadyzHandler(isReady func() bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if isReady() {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ready"}` + "\n"))
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":"starting"}` + "\n"))
+	}
+}
+
 func newHealthzHandler(status *atomic.Pointer[cycleStatus]) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -102,16 +119,18 @@ func main() {
 	m := metrics.New()
 
 	var status atomic.Pointer[cycleStatus]
+	var ready atomic.Bool // set to true after the first live cycle or spoke push
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(m.Registry(), promhttp.HandlerOpts{Registry: m.Registry()}))
 	mux.HandleFunc("/healthz", newHealthzHandler(&status))
+	mux.HandleFunc("/readyz", newReadyzHandler(ready.Load))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
-		_, _ = fmt.Fprintf(w, "topology-exporter %s\nendpoints: /metrics /healthz\n", version.Version)
+		_, _ = fmt.Fprintf(w, "topology-exporter %s\nendpoints: /metrics /healthz /readyz\n", version.Version)
 	})
 
 	srv := &http.Server{
@@ -151,6 +170,9 @@ func main() {
 			m.SnapshotLoadedDevicesTotal.Set(float64(len(hubSnap.Devices)))
 		}
 
+		// In hub mode, readiness is driven by the first live spoke push.
+		mux.HandleFunc("/readyz", newReadyzHandler(hub.IsReady))
+
 		workerDone.Add(1)
 		go func() {
 			defer workerDone.Done()
@@ -175,7 +197,7 @@ func main() {
 		workerDone.Add(1)
 		go func() {
 			defer workerDone.Done()
-			runDiscoveryLoop(ctx, logger, cfg, m, &status, spoke)
+			runDiscoveryLoop(ctx, logger, cfg, m, &status, &ready, spoke)
 		}()
 	}
 
@@ -212,7 +234,7 @@ func main() {
 // against the previous cycle, emits change events, updates metrics, and
 // writes a new snapshot. When spoke is non-nil (federation.role: spoke),
 // it also pushes the pre-reconciled graph to the hub after each cycle.
-func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Config, m *metrics.Metrics, status *atomic.Pointer[cycleStatus], spoke *federation.Spoke) {
+func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Config, m *metrics.Metrics, status *atomic.Pointer[cycleStatus], ready *atomic.Bool, spoke *federation.Spoke) {
 	evLogger := events.New(logger)
 
 	// LD-13: load snapshot, serve stale-but-valid metrics until first live cycle.
@@ -292,6 +314,9 @@ func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Conf
 			publishInventoryMetrics(newGraph, m)
 		}
 		m.GraphStale.Set(0)
+		if ready != nil {
+			ready.Store(true)
+		}
 		m.DiscoveryCycleDuration.Observe(time.Since(start).Seconds())
 
 		// LD-13: write snapshot in a goroutine with a timeout so an NFS stall

@@ -662,6 +662,40 @@ func TestHubWriteSnapshotPersistsGraph(t *testing.T) {
 	}
 }
 
+// TestHubWriteSnapshotAsyncTimesOut verifies the NFS-stall protection in
+// writeSnapshotAsync: when the inner write goroutine blocks beyond
+// snapshotWriteTimeout, the outer goroutine exits without updating
+// SnapshotLastWrittenUnix. The caller (handlePush or evictSilentSpokes) must
+// not block — writeSnapshotAsync must return immediately.
+func TestHubWriteSnapshotAsyncTimesOut(t *testing.T) {
+	block := make(chan struct{})
+	m := metrics.New()
+	h := NewHub(config.FederationConfig{}, m, nil, t.TempDir()+"/snap.json")
+	// Use a short timeout and a blocking write fn; both are Hub fields, so
+	// setting them before any goroutines start establishes happens-before.
+	h.snapshotWriteTimeout = 20 * time.Millisecond
+	h.snapshotWriteFn = func(string, snapshot.File) error {
+		<-block
+		return nil
+	}
+
+	start := time.Now()
+	h.writeSnapshotAsync(discovery.Graph{})
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("writeSnapshotAsync blocked for %v — must return immediately", elapsed)
+	}
+
+	// Wait for the timeout to fire (20 ms) + margin.
+	time.Sleep(200 * time.Millisecond)
+
+	if got := testutil.ToFloat64(m.SnapshotLastWrittenUnix); got != 0 {
+		t.Errorf("SnapshotLastWrittenUnix = %v after stalled write, want 0", got)
+	}
+
+	// Unblock the inner goroutine so it doesn't leak beyond the test.
+	close(block)
+}
+
 // TestHubWriteSnapshotNoopWhenPathEmpty verifies that writeSnapshot is a no-op
 // when snapshotPath is empty (the normal test configuration).
 func TestHubWriteSnapshotNoopWhenPathEmpty(_ *testing.T) {
