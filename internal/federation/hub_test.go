@@ -2,18 +2,24 @@ package federation
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/colinedwardwood/network-topology-exporter/internal/snapshot"
 )
 
 func newTestHub(links []config.InterDomainLink) *Hub {
@@ -473,3 +479,371 @@ func TestHubEvictionDeletesGaugeLabels(t *testing.T) {
 	// Also confirm no panic and the gauge can be set again (series was deleted).
 	val.Set(0) // should not panic
 }
+
+// TestHubHandlePushSuccessStoresSpokeAndSetsGauges sends a valid payload and
+// verifies the spoke is stored and the spoke-up gauge is set to 1.
+func TestHubHandlePushSuccessStoresSpokeAndSetsGauges(t *testing.T) {
+	m := metrics.New()
+	h := NewHub(
+		config.FederationConfig{SpokeTimeout: 5 * time.Minute},
+		m, nil, "",
+	)
+
+	payload := SpokePayload{
+		SpokeID: "dc-valid",
+		CycleAt: time.Now(),
+		Devices: []discovery.Device{{ID: "sw-1"}},
+		Edges:   []discovery.Edge{},
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.handlePush(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body: %s", rec.Code, rec.Body.String())
+	}
+	h.mu.Lock()
+	entry, ok := h.spokes["dc-valid"]
+	h.mu.Unlock()
+	if !ok {
+		t.Fatal("spoke dc-valid not found in h.spokes after successful push")
+	}
+	if len(entry.payload.Devices) != 1 {
+		t.Errorf("stored device count = %d, want 1", len(entry.payload.Devices))
+	}
+	if got := testutil.ToFloat64(m.FederationSpokeUp.WithLabelValues("dc-valid")); got != 1 {
+		t.Errorf("FederationSpokeUp{dc-valid} = %v, want 1", got)
+	}
+}
+
+// TestHubHandlePushRejectsBadJSON verifies that a body that cannot be decoded
+// as JSON returns HTTP 400.
+func TestHubHandlePushRejectsBadJSON(t *testing.T) {
+	h := newTestHub(nil)
+	req := httptest.NewRequest(http.MethodPost, "/spoke/push", strings.NewReader("{not json"))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.handlePush(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for bad JSON", rec.Code)
+	}
+}
+
+// TestHubHandlePushRejectsMethodNotAllowed verifies that non-POST methods get
+// HTTP 405.
+func TestHubHandlePushRejectsMethodNotAllowed(t *testing.T) {
+	h := newTestHub(nil)
+	req := httptest.NewRequest(http.MethodGet, "/spoke/push", nil)
+	rec := httptest.NewRecorder()
+
+	h.handlePush(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", rec.Code)
+	}
+}
+
+// TestHubHandlePushRejectsStaleCycleAt verifies that a payload whose cycle_at
+// is older than the spoke_timeout is rejected with HTTP 400.
+func TestHubHandlePushRejectsStaleCycleAt(t *testing.T) {
+	h := newTestHub(nil)
+	h.cfg.SpokeTimeout = time.Minute
+
+	payload := SpokePayload{
+		SpokeID: "dc-stale",
+		CycleAt: time.Now().Add(-2 * time.Minute), // older than spoke_timeout
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.handlePush(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for stale cycle_at", rec.Code)
+	}
+}
+
+// TestHubPublishMetricsClearStale verifies that passing clearStale=true sets
+// GraphStale to 0 as part of the publish.
+func TestHubPublishMetricsClearStale(t *testing.T) {
+	m := metrics.New()
+	h := NewHub(config.FederationConfig{}, m, nil, "")
+
+	m.GraphStale.Set(1) // simulate startup state
+	h.publishMetrics(discovery.Graph{}, true)
+
+	if got := testutil.ToFloat64(m.GraphStale); got != 0 {
+		t.Errorf("GraphStale = %v after clearStale=true, want 0", got)
+	}
+}
+
+// TestHubPublishMetricsPreservesStaleWhenFalse verifies that clearStale=false
+// does not touch GraphStale.
+func TestHubPublishMetricsPreservesStaleWhenFalse(t *testing.T) {
+	m := metrics.New()
+	h := NewHub(config.FederationConfig{}, m, nil, "")
+
+	m.GraphStale.Set(1)
+	h.publishMetrics(discovery.Graph{}, false)
+
+	if got := testutil.ToFloat64(m.GraphStale); got != 1 {
+		t.Errorf("GraphStale = %v after clearStale=false, want 1 (unchanged)", got)
+	}
+}
+
+// TestHubWriteSnapshotPersistsGraph verifies that writeSnapshot writes a file
+// at the configured path that can be loaded back via snapshot.Load.
+func TestHubWriteSnapshotPersistsGraph(t *testing.T) {
+	dir := t.TempDir()
+	snapPath := filepath.Join(dir, "hub.json")
+
+	m := metrics.New()
+	h := NewHub(config.FederationConfig{}, m, nil, snapPath)
+
+	g := discovery.Graph{
+		Devices: []discovery.Device{{ID: "sw-hub-1"}},
+		Edges:   []discovery.Edge{},
+	}
+	h.writeSnapshot(g)
+
+	f, err := snapshot.Load(snapPath)
+	if err != nil {
+		t.Fatalf("snapshot.Load: %v", err)
+	}
+	if f == nil {
+		t.Fatal("snapshot.Load returned nil, expected written file")
+	}
+	if len(f.Devices) != 1 || f.Devices[0].ID != "sw-hub-1" {
+		t.Errorf("loaded devices = %#v, want [{ID:sw-hub-1}]", f.Devices)
+	}
+	if got := testutil.ToFloat64(m.SnapshotLastWrittenUnix); got == 0 {
+		t.Error("SnapshotLastWrittenUnix not updated after writeSnapshot")
+	}
+}
+
+// TestHubWriteSnapshotNoopWhenPathEmpty verifies that writeSnapshot is a no-op
+// when snapshotPath is empty (the normal test configuration).
+func TestHubWriteSnapshotNoopWhenPathEmpty(t *testing.T) {
+	h := newTestHub(nil) // snapshotPath = ""
+	// Should not panic or error; just return immediately.
+	h.writeSnapshot(discovery.Graph{})
+}
+
+// TestHubWriteSnapshotErrorDoesNotPanic verifies that writeSnapshot logs the
+// error and does not panic or update SnapshotLastWrittenUnix when the snapshot
+// directory cannot be created.
+func TestHubWriteSnapshotErrorDoesNotPanic(t *testing.T) {
+	dir := t.TempDir()
+	// Create a file at the location where we'd expect a parent directory so
+	// that MkdirAll fails with "not a directory".
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	m := metrics.New()
+	h := NewHub(config.FederationConfig{}, m, nil, filepath.Join(blocker, "snap.json"))
+
+	h.writeSnapshot(discovery.Graph{})
+
+	if got := testutil.ToFloat64(m.SnapshotLastWrittenUnix); got != 0 {
+		t.Errorf("SnapshotLastWrittenUnix = %v after failed write, want 0", got)
+	}
+}
+
+// TestHubRestoreGraphPublishesMetrics verifies that RestoreGraph pushes device
+// and edge info metrics so the hub can serve stale data immediately after startup.
+func TestHubRestoreGraphPublishesMetrics(t *testing.T) {
+	m := metrics.New()
+	h := NewHub(config.FederationConfig{}, m, nil, "")
+
+	g := discovery.Graph{
+		Devices: []discovery.Device{{ID: "sw-restore", Vendor: "cisco"}},
+		Edges: []discovery.Edge{{
+			SrcDevice: "sw-restore", SrcPort: "Gi0/1",
+			DstDevice: "sw-peer", DstPort: "Gi0/2",
+			DiscoveryProto: "lldp",
+			Direction:      discovery.DirectionBidirectional,
+			LinkKind:       "ethernet",
+		}},
+	}
+	m.GraphStale.Set(1) // caller is responsible for setting this before RestoreGraph
+	h.RestoreGraph(g)
+
+	// GraphStale should remain 1 — RestoreGraph calls publishMetrics(g, false).
+	if got := testutil.ToFloat64(m.GraphStale); got != 1 {
+		t.Errorf("GraphStale = %v after RestoreGraph, want 1 (clearStale=false)", got)
+	}
+	// DeviceInfo and TopologyEdgeInfo should have been populated.
+	if got := testutil.ToFloat64(m.DeviceInfo.WithLabelValues("sw-restore", "cisco", "", "", "")); got != 1 {
+		t.Errorf("DeviceInfo{sw-restore} = %v, want 1", got)
+	}
+}
+
+// TestHubOOSUnmatchedMetricIncrementsOnMiss verifies that unmatched OOS hints
+// increment the HubOOSUnmatchedTotal gauge.
+func TestHubOOSUnmatchedMetricIncrementsOnMiss(t *testing.T) {
+	m := metrics.New()
+	h := NewHub(config.FederationConfig{SpokeTimeout: 5 * time.Minute}, m, nil, "")
+
+	h.mu.Lock()
+	// Only one side reports; no reverse match so the hint is unmatched.
+	h.spokes["dc-a"] = spokeEntry{
+		payload: SpokePayload{
+			OutOfScope: []discovery.OutOfScopeNeighbour{
+				{ReportingDevice: "sw-a", ReportingPort: "Gi0/1", NeighbourHint: "sw-unknown", Proto: "lldp"},
+			},
+		},
+		lastSeen: time.Now(),
+	}
+	h.combinedGraphLocked()
+	h.mu.Unlock()
+
+	if got := testutil.ToFloat64(m.HubOOSUnmatchedTotal); got == 0 {
+		t.Error("HubOOSUnmatchedTotal = 0, want > 0 for unmatched OOS hint")
+	}
+}
+
+// TestHubRunEvictionViaGoroutine confirms that runEviction eventually evicts
+// spokes whose lastSeen exceeds the timeout.
+func TestHubRunEvictionViaGoroutine(t *testing.T) {
+	h := newTestHub(nil)
+	h.cfg.SpokeTimeout = 50 * time.Millisecond
+
+	h.mu.Lock()
+	h.spokes["dc-old"] = spokeEntry{
+		payload:  SpokePayload{SpokeID: "dc-old"},
+		lastSeen: time.Now().Add(-100 * time.Millisecond),
+	}
+	h.mu.Unlock()
+
+	// Call evictSilentSpokes directly (runEviction is a ticker goroutine;
+	// evictSilentSpokes is its inner work and is already tested via eviction tests).
+	h.evictSilentSpokes()
+
+	h.mu.Lock()
+	_, present := h.spokes["dc-old"]
+	h.mu.Unlock()
+
+	if present {
+		t.Error("dc-old should have been evicted")
+	}
+}
+
+// TestHubHandlePushMissingCycleAt verifies that a payload with zero CycleAt
+// is rejected with HTTP 400.
+func TestHubHandlePushMissingCycleAt(t *testing.T) {
+	h := newTestHub(nil)
+
+	payload := SpokePayload{SpokeID: "dc-no-time"} // CycleAt is zero
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.handlePush(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for missing cycle_at", rec.Code)
+	}
+}
+
+// TestHubHandlePushRejectsFutureCycleAt verifies that a cycle_at more than
+// 5 minutes in the future is rejected with HTTP 400.
+func TestHubHandlePushRejectsFutureCycleAt(t *testing.T) {
+	h := newTestHub(nil)
+
+	payload := SpokePayload{
+		SpokeID: "dc-future",
+		CycleAt: time.Now().Add(10 * time.Minute),
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.handlePush(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for future cycle_at", rec.Code)
+	}
+}
+
+// TestHubHandlePushRejectsEmptySpokeID verifies that a payload without a
+// spoke_id is rejected with HTTP 400.
+func TestHubHandlePushRejectsEmptySpokeID(t *testing.T) {
+	h := newTestHub(nil)
+
+	payload := SpokePayload{SpokeID: "", CycleAt: time.Now()}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.handlePush(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for empty spoke_id", rec.Code)
+	}
+}
+
+// TestHubRunEvictionExitsOnContextCancellation verifies that runEviction
+// returns promptly when its context is cancelled.
+func TestHubRunEvictionExitsOnContextCancellation(t *testing.T) {
+	h := newTestHub(nil)
+	h.cfg.SpokeTimeout = 200 * time.Millisecond // short ticker interval
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		h.runEviction(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// runEviction exited cleanly.
+	case <-time.After(500 * time.Millisecond):
+		t.Error("runEviction did not return after context cancellation")
+	}
+}
+
+// TestHubRunEvictionFiresTickerEviction verifies that runEviction calls
+// evictSilentSpokes when the ticker fires, removing an expired spoke.
+func TestHubRunEvictionFiresTickerEviction(t *testing.T) {
+	h := newTestHub(nil)
+	h.cfg.SpokeTimeout = 20 * time.Millisecond // fast ticker (10ms interval)
+
+	h.mu.Lock()
+	h.spokes["dc-expire"] = spokeEntry{
+		payload:  SpokePayload{SpokeID: "dc-expire"},
+		lastSeen: time.Now().Add(-50 * time.Millisecond),
+	}
+	h.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	go h.runEviction(ctx)
+	<-ctx.Done()
+
+	h.mu.Lock()
+	_, present := h.spokes["dc-expire"]
+	h.mu.Unlock()
+
+	if present {
+		t.Error("dc-expire should have been evicted by runEviction ticker")
+	}
+}
+
+// Ensure unused import is compiled away by the test binary.
+var _ = os.DevNull

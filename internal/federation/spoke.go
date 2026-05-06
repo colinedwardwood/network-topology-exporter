@@ -58,9 +58,13 @@ func NewSpoke(cfg config.FederationConfig, logger *slog.Logger, m *metrics.Metri
 	}, nil
 }
 
+// spokePushBaseBackoff is the initial retry delay in Push. Overridden in tests
+// to avoid multi-second waits.
+var spokePushBaseBackoff = time.Second
+
 // Push serialises payload and POSTs it to the hub. It retries up to three
-// times with exponential backoff starting at 1 s. A cancelled context aborts
-// immediately without retrying.
+// times with exponential backoff starting at spokePushBaseBackoff. A cancelled
+// context aborts immediately without retrying.
 func (s *Spoke) Push(ctx context.Context, payload SpokePayload) error {
 	b, err := json.Marshal(payload)
 	if err != nil {
@@ -68,7 +72,7 @@ func (s *Spoke) Push(ctx context.Context, payload SpokePayload) error {
 	}
 
 	const maxAttempts = 3
-	backoff := time.Second
+	backoff := spokePushBaseBackoff
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if ctx.Err() != nil {
 			return ctx.Err()
