@@ -581,3 +581,187 @@ credentials:
 		t.Fatal("expected error for fallback_order referencing undefined profile")
 	}
 }
+
+// LD-15–LD-20: federation validation.
+
+func TestFederationDefaultRoleIsStandalone(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("targets: []\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if c.Federation.Role != "standalone" {
+		t.Errorf("default role = %q, want standalone", c.Federation.Role)
+	}
+}
+
+func TestFederationRejectsUnknownRole(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("federation:\n  role: daemon\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for unknown federation role")
+	}
+}
+
+func TestFederationSpokeRequiresTLSFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+federation:
+  role: spoke
+  spoke:
+    spoke_id: dc-a
+    hub_url: https://hub:9101
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for spoke role without TLS fields")
+	}
+}
+
+func TestFederationSpokeRequiresSpokeID(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+federation:
+  role: spoke
+  spoke:
+    hub_url: https://hub:9101
+    tls_ca_cert: /ca.pem
+    tls_cert: /spoke.crt
+    tls_key: /spoke.key
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for spoke role without spoke_id")
+	}
+}
+
+func TestFederationHubRequiresTLSFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+federation:
+  role: hub
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for hub role without TLS fields")
+	}
+}
+
+func TestFederationKnownInterDomainLinksRequiresAllFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+federation:
+  known_inter_domain_links:
+    - local_device: sw-a
+      local_port: Gi0/1
+      remote_device: sw-b
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for known_inter_domain_links entry with missing remote_port")
+	}
+}
+
+func TestFederationUncoordinatedIsValid(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+federation:
+  role: uncoordinated
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("unexpected error for uncoordinated role: %v", err)
+	}
+}
+
+func TestFederationHubSpokeTimeoutTooShort(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	// spoke_timeout = 60s, discovery.interval = 60s → 60s < 2×60s → reject.
+	body := `
+discovery:
+  interval: 60s
+federation:
+  role: hub
+  spoke_timeout: 60s
+  hub:
+    tls_ca_cert: /ca.pem
+    tls_cert: /hub.crt
+    tls_key: /hub.key
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error: spoke_timeout < 2 × discovery.interval")
+	}
+}
+
+func TestFederationHubSpokeTimeoutExactlyTwoIntervals(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	// spoke_timeout = 120s = 2 × 60s → exactly at the boundary, should pass.
+	body := `
+discovery:
+  interval: 60s
+federation:
+  role: hub
+  spoke_timeout: 120s
+  hub:
+    tls_ca_cert: /ca.pem
+    tls_cert: /hub.crt
+    tls_key: /hub.key
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("unexpected error for spoke_timeout == 2 × interval: %v", err)
+	}
+}
+
+func TestFederationKnownLinkOptionalLinkKind(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	// link_kind is optional; omitting it is valid.
+	body := `
+federation:
+  known_inter_domain_links:
+    - local_device: sw-a
+      local_port: Gi0/1
+      remote_device: sw-b
+      remote_port: Gi0/2
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error for link without link_kind: %v", err)
+	}
+	if c.Federation.KnownInterDomainLinks[0].LinkKind != "" {
+		t.Errorf("LinkKind = %q, want empty (default applied by hub at injection time)", c.Federation.KnownInterDomainLinks[0].LinkKind)
+	}
+}
