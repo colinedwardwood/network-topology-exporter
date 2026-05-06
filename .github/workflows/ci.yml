@@ -140,6 +140,29 @@ jobs:
       - name: e2e tests
         run: CLAB_SUDO=1 go test ./tests/e2e/... -tags e2e -v -count=1 -timeout 15m
 
+  e2e-test-srl:
+    name: e2e tests (SR Linux)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build-test]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: install containerlab
+        run: bash -c "$(curl -sL https://get.containerlab.dev)"
+
+      - name: pull SR Linux image
+        run: docker pull ghcr.io/nokia/srlinux:24.7.2
+
+      - name: e2e tests (SR Linux)
+        run: CLAB_SUDO=1 go test ./tests/e2e/srl/... -tags e2e_srl -v -count=1 -timeout 20m
+
   release:
     name: release
     runs-on: ubuntu-latest
