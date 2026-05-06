@@ -288,7 +288,9 @@ func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Conf
 		}
 		prevGraph = newGraph
 		ages = newAges
-		publishInventoryMetrics(newGraph, m)
+		if len(changes) > 0 || len(conflicts) > 0 {
+			publishInventoryMetrics(newGraph, m)
+		}
 		m.GraphStale.Set(0)
 		m.DiscoveryCycleDuration.Observe(time.Since(start).Seconds())
 
@@ -608,6 +610,11 @@ func walkSystemWithCredentials(ctx context.Context, cfg *config.Config, resolver
 			// Parent context cancelled (SIGTERM) — stop immediately.
 			return nil, snmpwalk.Params{}, "", err
 		}
+		// SNMP v2c agents silently drop packets with a wrong community string —
+		// the client gets DeadlineExceeded just as if the device were unreachable.
+		// Always try the next candidate. Only call RecordFailure when at least one
+		// failure was clearly not a timeout (i.e. the device is reachable but the
+		// credential was wrong). Timing out on all candidates preserves the cache.
 		if !errors.Is(err, context.DeadlineExceeded) {
 			allTimedOut = false
 		}

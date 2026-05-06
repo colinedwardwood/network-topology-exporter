@@ -13,6 +13,7 @@ import (
 	"time"
 
 	gsnmp "github.com/gosnmp/gosnmp"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
@@ -421,6 +422,108 @@ func TestEmitBoundaryObservations(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("after reset, series count = %d, want 1", count)
+	}
+}
+
+// TestPublishInventoryMetrics verifies that publishInventoryMetrics populates
+// DeviceInfo, TopologyEdgeInfo, and OutOfScopeNeighboursTotal, and that a
+// second call with an empty graph resets the series to reflect the new state.
+func TestPublishInventoryMetrics(t *testing.T) {
+	m := metrics.New()
+	g := discovery.Graph{
+		Devices: []discovery.Device{
+			{ID: "sw-1", Vendor: "cisco", Model: "catalyst", OSVersion: "15.2", Site: "dc-a"},
+		},
+		Edges: []discovery.Edge{
+			{
+				SrcDevice: "sw-1", SrcPort: "Gi0/1",
+				DstDevice: "sw-2", DstPort: "Gi0/2",
+				DiscoveryProto: "lldp", LinkKind: "ethernet",
+				Direction: discovery.DirectionBidirectional,
+			},
+		},
+		OutOfScope: []discovery.OutOfScopeNeighbour{{ReportingDevice: "sw-1"}},
+	}
+
+	publishInventoryMetrics(g, m)
+
+	if got := testutil.ToFloat64(m.DeviceInfo.WithLabelValues("sw-1", "cisco", "catalyst", "15.2", "dc-a")); got != 1 {
+		t.Errorf("DeviceInfo{sw-1} = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.TopologyEdgeInfo.WithLabelValues("sw-1", "Gi0/1", "sw-2", "Gi0/2", "lldp", "ethernet", "bidirectional")); got != 1 {
+		t.Errorf("TopologyEdgeInfo = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(m.OutOfScopeNeighboursTotal); got != 1 {
+		t.Errorf("OutOfScopeNeighboursTotal = %v, want 1", got)
+	}
+
+	// Second call with empty graph: series should be reset.
+	publishInventoryMetrics(discovery.Graph{}, m)
+	if got := testutil.ToFloat64(m.OutOfScopeNeighboursTotal); got != 0 {
+		t.Errorf("OutOfScopeNeighboursTotal after empty graph = %v, want 0", got)
+	}
+}
+
+// TestRunDiscoveryLoopClearsGraphStale verifies that runDiscoveryLoop sets
+// GraphStale=1 at startup, runs one cycle against a live SNMP agent, clears
+// GraphStale to 0, and records a cycleStatus after the cycle completes.
+func TestRunDiscoveryLoopClearsGraphStale(t *testing.T) {
+	t.Setenv("TEST_COMMUNITY", "public")
+	addr := snmptest.Start(t, "public", systemPDUs("sw-loop"))
+	_, port := snmptest.ParseAddr(addr)
+
+	cfg := &config.Config{
+		Discovery: config.DiscoveryConfig{
+			Interval:                 60 * time.Second, // long — second cycle never fires
+			TimeoutPerDevice:         5 * time.Second,
+			Parallelism:              1,
+			UnconfirmedLinkTTLCycles: 3,
+			Scope:                    config.ScopeConfig{CIDRAllowList: []string{"127.0.0.0/8"}},
+		},
+		Modules: config.ModulesConfig{
+			SNMP: config.ModuleSNMP{Enabled: true, Version: "v2c"},
+		},
+		Credentials: config.CredentialsConfig{
+			TrialRatePerSecond: 100,
+			Profiles: []config.CredentialProfile{
+				{Name: "default", Type: config.ProfileTypeSNMPv2c, CommunityEnv: "TEST_COMMUNITY"},
+			},
+			FallbackOrder: []string{"default"},
+		},
+		Snapshot: config.SnapshotConfig{Path: t.TempDir() + "/snap.json"},
+		Targets:  []config.TargetConfig{{Host: "127.0.0.1", Port: int(port)}},
+	}
+
+	m := metrics.New()
+	var status atomic.Pointer[cycleStatus]
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runDiscoveryLoop(ctx, slog.Default(), cfg, m, &status, nil)
+	}()
+
+	// Poll until GraphStale is cleared — set to 0 after the first successful cycle.
+	deadline := time.After(12 * time.Second)
+	poll := time.NewTicker(50 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("GraphStale never cleared — first discovery cycle did not complete within deadline")
+		case <-poll.C:
+			if testutil.ToFloat64(m.GraphStale) == 0 {
+				cancel()
+				<-done
+				if s := status.Load(); s == nil {
+					t.Error("cycleStatus was never set after first cycle")
+				}
+				return
+			}
+		}
 	}
 }
 

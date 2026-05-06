@@ -44,7 +44,6 @@ Four operational commitments:
 │       ├── cdp/                      # CISCO-CDP-MIB
 │       ├── bgp/                      # RFC 1657 BGP4-MIB (v0.2+)
 │       ├── ospf/                     # RFC 4750 OSPF-MIB (v0.2+)
-│       ├── arp/                      # not a Prober — see package comment
 │       └── fdb/                      # RFC 4188 BRIDGE-MIB dot1dTpFdbTable
 ├── config/example.yaml               # documented configuration schema
 └── docs/operator/                    # runbooks
@@ -78,6 +77,12 @@ observe network_topology_discovery_cycle_duration_seconds
 ```
 
 Change events appear on two surfaces. The counter (`network_topology_change_total`) is what alerts fire on. The log line carries the full before/after edge record so the operator can answer "which edge changed?" without joining metric series in their head.
+
+## Intentional non-features
+
+**ARP tables are not a topology source.** ARP tables (IP-MIB `ipNetToPhysicalTable`) record IP→MAC mappings on directly attached subnets. They encode L3 reachability, not physical adjacency. Two devices sharing a /24 both appear in each other's ARP tables even when connected through several intermediate switches. Bejerano et al. ("Physical Topology Discovery for Large Multisubnet Networks", IEEE INFOCOM 2003) and Pandey et al. ("IP Network Topology Discovery Using SNMP", ICOIN 2009) both use ARP data only as an IP→MAC resolution helper alongside the Bridge FDB — never as an independent edge source. If MAC→IP resolution is needed in a future FDB enhancement, ARP queries belong as an internal helper inside `internal/discovery/fdb`, not as a standalone module.
+
+**NetBox writeback is out of scope.** The exporter emits observability signals only (Prometheus metrics, structured log lines). Writing discovered topology into NetBox would break the output contract: the binary would need to handle partial writes, NetBox downtime, auth failures, idempotency, and the risk of overwriting operator-curated documentation with incorrect discovery data. The correct pattern is a separate reconciliation process that reads from Prometheus/Mimir and writes to NetBox.
 
 ## Concurrency
 
