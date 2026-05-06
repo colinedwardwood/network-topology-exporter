@@ -23,9 +23,9 @@ func snmpParams(node string) snmpwalk.Params {
 }
 
 // TestSNMPSystemWalk verifies that the SNMP system group walk returns a valid
-// Device for each SR Linux node. Nokia SR Linux maps to vendor "nokia" via
-// enterprise OID 1.3.6.1.4.1.6527.*; sysName is set to the containerlab node
-// name by default.
+// Device for each test node. The custom Alpine test node runs net-snmp, which
+// advertises enterprise OID 1.3.6.1.4.1.8072.*; sysName is overridden by
+// start.sh to the logical node name (stripped of the clab- prefix).
 func TestSNMPSystemWalk(t *testing.T) {
 	for _, node := range []string{"spine1", "leaf1", "leaf2"} {
 		t.Run(node, func(t *testing.T) {
@@ -42,15 +42,15 @@ func TestSNMPSystemWalk(t *testing.T) {
 			if !strings.EqualFold(dev.ID, node) {
 				t.Errorf("device ID = %q, want %q (sysName should match containerlab node name)", dev.ID, node)
 			}
-			if dev.Vendor != "nokia" {
-				t.Errorf("vendor = %q, want nokia (enterprise OID 6527)", dev.Vendor)
+			if dev.Vendor != "net-snmp" {
+				t.Errorf("vendor = %q, want net-snmp (enterprise OID 8072)", dev.Vendor)
 			}
 		})
 	}
 }
 
 // TestLLDPSpine1SeesLeafs verifies that spine1 discovers LLDP edges to both
-// leaf1 (via e1-1) and leaf2 (via e1-2). Pre-reconciliation edges are always
+// leaf1 (via eth1) and leaf2 (via eth2). Pre-reconciliation edges are always
 // unidirectional; direction upgrade happens in graph.Reconcile.
 func TestLLDPSpine1SeesLeafs(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -84,7 +84,7 @@ func TestLLDPSpine1SeesLeafs(t *testing.T) {
 }
 
 // TestLLDPLeaf1SeesSpine verifies that leaf1 has exactly one LLDP neighbour
-// (spine1), since it is connected only on e1-1.
+// (spine1), since it is connected only on eth1.
 func TestLLDPLeaf1SeesSpine(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -102,7 +102,7 @@ func TestLLDPLeaf1SeesSpine(t *testing.T) {
 }
 
 // TestLLDPLeaf2SeesSpine verifies that leaf2 has exactly one LLDP neighbour
-// (spine1), since it is connected only on e1-1.
+// (spine1), since it is connected only on eth1.
 func TestLLDPLeaf2SeesSpine(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
