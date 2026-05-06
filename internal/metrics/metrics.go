@@ -12,6 +12,7 @@ package metrics
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 )
 
 // Metrics bundles every collector the exporter exposes. One instance per
@@ -20,11 +21,11 @@ type Metrics struct {
 	registry *prometheus.Registry
 
 	// Topology inventory.
-	DeviceInfo             *prometheus.GaugeVec
-	DeviceUptimeSeconds    *prometheus.GaugeVec
-	TopologyEdgeInfo       *prometheus.GaugeVec
-	TopologyChangeTotal    *prometheus.CounterVec
-	TopologyConflictTotal  *prometheus.CounterVec
+	DeviceInfo            *prometheus.GaugeVec
+	DeviceUptimeSeconds   *prometheus.GaugeVec
+	TopologyEdgeInfo      *prometheus.GaugeVec
+	TopologyChangeTotal   *prometheus.CounterVec
+	TopologyConflictTotal *prometheus.CounterVec
 
 	// LD-11: count of out-of-scope neighbours seen in the current cycle.
 	// Detail (which device, which port, what hint) goes in log lines.
@@ -36,11 +37,11 @@ type Metrics struct {
 	SnapshotLoadedDevicesTotal prometheus.Gauge
 
 	// Discovery cycle health. All aggregates — no per-device label values.
-	DiscoveryDevicesTotal      *prometheus.GaugeVec
-	DiscoveryCycleDuration     prometheus.Histogram
-	DiscoveryModuleDuration    *prometheus.HistogramVec
-	SNMPWalksTotal             *prometheus.CounterVec
-	CredentialTrialsTotal      *prometheus.CounterVec
+	DiscoveryDevicesTotal   *prometheus.GaugeVec
+	DiscoveryCycleDuration  prometheus.Histogram
+	DiscoveryModuleDuration *prometheus.HistogramVec
+	SNMPWalksTotal          *prometheus.CounterVec
+	CredentialTrialsTotal   *prometheus.CounterVec
 
 	// LD-15: uncoordinated mode — one series per out-of-scope boundary
 	// observation, with canonical pair ordering so the Mimir recording rule
@@ -66,8 +67,8 @@ type Metrics struct {
 func New() *Metrics {
 	reg := prometheus.NewRegistry()
 
-	reg.MustRegister(prometheus.NewGoCollector())
-	reg.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	reg.MustRegister(collectors.NewGoCollector())
+	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	m := &Metrics{
 		registry: reg,

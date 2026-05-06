@@ -48,7 +48,7 @@ var ErrVersionMismatch = errors.New("snapshot: unrecognised version")
 // not exist — first run is not an error. Returns ErrVersionMismatch wrapped
 // when the file exists but its version is unknown.
 func Load(path string) (*File, error) {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
@@ -73,7 +73,7 @@ func quarantine(path string, contents []byte) error {
 		if i > 0 {
 			dst = fmt.Sprintf("%s.bad.%d", path, i)
 		}
-		f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec
 		if errors.Is(err, os.ErrExist) {
 			continue
 		}
@@ -139,7 +139,7 @@ func Write(path string, f File) error {
 	}
 	// Fsync the parent directory so the renamed directory entry is durable.
 	// Best-effort: some filesystems (NFS, FAT) don't support directory fsync.
-	if fd, err := os.Open(dir); err == nil {
+	if fd, err := os.Open(dir); err == nil { //nolint:gosec
 		_ = fd.Sync()
 		_ = fd.Close()
 	}

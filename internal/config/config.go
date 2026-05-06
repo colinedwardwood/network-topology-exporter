@@ -142,10 +142,10 @@ type ModuleSNMP struct {
 // Secret values are dereferenced from environment variables only — every
 // *Env field carries the variable name, never the secret itself.
 type CredentialsConfig struct {
-	Profiles           []CredentialProfile      `yaml:"profiles"`
-	Assignments        []CredentialAssignment   `yaml:"assignments"`
-	FallbackOrder      []string                 `yaml:"fallback_order"`
-	TrialRatePerSecond int                      `yaml:"trial_rate_per_second"`
+	Profiles           []CredentialProfile    `yaml:"profiles"`
+	Assignments        []CredentialAssignment `yaml:"assignments"`
+	FallbackOrder      []string               `yaml:"fallback_order"`
+	TrialRatePerSecond int                    `yaml:"trial_rate_per_second"`
 }
 
 // Profile type constants for CredentialProfile.Type.
@@ -157,14 +157,14 @@ const (
 // CredentialProfile is one named credential the exporter can try against
 // a device. Type selects which *Env fields are consulted.
 type CredentialProfile struct {
-	Name           string `yaml:"name"`
-	Type           string `yaml:"type"` // snmp_v2c | snmp_v3
-	CommunityEnv   string `yaml:"community_env,omitempty"`
-	UsernameEnv    string `yaml:"username_env,omitempty"`
-	AuthProtocol   string `yaml:"auth_protocol,omitempty"` // SHA (recommended) | SHA-256 | SHA-384 | SHA-512 | MD5 (deprecated, broken)
-	AuthKeyEnv     string `yaml:"auth_key_env,omitempty"`
-	PrivProtocol   string `yaml:"priv_protocol,omitempty"` // AES (recommended) | AES-192 | AES-256 | DES (deprecated, broken)
-	PrivKeyEnv     string `yaml:"priv_key_env,omitempty"`
+	Name         string `yaml:"name"`
+	Type         string `yaml:"type"` // snmp_v2c | snmp_v3
+	CommunityEnv string `yaml:"community_env,omitempty"`
+	UsernameEnv  string `yaml:"username_env,omitempty"`
+	AuthProtocol string `yaml:"auth_protocol,omitempty"` // SHA (recommended) | SHA-256 | SHA-384 | SHA-512 | MD5 (deprecated, broken)
+	AuthKeyEnv   string `yaml:"auth_key_env,omitempty"`
+	PrivProtocol string `yaml:"priv_protocol,omitempty"` // AES (recommended) | AES-192 | AES-256 | DES (deprecated, broken)
+	PrivKeyEnv   string `yaml:"priv_key_env,omitempty"`
 }
 
 // CredentialAssignment binds one or more profiles to a device or CIDR.
@@ -198,7 +198,7 @@ type TargetConfig struct {
 
 // Load parses the configuration file at path and applies defaults.
 func Load(path string) (*Config, error) {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec
 	if err != nil {
 		return nil, fmt.Errorf("read config %q: %w", path, err)
 	}

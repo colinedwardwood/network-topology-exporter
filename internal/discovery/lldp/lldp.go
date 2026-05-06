@@ -99,7 +99,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	if err != nil {
 		return nil, nil, fmt.Errorf("lldp %s: %w", p.IP, err)
 	}
-	defer client.Conn.Close()
+	defer func() { _ = client.Conn.Close() }()
 
 	locPorts, err := walkLocPorts(ctx, client)
 	if err != nil {
@@ -342,5 +342,3 @@ func fmtNetAddr(raw []byte) string {
 	}
 	return hex.EncodeToString(raw)
 }
-
-

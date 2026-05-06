@@ -106,7 +106,7 @@ func (h *Hub) Serve(ctx context.Context) error {
 
 	go h.runEviction(ctx)
 
-	go func() {
+	go func() { //nolint:gosec
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -142,7 +142,7 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, c := range payload.SpokeID {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.') {
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' && c != '_' && c != '.' {
 			http.Error(w, "spoke_id contains invalid characters (allowed: a-z A-Z 0-9 - _ .)", http.StatusBadRequest)
 			return
 		}

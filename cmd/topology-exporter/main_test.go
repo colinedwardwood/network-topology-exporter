@@ -370,7 +370,7 @@ func TestRunCycleLLDPEdge(t *testing.T) {
 // LD-15: canonical pair ordering.
 func TestCanonicalPair(t *testing.T) {
 	tests := []struct {
-		a, b       string
+		a, b         string
 		wantA, wantB string
 	}{
 		{"sw-a", "sw-b", "sw-a", "sw-b"},

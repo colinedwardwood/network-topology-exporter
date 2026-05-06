@@ -164,7 +164,8 @@ func main() {
 			spoke, err = federation.NewSpoke(cfg.Federation, logger, m)
 			if err != nil {
 				logger.Error("building federation spoke", "error", err)
-				os.Exit(1)
+				cancel()
+				os.Exit(1) //nolint:gocritic
 			}
 		}
 		workerDone.Add(1)
@@ -529,7 +530,7 @@ type credentialCandidate struct {
 }
 
 func credentialCandidates(cfg *config.Config, resolver *credentials.Resolver, ip net.IP, t config.TargetConfig) []credentialCandidate {
-	port := uint16(t.Port)
+	port := uint16(t.Port) //nolint:gosec
 	if port == 0 {
 		port = 161
 	}

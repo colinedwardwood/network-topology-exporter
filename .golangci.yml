@@ -1,34 +1,36 @@
+version: "2"
+
 run:
   timeout: 5m
-  go: "1.24"
 
 linters:
   disable-all: true
   enable:
     - errcheck
     - gocritic
-    - gofmt
-    - goimports
     - gosec
-    - gosimple
     - govet
     - ineffassign
     - misspell
     - revive
     - staticcheck
-    - typecheck
     - unconvert
     - unused
 
-linters-settings:
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+settings:
   goimports:
-    local-prefixes: github.com/colinedwardwood/network-topology-exporter
+    local-prefixes:
+      - github.com/colinedwardwood/network-topology-exporter
   revive:
     rules:
       - name: package-comments
       - name: exported
 
 issues:
-  exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0

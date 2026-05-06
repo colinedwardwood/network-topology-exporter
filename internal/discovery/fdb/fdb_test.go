@@ -357,7 +357,7 @@ func TestDiscoverVlanIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("snmputil.Open: %v", err)
 	}
-	defer client.Conn.Close()
+	defer func() { _ = client.Conn.Close() }()
 
 	ids := discoverVlanIDs(context.Background(), client)
 	want := []int{1, 10, 100}
@@ -430,13 +430,13 @@ func TestWalkVlanCommunityFdbDiscovery(t *testing.T) {
 // dot1dStpPortTable: bridge port 1 → forwarding(5)
 // ifXTable.ifName: ifIndex 2 → "GigabitEthernet0/1"
 func buildQBridgeAgentPDUs() []gsnmp.SnmpPDU {
-	fdbBase      := ".1.3.6.1.2.1.17.4.3.1."
-	qBridgeBase  := ".1.3.6.1.2.1.17.7.1.2.2."
+	fdbBase := ".1.3.6.1.2.1.17.4.3.1."
+	qBridgeBase := ".1.3.6.1.2.1.17.7.1.2.2."
 	basePortBase := ".1.3.6.1.2.1.17.1.4.1."
-	stpPortBase  := ".1.3.6.1.2.1.17.2.15.1."
-	ifNameBase   := ".1.3.6.1.2.1.31.1.1.1.1."
+	stpPortBase := ".1.3.6.1.2.1.17.2.15.1."
+	ifNameBase := ".1.3.6.1.2.1.31.1.1.1.1."
 
-	bmibSuffix   := "0.10.187.204.221.238"
+	bmibSuffix := "0.10.187.204.221.238"
 	// Q-BRIDGE index: fdbId=10, MAC=00:aa:bb:cc:dd:01
 	qSuffix := "10.0.170.187.204.221.1"
 
