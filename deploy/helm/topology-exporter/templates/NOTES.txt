@@ -1,0 +1,28 @@
+network-topology-exporter {{ .Chart.AppVersion }} is deployed.
+
+Metrics endpoint:
+  kubectl port-forward svc/{{ include "topology-exporter.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  curl http://localhost:{{ .Values.service.port }}/metrics
+
+Health check:
+  curl http://localhost:{{ .Values.service.port }}/healthz
+
+{{- if eq ((.Values.config).federation | default dict).role "hub" }}
+
+Federation hub mode: expose port {{ .Values.service.hubPort }} to spokes.
+  kubectl port-forward svc/{{ include "topology-exporter.fullname" . }} {{ .Values.service.hubPort }}:{{ .Values.service.hubPort }}
+{{- end }}
+
+{{- if not .Values.persistence.enabled }}
+
+NOTE: persistence is disabled. The graph snapshot will not survive pod restarts.
+      Set persistence.enabled=true to create a PVC for snapshot storage.
+{{- end }}
+
+{{- if .Values.serviceMonitor.enabled }}
+
+ServiceMonitor created. Prometheus Operator will scrape this instance automatically.
+{{- else }}
+
+To enable Prometheus Operator scraping, set serviceMonitor.enabled=true.
+{{- end }}
