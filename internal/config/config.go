@@ -21,7 +21,69 @@ type Config struct {
 	Modules     ModulesConfig     `yaml:"modules"`
 	Credentials CredentialsConfig `yaml:"credentials"`
 	Snapshot    SnapshotConfig    `yaml:"snapshot"`
+	Federation  FederationConfig  `yaml:"federation"`
 	Targets     []TargetConfig    `yaml:"targets"`
+}
+
+// FederationConfig is the LD-15–LD-20 multi-instance coordination config.
+// Role selects the operating mode; the remaining fields are mode-specific.
+type FederationConfig struct {
+	// Role selects the operating mode. Default "standalone" preserves existing
+	// single-instance behaviour. "uncoordinated" adds boundary-observation
+	// metrics for Mimir recording-rule stitching (LD-15). "spoke" and "hub"
+	// configure the H-PCE-style push hierarchy (LD-16).
+	Role string `yaml:"role"` // standalone | uncoordinated | spoke | hub
+
+	// SpokeTimeout governs spoke eviction on the hub per LD-18: a spoke that
+	// has not pushed within this duration has its edges removed from the
+	// aggregated graph. Defaults to 3× discovery.interval.
+	SpokeTimeout time.Duration `yaml:"spoke_timeout"`
+
+	// KnownInterDomainLinks is the LD-19 static stitching override. Each
+	// entry is a fully-qualified boundary link tuple; the hub injects these as
+	// confirmed bidirectional edges regardless of automatic name-matching.
+	KnownInterDomainLinks []InterDomainLink `yaml:"known_inter_domain_links"`
+
+	// Hub holds the hub-side federation server settings (role: hub).
+	Hub FederationHubConfig `yaml:"hub"`
+
+	// Spoke holds the spoke-side settings (role: spoke).
+	Spoke FederationSpokeConfig `yaml:"spoke"`
+}
+
+// FederationHubConfig holds the hub's federation server settings.
+// TLS fields are file paths, not inline PEM. Per LD-20, all three must be set.
+type FederationHubConfig struct {
+	// ListenAddr is the address the hub listens on for spoke pushes.
+	// Separate from web.listen-address so Prometheus scrapes do not require mTLS.
+	ListenAddr string `yaml:"listen_addr"`
+	TLSCACert  string `yaml:"tls_ca_cert"` // path to PEM CA certificate for spoke client verification
+	TLSCert    string `yaml:"tls_cert"`    // path to PEM server certificate
+	TLSKey     string `yaml:"tls_key"`     // path to PEM server private key
+}
+
+// FederationSpokeConfig holds the spoke's settings.
+// TLS fields are file paths, not inline PEM. Per LD-20, all three must be set.
+type FederationSpokeConfig struct {
+	// SpokeID is a unique identifier for this spoke instance. Used as the key
+	// in the hub's spoke-edge store and in federation metric labels.
+	SpokeID string `yaml:"spoke_id"`
+	// HubURL is the base URL of the hub federation server, e.g. https://hub:9101.
+	HubURL    string `yaml:"hub_url"`
+	TLSCACert string `yaml:"tls_ca_cert"` // path to PEM CA certificate for hub server verification
+	TLSCert   string `yaml:"tls_cert"`    // path to PEM spoke client certificate
+	TLSKey    string `yaml:"tls_key"`     // path to PEM spoke client private key
+}
+
+// InterDomainLink is one LD-19 static boundary-link override. LocalDevice,
+// LocalPort, RemoteDevice, and RemotePort are required. LinkKind defaults to
+// "ethernet" when omitted.
+type InterDomainLink struct {
+	LocalDevice  string `yaml:"local_device"`
+	LocalPort    string `yaml:"local_port"`
+	RemoteDevice string `yaml:"remote_device"`
+	RemotePort   string `yaml:"remote_port"`
+	LinkKind     string `yaml:"link_kind,omitempty"` // defaults to "ethernet"
 }
 
 // DiscoveryConfig controls the global discovery cycle.
@@ -178,6 +240,15 @@ func (c *Config) applyDefaults() {
 			c.Targets[i].Port = 161
 		}
 	}
+	if c.Federation.Role == "" {
+		c.Federation.Role = "standalone"
+	}
+	if c.Federation.SpokeTimeout == 0 {
+		c.Federation.SpokeTimeout = 3 * c.Discovery.Interval
+	}
+	if c.Federation.Hub.ListenAddr == "" {
+		c.Federation.Hub.ListenAddr = ":9101"
+	}
 }
 
 func (c *Config) validate() error {
@@ -207,6 +278,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := c.validateTargets(); err != nil {
+		return err
+	}
+	if err := c.validateFederation(); err != nil {
 		return err
 	}
 	return nil
@@ -344,6 +418,41 @@ func (c *Config) validateTargets() error {
 	for i, t := range c.Targets {
 		if t.Port < 0 || t.Port > 65535 {
 			return fmt.Errorf("targets[%d].port %d is out of range [0, 65535]", i, t.Port)
+		}
+	}
+	return nil
+}
+
+// validateFederation enforces LD-15–LD-20 constraints on the federation config.
+func (c *Config) validateFederation() error {
+	switch c.Federation.Role {
+	case "standalone", "uncoordinated":
+		// no extra required fields
+	case "spoke":
+		if c.Federation.Spoke.SpokeID == "" {
+			return errors.New("federation.spoke.spoke_id is required for spoke role")
+		}
+		if c.Federation.Spoke.HubURL == "" {
+			return errors.New("federation.spoke.hub_url is required for spoke role")
+		}
+		if c.Federation.Spoke.TLSCACert == "" || c.Federation.Spoke.TLSCert == "" || c.Federation.Spoke.TLSKey == "" {
+			return errors.New("federation.spoke.tls_ca_cert, tls_cert, and tls_key are all required for spoke role (LD-20)")
+		}
+	case "hub":
+		if c.Federation.Hub.TLSCACert == "" || c.Federation.Hub.TLSCert == "" || c.Federation.Hub.TLSKey == "" {
+			return errors.New("federation.hub.tls_ca_cert, tls_cert, and tls_key are all required for hub role (LD-20)")
+		}
+		// LD-18: spoke_timeout shorter than 2× the discovery interval causes
+		// spokes to be spuriously evicted before they have completed two cycles.
+		if c.Federation.SpokeTimeout < 2*c.Discovery.Interval {
+			return fmt.Errorf("federation.spoke_timeout (%s) must be >= 2× discovery.interval (%s) to prevent spurious eviction (LD-18)", c.Federation.SpokeTimeout, c.Discovery.Interval)
+		}
+	default:
+		return fmt.Errorf("federation.role must be standalone, uncoordinated, spoke, or hub; got %q", c.Federation.Role)
+	}
+	for i, link := range c.Federation.KnownInterDomainLinks {
+		if link.LocalDevice == "" || link.LocalPort == "" || link.RemoteDevice == "" || link.RemotePort == "" {
+			return fmt.Errorf("federation.known_inter_domain_links[%d]: local_device, local_port, remote_device, and remote_port are all required", i)
 		}
 	}
 	return nil
