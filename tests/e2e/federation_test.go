@@ -1,0 +1,286 @@
+//go:build e2e
+
+package e2e
+
+import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+	"time"
+)
+
+// TestFederationSpokeHub runs two real topology-exporter binaries — one in
+// spoke mode (with full SNMP/LLDP discovery against the containerlab nodes)
+// and one in hub mode (pure aggregator) — and asserts that the hub's /metrics
+// endpoint reflects the topology discovered by the spoke.
+func TestFederationSpokeHub(t *testing.T) {
+	dir := t.TempDir()
+	pki := generateE2EPKI(t, dir, "spoke-01")
+
+	// Pick free ports for hub web, hub federation, and spoke web listeners.
+	hubWebAddr := freeAddr(t)
+	hubFedAddr := freeAddr(t)
+	spokeWebAddr := freeAddr(t)
+
+	binPath := dir + "/topology-exporter"
+	buildCmd := exec.Command("go", "build", "-o", binPath, "./cmd/topology-exporter")
+	buildCmd.Dir = "../../"
+	buildCmd.Stdout = os.Stderr
+	buildCmd.Stderr = os.Stderr
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("build binary: %v", err)
+	}
+
+	// Hub config — no discovery targets, role: hub.
+	hubCfgPath := dir + "/hub.yaml"
+	hubCfg := fmt.Sprintf(`federation:
+  role: hub
+  spoke_timeout: 5m
+  hub:
+    listen_addr: %s
+    tls_ca_cert: %s
+    tls_cert: %s
+    tls_key: %s
+discovery:
+  interval: 15s
+  timeout_per_device: 10s
+  parallelism: 8
+  scope:
+    cidr_allow_list: []
+`, hubFedAddr, pki.caCertFile, pki.serverCertFile, pki.serverKeyFile)
+	if err := os.WriteFile(hubCfgPath, []byte(hubCfg), 0600); err != nil {
+		t.Fatalf("write hub config: %v", err)
+	}
+
+	// Spoke config — same discovery setup as TestExporterBinary, role: spoke.
+	spokeCfgPath := dir + "/spoke.yaml"
+	cidrs := buildCIDRList(nodeIPs)
+	targets := buildTargetList(nodeIPs, []string{"spine1", "leaf1", "leaf2"})
+	spokeCfg := fmt.Sprintf(`federation:
+  role: spoke
+  spoke_timeout: 5m
+  spoke:
+    spoke_id: spoke-01
+    hub_url: https://%s
+    tls_ca_cert: %s
+    tls_cert: %s
+    tls_key: %s
+discovery:
+  interval: 15s
+  timeout_per_device: 10s
+  parallelism: 8
+  scope:
+    cidr_allow_list:
+%s
+modules:
+  snmp:
+    enabled: true
+    version: v2c
+    community_env: SNMP_COMMUNITY
+  lldp:
+    enabled: true
+targets:
+%s`, hubFedAddr, pki.caCertFile, pki.clientCertFile, pki.clientKeyFile, cidrs, targets)
+	if err := os.WriteFile(spokeCfgPath, []byte(spokeCfg), 0600); err != nil {
+		t.Fatalf("write spoke config: %v", err)
+	}
+
+	// Start hub binary.
+	hubCmd := exec.Command(binPath, //nolint:gosec
+		"-config.file", hubCfgPath,
+		"-web.listen-address", hubWebAddr,
+		"-log.level", "debug",
+	)
+	hubCmd.Stdout = os.Stderr
+	hubCmd.Stderr = os.Stderr
+	if err := hubCmd.Start(); err != nil {
+		t.Fatalf("start hub: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = hubCmd.Process.Kill()
+		_ = hubCmd.Wait()
+	})
+
+	// Start spoke binary.
+	spokeCmd := exec.Command(binPath, //nolint:gosec
+		"-config.file", spokeCfgPath,
+		"-web.listen-address", spokeWebAddr,
+		"-log.level", "debug",
+	)
+	spokeCmd.Env = append(os.Environ(), "SNMP_COMMUNITY=public")
+	spokeCmd.Stdout = os.Stderr
+	spokeCmd.Stderr = os.Stderr
+	if err := spokeCmd.Start(); err != nil {
+		t.Fatalf("start spoke: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = spokeCmd.Process.Kill()
+		_ = spokeCmd.Wait()
+	})
+
+	// Hub becomes ready only after the spoke completes its first cycle and
+	// pushes. Allow up to 3 minutes (15 s interval + LLDP + network latency).
+	if err := pollReady("http://"+hubWebAddr+"/readyz", 3*time.Minute); err != nil {
+		t.Fatalf("hub /readyz: %v", err)
+	}
+
+	resp, err := http.Get("http://" + hubWebAddr + "/metrics") //nolint:noctx
+	if err != nil {
+		t.Fatalf("GET hub /metrics: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read hub /metrics body: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("hub /metrics returned %d", resp.StatusCode)
+	}
+
+	metrics := string(body)
+	assertEdge(t, metrics, "spine1", "leaf1")
+	assertEdge(t, metrics, "spine1", "leaf2")
+}
+
+// generateE2EPKI creates an ephemeral CA, hub server cert (IP SAN 127.0.0.1),
+// and spoke client cert (CN = spokeID) in dir.
+func generateE2EPKI(t *testing.T, dir, spokeID string) struct {
+	caCertFile     string
+	serverCertFile string
+	serverKeyFile  string
+	clientCertFile string
+	clientKeyFile  string
+} {
+	t.Helper()
+
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate CA key: %v", err)
+	}
+	caTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "e2e-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(2 * time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create CA cert: %v", err)
+	}
+	caCert, _ := x509.ParseCertificate(caDER)
+
+	serverKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	serverTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "hub"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(2 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	serverDER, _ := x509.CreateCertificate(rand.Reader, serverTmpl, caCert, &serverKey.PublicKey, caKey)
+
+	clientKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	clientTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(3),
+		Subject:      pkix.Name{CommonName: spokeID},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(2 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	clientDER, _ := x509.CreateCertificate(rand.Reader, clientTmpl, caCert, &clientKey.PublicKey, caKey)
+
+	writePEM := func(name string, blocks ...*pem.Block) string {
+		path := dir + "/" + name
+		f, err := os.Create(path)
+		if err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+		defer f.Close()
+		for _, b := range blocks {
+			if err := pem.Encode(f, b); err != nil {
+				t.Fatalf("pem encode %s: %v", name, err)
+			}
+		}
+		return path
+	}
+
+	serverKeyDER, _ := x509.MarshalECPrivateKey(serverKey)
+	clientKeyDER, _ := x509.MarshalECPrivateKey(clientKey)
+
+	return struct {
+		caCertFile     string
+		serverCertFile string
+		serverKeyFile  string
+		clientCertFile string
+		clientKeyFile  string
+	}{
+		caCertFile:     writePEM("ca.pem", &pem.Block{Type: "CERTIFICATE", Bytes: caDER}),
+		serverCertFile: writePEM("server.crt", &pem.Block{Type: "CERTIFICATE", Bytes: serverDER}),
+		serverKeyFile:  writePEM("server.key", &pem.Block{Type: "EC PRIVATE KEY", Bytes: serverKeyDER}),
+		clientCertFile: writePEM("client.crt", &pem.Block{Type: "CERTIFICATE", Bytes: clientDER}),
+		clientKeyFile:  writePEM("client.key", &pem.Block{Type: "EC PRIVATE KEY", Bytes: clientKeyDER}),
+	}
+}
+
+// freeAddr picks a free TCP address on loopback by binding :0 and releasing it.
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("freeAddr: %v", err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	return addr
+}
+
+// buildCIDRList collapses node IPs into /24 (IPv4) or /128 (IPv6) CIDR blocks
+// for the spoke's cidr_allow_list.
+func buildCIDRList(ips map[string]net.IP) string {
+	var sb strings.Builder
+	seen := make(map[string]bool)
+	for _, ip := range ips {
+		ip4 := ip.To4()
+		if ip4 == nil {
+			cidr := ip.String() + "/128"
+			if !seen[cidr] {
+				seen[cidr] = true
+				sb.WriteString("      - " + cidr + "\n")
+			}
+			continue
+		}
+		cidr := fmt.Sprintf("%d.%d.%d.0/24", ip4[0], ip4[1], ip4[2])
+		if !seen[cidr] {
+			seen[cidr] = true
+			sb.WriteString("      - " + cidr + "\n")
+		}
+	}
+	return sb.String()
+}
+
+// buildTargetList produces the targets: YAML block for the given node names.
+func buildTargetList(ips map[string]net.IP, nodes []string) string {
+	var sb strings.Builder
+	for _, node := range nodes {
+		sb.WriteString(fmt.Sprintf("  - host: %s\n    port: 161\n", ips[node]))
+	}
+	return sb.String()
+}
