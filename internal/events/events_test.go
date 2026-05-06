@@ -103,3 +103,56 @@ func TestEmitEmpty(t *testing.T) {
 		t.Errorf("expected 0 records for empty changes, got %d", len(h.records))
 	}
 }
+
+// EmitConflicts: one conflict produces one Warn log line with expected fields.
+func TestEmitConflicts(t *testing.T) {
+	l, h := newTestLogger()
+
+	c := graph.Conflict{
+		Kind:      graph.ConflictNeighbourDisagreement,
+		SrcDevice: "sw-01",
+		SrcPort:   "Gi0/1",
+		Sources:   []string{"lldp", "cdp"},
+		Edges: []discovery.Edge{
+			{
+				SrcDevice: "sw-01", SrcPort: "Gi0/1",
+				DstDevice: "sw-02", DstPort: "Gi0/2",
+				DiscoveryProto: "lldp",
+			},
+		},
+	}
+	l.EmitConflicts(context.Background(), []graph.Conflict{c})
+
+	if len(h.records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(h.records))
+	}
+	if h.records[0].Level != slog.LevelWarn {
+		t.Errorf("Level = %v, want Warn", h.records[0].Level)
+	}
+	hasDevice := false
+	hasEdges := false
+	h.records[0].Attrs(func(a slog.Attr) bool {
+		if a.Key == "src_device" {
+			hasDevice = true
+		}
+		if a.Key == "edges" {
+			hasEdges = true
+		}
+		return true
+	})
+	if !hasDevice {
+		t.Error("expected src_device attr in conflict log record")
+	}
+	if !hasEdges {
+		t.Error("expected edges attr in conflict log record")
+	}
+}
+
+// EmitConflicts: empty slice emits nothing.
+func TestEmitConflictsEmpty(t *testing.T) {
+	l, h := newTestLogger()
+	l.EmitConflicts(context.Background(), nil)
+	if len(h.records) != 0 {
+		t.Errorf("expected 0 records for empty conflicts, got %d", len(h.records))
+	}
+}
