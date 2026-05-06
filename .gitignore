@@ -28,4 +28,4 @@ vendor/
 
 # Claude Code agent worktrees and built binaries at repo root
 .claude/worktrees/
-topology-exporter
+/topology-exporter

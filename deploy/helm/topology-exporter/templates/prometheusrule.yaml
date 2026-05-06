@@ -1,0 +1,76 @@
+{{- if .Values.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "topology-exporter.fullname" . }}
+  namespace: {{ .Values.prometheusRule.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "topology-exporter.labels" . | nindent 4 }}
+    {{- with .Values.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: topology-exporter.rules
+      rules:
+        - alert: TopologyGraphStale
+          expr: network_topology_graph_stale == 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Topology exporter serving stale snapshot"
+            description: >-
+              {{ "{{" }} $labels.instance {{ "}}" }} has been serving a snapshot
+              (network_topology_graph_stale=1) for more than 15 minutes.
+              Check that discovery cycles are completing successfully.
+
+        - alert: TopologySnapshotNotWritten
+          expr: time() - network_topology_snapshot_last_written_unix > 300
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Topology snapshot not written recently"
+            description: >-
+              {{ "{{" }} $labels.instance {{ "}}" }} has not written a snapshot
+              in over 5 minutes. The snapshot may be stale after restart.
+
+        - alert: TopologyDiscoverySlow
+          expr: >-
+            histogram_quantile(0.99,
+              rate(network_topology_discovery_cycle_duration_seconds_bucket[10m])
+            ) > {{ .Values.prometheusRule.cycleThresholdSeconds }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Topology discovery p99 exceeds threshold"
+            description: >-
+              {{ "{{" }} $labels.instance {{ "}}" }} discovery p99 is
+              {{ "{{" }} $value | humanizeDuration {{ "}}" }},
+              which exceeds the {{ .Values.prometheusRule.cycleThresholdSeconds }}s threshold.
+
+        - alert: TopologyCredentialFailures
+          expr: increase(network_topology_credential_trials_total{status="failed"}[10m]) > 20
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Sustained SNMP credential failures"
+            description: >-
+              {{ "{{" }} $labels.instance {{ "}}" }} has had more than 20 credential
+              failures in 10 minutes. A device may have locked out the SNMP user.
+
+        - alert: TopologyFederationSpokeDown
+          expr: network_topology_federation_spoke_up == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Federation spoke not pushing"
+            description: >-
+              Hub {{ "{{" }} $labels.instance {{ "}}" }} has not received a push from
+              spoke {{ "{{" }} $labels.spoke_id {{ "}}" }} in more than spoke_timeout.
+              Check spoke connectivity and certificate validity.
+{{- end }}

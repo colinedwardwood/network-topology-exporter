@@ -1,0 +1,154 @@
+# Default values for topology-exporter.
+# Modes: standalone (default), uncoordinated, spoke, hub.
+# See docs/operator/federation.md for multi-instance federation setup.
+
+replicaCount: 1
+
+image:
+  repository: network-topology-exporter
+  tag: ""  # defaults to Chart.appVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "9100"
+  prometheus.io/path: "/metrics"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  fsGroup: 65534
+
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+
+service:
+  type: ClusterIP
+  port: 9100
+  # Hub mode: expose the spoke-push listener separately.
+  hubPort: 9101
+  hubEnabled: false
+
+# Prometheus ServiceMonitor (requires prometheus-operator).
+serviceMonitor:
+  enabled: false
+  namespace: ""
+  interval: 60s
+  scrapeTimeout: 30s
+  labels: {}
+
+# PrometheusRule for the recommended alerts (requires prometheus-operator).
+prometheusRule:
+  enabled: false
+  namespace: ""
+  labels: {}
+  # Discovery cycle slower than this threshold triggers the p99 alert.
+  cycleThresholdSeconds: 60
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: metrics
+  initialDelaySeconds: 15
+  periodSeconds: 30
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: metrics
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+# Snapshot persistence. If persistence is enabled a PVC is created and
+# mounted at /var/lib/topology-exporter. The snapshot path in config must
+# match this mount point.
+persistence:
+  enabled: false
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 100Mi
+  existingClaim: ""
+
+# Federation TLS secrets. Set secretName to the name of an existing Secret
+# that contains tls.crt, tls.key, and ca.crt. The chart mounts it at
+# /etc/topology-exporter/pki/. Required for spoke and hub modes.
+federation:
+  tlsSecret: ""
+
+# config is the full topology-exporter configuration document.
+# Override individual keys or replace the whole block.
+config:
+  discovery:
+    interval: 60s
+    timeout_per_device: 10s
+    parallelism: 20
+    unconfirmed_link_ttl_cycles: 3
+    scope:
+      cidr_allow_list: []
+
+  modules:
+    snmp:
+      enabled: true
+      version: v2c
+    lldp:
+      enabled: true
+    cdp:
+      enabled: true
+    bgp:
+      enabled: false
+    ospf:
+      enabled: false
+    fdb:
+      enabled: false
+
+  credentials:
+    profiles: []
+    assignments: []
+    fallback_order: []
+    trial_rate_per_second: 5
+
+  snapshot:
+    path: /var/lib/topology-exporter/snapshot.json
+
+  federation:
+    role: standalone
+    spoke_timeout: 3m
+    known_inter_domain_links: []
+
+  targets: []
+
+# Extra environment variables to inject (e.g. SNMP community string secrets).
+extraEnv: []
+# - name: SNMP_COMMUNITY
+#   valueFrom:
+#     secretKeyRef:
+#       name: snmp-secret
+#       key: community
+
+# Extra volumes and mounts for custom cert bundles, credential files, etc.
+extraVolumes: []
+extraVolumeMounts: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

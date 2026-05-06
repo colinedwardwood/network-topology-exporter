@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "topology-exporter.fullname" . }}
+  labels:
+    {{- include "topology-exporter.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: metrics
+      port: {{ .Values.service.port }}
+      targetPort: metrics
+      protocol: TCP
+    {{- if .Values.service.hubEnabled }}
+    - name: hub
+      port: {{ .Values.service.hubPort }}
+      targetPort: hub
+      protocol: TCP
+    {{- end }}
+  selector:
+    {{- include "topology-exporter.selectorLabels" . | nindent 4 }}
