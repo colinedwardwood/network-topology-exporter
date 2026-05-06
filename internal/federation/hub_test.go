@@ -3,8 +3,15 @@ package federation
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,6 +28,31 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
 	"github.com/colinedwardwood/network-topology-exporter/internal/snapshot"
 )
+
+// makeCert returns a self-signed certificate with the given Common Name,
+// suitable for populating req.TLS.PeerCertificates in handlePush tests.
+func makeCert(t *testing.T, cn string) *x509.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: cn},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse cert: %v", err)
+	}
+	return cert
+}
 
 func newTestHub(links []config.InterDomainLink) *Hub {
 	return NewHub(
@@ -816,6 +848,51 @@ func TestHubRunEvictionExitsOnContextCancellation(t *testing.T) {
 		// runEviction exited cleanly.
 	case <-time.After(500 * time.Millisecond):
 		t.Error("runEviction did not return after context cancellation")
+	}
+}
+
+// TestHubHandlePushRejectsCertCNMismatch verifies that handlePush returns
+// HTTP 403 when the client certificate's CN does not match payload.SpokeID
+// (LD-21: spoke_id must be bound to the presenting mTLS identity).
+func TestHubHandlePushRejectsCertCNMismatch(t *testing.T) {
+	h := newTestHub(nil)
+
+	// Cert has CN "dc-a"; payload claims spoke_id "dc-b" — mismatch.
+	payload := SpokePayload{SpokeID: "dc-b", CycleAt: time.Now()}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.TLS = &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{makeCert(t, "dc-a")},
+	}
+	rec := httptest.NewRecorder()
+
+	h.handlePush(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 for cert CN / spoke_id mismatch", rec.Code)
+	}
+}
+
+// TestHubHandlePushAcceptsCertCNMatch verifies that handlePush accepts a push
+// when the client certificate's CN exactly matches payload.SpokeID (LD-21).
+func TestHubHandlePushAcceptsCertCNMatch(t *testing.T) {
+	h := newTestHub(nil)
+
+	payload := SpokePayload{SpokeID: "dc-match", CycleAt: time.Now()}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.TLS = &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{makeCert(t, "dc-match")},
+	}
+	rec := httptest.NewRecorder()
+
+	h.handlePush(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("status = %d, want 204 for matching cert CN / spoke_id; body: %s",
+			rec.Code, rec.Body.String())
 	}
 }
 

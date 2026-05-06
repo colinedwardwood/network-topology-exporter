@@ -160,6 +160,23 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// LD-21: bind spoke_id to the presenting mTLS client certificate's Common
+	// Name so a spoke holding a valid cert cannot overwrite another spoke's
+	// topology data. r.TLS is nil in unit tests (httptest has no TLS); in
+	// production ClientAuth: RequireAndVerifyClientCert guarantees at least one
+	// peer certificate is present.
+	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+		certCN := r.TLS.PeerCertificates[0].Subject.CommonName
+		if certCN != payload.SpokeID {
+			h.logger.Warn("hub: spoke_id/cert CN mismatch — rejecting push",
+				"spoke_id", payload.SpokeID,
+				"cert_cn", certCN,
+			)
+			http.Error(w, fmt.Sprintf("spoke_id %q does not match client certificate CN %q", payload.SpokeID, certCN), http.StatusForbidden)
+			return
+		}
+	}
+
 	// Validate CycleAt: must be present, not in the future, and not older than
 	// spoke_timeout (which would indicate a lost/replayed push).
 	now := time.Now()
@@ -184,8 +201,9 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 
 	h.mu.Lock()
 	h.spokes[payload.SpokeID] = spokeEntry{payload: payload, lastSeen: now}
-	combined := h.combinedGraphLocked()
+	spokes := h.spokesSnapshot()
 	h.mu.Unlock()
+	combined := h.buildCombinedGraph(spokes)
 
 	h.m.FederationSpokeUp.WithLabelValues(payload.SpokeID).Set(1)
 	h.m.FederationSpokeLastPushUnix.WithLabelValues(payload.SpokeID).Set(float64(now.Unix()))
@@ -203,15 +221,32 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// combinedGraphLocked builds the unified discovery.Graph from all active spoke
-// payloads and the configured known inter-domain links. It runs a second
-// graph.Reconcile pass across the combined edge set so cross-boundary
-// bidirectionality is detected at the hub level per LD-17. Caller must hold h.mu.
+// spokesSnapshot returns a shallow copy of h.spokes. Caller must hold h.mu.
+func (h *Hub) spokesSnapshot() map[string]spokeEntry {
+	s := make(map[string]spokeEntry, len(h.spokes))
+	for k, v := range h.spokes {
+		s[k] = v
+	}
+	return s
+}
+
+// combinedGraphLocked is a convenience wrapper for tests that call it while
+// already holding h.mu. Production paths use spokesSnapshot + buildCombinedGraph
+// to move Reconcile outside the critical section.
 func (h *Hub) combinedGraphLocked() discovery.Graph {
+	return h.buildCombinedGraph(h.spokes)
+}
+
+// buildCombinedGraph constructs the unified discovery.Graph from the supplied
+// spoke snapshot and the configured known inter-domain links. It runs a second
+// graph.Reconcile pass so cross-boundary bidirectionality is detected at the
+// hub level per LD-17. Does NOT require h.mu — call spokesSnapshot() under the
+// lock first, then release h.mu before calling this function.
+func (h *Hub) buildCombinedGraph(spokes map[string]spokeEntry) discovery.Graph {
 	var allDevices []discovery.Device
 	var allEdges []discovery.Edge
 
-	for _, entry := range h.spokes {
+	for _, entry := range spokes {
 		allDevices = append(allDevices, entry.payload.Devices...)
 		for _, e := range entry.payload.Edges {
 			allEdges = append(allEdges, e)
@@ -242,7 +277,7 @@ func (h *Hub) combinedGraphLocked() discovery.Graph {
 		proto         string
 	}
 	oosIndex := make(map[oosKey][]oosVal)
-	for _, entry := range h.spokes {
+	for _, entry := range spokes {
 		for _, n := range entry.payload.OutOfScope {
 			k := oosKey{normalizeDeviceName(n.ReportingDevice), normalizeDeviceName(n.NeighbourHint)}
 			oosIndex[k] = append(oosIndex[k], oosVal{n.ReportingPort, n.Proto})
@@ -374,11 +409,10 @@ func (h *Hub) evictSilentSpokes() {
 		)
 	}
 	if len(evicted) > 0 {
-		// Re-acquire h.mu only for the graph build so the Reconcile+sort pass
-		// does not block concurrent handlePush calls for its full duration.
 		h.mu.Lock()
-		combined := h.combinedGraphLocked()
+		spokes := h.spokesSnapshot()
 		h.mu.Unlock()
+		combined := h.buildCombinedGraph(spokes)
 		h.publishMetrics(combined, false)
 		h.writeSnapshotAsync(combined)
 	}
