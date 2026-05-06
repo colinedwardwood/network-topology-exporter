@@ -9,40 +9,89 @@ on:
 
 permissions:
   contents: read
+  packages: write  # needed for ghcr.io push on release
 
 jobs:
 
   build-test:
-    name: build + test
+    name: build + unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.24'
           cache: true
+
+      - name: go vet
+        run: go vet ./...
+
       - name: go build
         run: go build ./...
-      - name: go test
-        run: go test ./... -race -coverprofile=coverage.out
+
+      - name: unit tests
+        run: go test ./... -race -count=1 -coverprofile=coverage.out
+
       - name: upload coverage
         uses: actions/upload-artifact@v4
         with:
           name: coverage
           path: coverage.out
 
+  integration-test:
+    name: integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: integration tests
+        run: go test ./tests/integration/... -tags integration -race -count=1 -timeout 60s
+
   lint:
     name: golangci-lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.24'
           cache: true
+
       - uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.62
+          version: v1.64
+
+  helm-lint:
+    name: helm lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.0
+
+      - name: helm lint
+        run: helm lint deploy/helm/topology-exporter/
+
+      - name: helm template (default values)
+        run: helm template test deploy/helm/topology-exporter/ > /dev/null
+
+      - name: helm template (all features enabled)
+        run: |
+          helm template test deploy/helm/topology-exporter/ \
+            --set persistence.enabled=true \
+            --set serviceMonitor.enabled=true \
+            --set prometheusRule.enabled=true \
+            --set service.hubEnabled=true \
+            > /dev/null
 
   docker:
     name: docker build
@@ -50,6 +99,74 @@ jobs:
     needs: [build-test, lint]
     steps:
       - uses: actions/checkout@v4
+
       - uses: docker/setup-buildx-action@v3
+
       - name: docker build (no push)
-        run: docker build -t network-topology-exporter:ci .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: network-topology-exporter:ci
+          build-args: |
+            VERSION=ci
+            COMMIT=${{ github.sha }}
+            DATE=${{ github.event.head_commit.timestamp }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-test, integration-test, lint, helm-lint, docker]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - name: build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ github.event.head_commit.timestamp }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: go build release binary
+        run: |
+          CGO_ENABLED=0 go build -trimpath \
+            -ldflags "-s -w \
+              -X github.com/colinedwardwood/network-topology-exporter/internal/version.Version=${{ github.ref_name }} \
+              -X github.com/colinedwardwood/network-topology-exporter/internal/version.Commit=${{ github.sha }} \
+              -X github.com/colinedwardwood/network-topology-exporter/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o bin/topology-exporter-linux-amd64 \
+            ./cmd/topology-exporter
+
+      - name: create github release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: bin/topology-exporter-linux-amd64
+          generate_release_notes: true
