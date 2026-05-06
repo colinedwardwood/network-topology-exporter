@@ -327,8 +327,10 @@ func TestHubOOSNoMatchProducesNoEdge(t *testing.T) {
 
 // TestHubConcurrentPushAndEviction exercises concurrent combinedGraphLocked and
 // publishMetrics calls to surface data races under the race detector. Run with
-// `go test -race ./internal/federation/...`.
-func TestHubConcurrentPushAndEviction(_ *testing.T) {
+// `go test -race ./internal/federation/...`. The test body makes no assertions
+// beyond the race detector; it is intentionally a harness, not a correctness test.
+func TestHubConcurrentPushAndEviction(t *testing.T) {
+	t.Parallel()
 	h := newTestHub(nil)
 
 	const goroutines = 20

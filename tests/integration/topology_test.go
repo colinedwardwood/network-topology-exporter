@@ -222,8 +222,14 @@ func TestMetricsEmittedAfterReconcile(t *testing.T) {
 	defer cancel()
 
 	tout := 3 * time.Second
-	edgesA, _, _ := lldp.Walk(ctx, snmpParams(addrA, tout), "sw-a", nil)
-	edgesB, _, _ := lldp.Walk(ctx, snmpParams(addrB, tout), "sw-b", nil)
+	edgesA, _, err := lldp.Walk(ctx, snmpParams(addrA, tout), "sw-a", nil)
+	if err != nil {
+		t.Fatalf("lldp.Walk sw-a: %v", err)
+	}
+	edgesB, _, err := lldp.Walk(ctx, snmpParams(addrB, tout), "sw-b", nil)
+	if err != nil {
+		t.Fatalf("lldp.Walk sw-b: %v", err)
+	}
 
 	reconEdges, _ := graph.Reconcile(append(edgesA, edgesB...))
 
