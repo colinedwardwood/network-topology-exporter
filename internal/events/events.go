@@ -39,6 +39,7 @@ func (l *Logger) EmitConflicts(ctx context.Context, conflicts []graph.Conflict) 
 			"src_port", c.SrcPort,
 			"sources", c.Sources,
 			"edge_count", len(c.Edges),
+			"edges", c.Edges,
 		)
 	}
 }
