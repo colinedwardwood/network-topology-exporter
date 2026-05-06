@@ -22,6 +22,12 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/snapshot"
 )
 
+const (
+	maxDevicesPerPush       = 10_000
+	maxEdgesPerPush         = 50_000
+	hubSnapshotWriteTimeout = 30 * time.Second
+)
+
 type spokeEntry struct {
 	payload  SpokePayload
 	lastSeen time.Time
@@ -86,7 +92,7 @@ func (h *Hub) Serve(ctx context.Context) error {
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		ClientCAs:    caPool,
 		Certificates: []tls.Certificate{serverCert},
-		MinVersion:   tls.VersionTLS12,
+		MinVersion:   tls.VersionTLS13,
 	}
 
 	mux := http.NewServeMux()
@@ -96,6 +102,8 @@ func (h *Hub) Serve(ctx context.Context) error {
 		Addr:              h.cfg.Hub.ListenAddr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      10 * time.Second,
 	}
 
 	ln, err := net.Listen("tcp", h.cfg.Hub.ListenAddr)
@@ -127,10 +135,14 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var payload SpokePayload
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<20)) // 64 MiB
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<20)) // 16 MiB
 	if err := dec.Decode(&payload); err != nil {
 		h.logger.Warn("hub: malformed spoke payload", "error", err)
 		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if len(payload.Devices) > maxDevicesPerPush || len(payload.Edges) > maxEdgesPerPush {
+		http.Error(w, fmt.Sprintf("payload exceeds limits (max %d devices, %d edges)", maxDevicesPerPush, maxEdgesPerPush), http.StatusRequestEntityTooLarge)
 		return
 	}
 	if payload.SpokeID == "" {
@@ -180,7 +192,7 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 	// LD-13: clear GraphStale atomically inside publishMu on the first live push
 	// so a concurrent scrape never sees fresh edges alongside GraphStale=1.
 	h.publishMetrics(combined, !h.firstLive.Swap(true))
-	h.writeSnapshot(combined)
+	h.writeSnapshotAsync(combined)
 
 	h.logger.Info("hub: spoke push accepted",
 		"spoke_id", payload.SpokeID,
@@ -368,7 +380,7 @@ func (h *Hub) evictSilentSpokes() {
 		combined := h.combinedGraphLocked()
 		h.mu.Unlock()
 		h.publishMetrics(combined, false)
-		h.writeSnapshot(combined)
+		h.writeSnapshotAsync(combined)
 	}
 }
 
@@ -419,6 +431,26 @@ func (h *Hub) writeSnapshot(g discovery.Graph) {
 		return
 	}
 	h.m.SnapshotLastWrittenUnix.Set(float64(time.Now().Unix()))
+}
+
+// writeSnapshotAsync runs writeSnapshot in a background goroutine with a
+// timeout so an NFS stall cannot block handlePush or evictSilentSpokes.
+func (h *Hub) writeSnapshotAsync(g discovery.Graph) {
+	if h.snapshotPath == "" {
+		return
+	}
+	go func(g discovery.Graph) {
+		done := make(chan struct{}, 1)
+		go func() {
+			h.writeSnapshot(g)
+			done <- struct{}{}
+		}()
+		select {
+		case <-done:
+		case <-time.After(hubSnapshotWriteTimeout):
+			h.logger.Warn("hub: snapshot write timed out (NFS stall?)", "timeout", hubSnapshotWriteTimeout)
+		}
+	}(g)
 }
 
 // normalizeDeviceName lowercases s and strips everything from the first dot
