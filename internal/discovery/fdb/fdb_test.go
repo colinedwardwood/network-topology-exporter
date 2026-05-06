@@ -353,8 +353,13 @@ func TestDiscoverVlanIDs(t *testing.T) {
 		Community: "public",
 		Timeout:   3 * time.Second,
 	}
+	client, err := snmputil.Open(p)
+	if err != nil {
+		t.Fatalf("snmputil.Open: %v", err)
+	}
+	defer client.Conn.Close()
 
-	ids := discoverVlanIDs(context.Background(), p)
+	ids := discoverVlanIDs(context.Background(), client)
 	want := []int{1, 10, 100}
 	if len(ids) != len(want) {
 		t.Fatalf("discoverVlanIDs returned %v, want %v", ids, want)
