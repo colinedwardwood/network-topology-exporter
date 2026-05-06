@@ -87,6 +87,24 @@ A single instance covers one contiguous CIDR range. Links that cross a boundary 
 
 Federation runbook (mTLS setup, tuning, troubleshooting): [`docs/operator/federation.md`](docs/operator/federation.md).
 
+## Development
+
+```bash
+make test               # unit tests (no external deps)
+make test-integration   # integration tests (in-process SNMP agents + federation mTLS)
+make lint               # golangci-lint
+make build              # binary → bin/topology-exporter
+make docker             # container image
+```
+
+End-to-end tests require Docker and [containerlab](https://containerlab.dev/install/):
+
+```bash
+make e2e-image          # build the lightweight Alpine test node image (once)
+make test-e2e           # e2e tests: lldp + snmp + binary exporter + federation spoke/hub
+make test-e2e-srl       # e2e tests against Nokia SR Linux (x86-64, pulls srlinux:24.7.2)
+```
+
 ## Architecture
 
 See [`docs/architecture.md`](docs/architecture.md) for the module layout and discovery cycle. Clean-room development rules: [`CONTRIBUTING.md`](CONTRIBUTING.md).
