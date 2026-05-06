@@ -30,8 +30,6 @@
 package discovery
 
 import (
-	"context"
-	"net"
 	"time"
 )
 
@@ -125,23 +123,6 @@ type OutOfScopeNeighbour struct {
 	Proto           string // discovery protocol that reported this neighbour (lldp, cdp, …)
 	FirstSeen       time.Time
 	LastSeen        time.Time
-}
-
-// Resolver is the LD-12 credential-resolution contract. Resolve returns the
-// ordered profile list to try for ip; CachedProfile, RecordSuccess, and
-// RecordFailure manage the per-device winning-profile cache that is persisted
-// in the snapshot (LD-13). Cache keys are IP strings, not sysNames, so the
-// fast path is available before the SNMP walk that would reveal the sysName.
-// AcquireTrial, LoadCache, and SnapshotCache are the rate-limiter and
-// snapshot-persistence hooks called by the discovery loop.
-type Resolver interface {
-	Resolve(ip net.IP) []string
-	CachedProfile(id string) (string, bool)
-	RecordSuccess(id, profileName string)
-	RecordFailure(id string)
-	AcquireTrial(ctx context.Context) error
-	LoadCache(cache map[string]string)
-	SnapshotCache() map[string]string
 }
 
 // Graph is the reconciled view of the network at one point in time. It's
