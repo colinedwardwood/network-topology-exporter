@@ -23,10 +23,10 @@ import (
 )
 
 const (
-	maxDevicesPerPush       = 10_000
-	maxEdgesPerPush         = 50_000
-	hubSnapshotWriteTimeout = 30 * time.Second
+	maxDevicesPerPush = 10_000
+	maxEdgesPerPush   = 50_000
 )
+
 
 type spokeEntry struct {
 	payload  SpokePayload
@@ -38,14 +38,16 @@ type spokeEntry struct {
 // Prometheus metrics with the unified topology. Per LD-16, spokes push;
 // the hub never polls spokes.
 type Hub struct {
-	cfg          config.FederationConfig
-	mu           sync.Mutex
-	publishMu    sync.Mutex // serialises Reset+repopulate to prevent interleaved scrape gaps
-	spokes       map[string]spokeEntry
-	m            *metrics.Metrics
-	logger       *slog.Logger
-	snapshotPath string
-	firstLive    atomic.Bool // set to true on the first live publishMetrics call
+	cfg             config.FederationConfig
+	mu              sync.Mutex
+	publishMu       sync.Mutex // serialises Reset+repopulate to prevent interleaved scrape gaps
+	spokes          map[string]spokeEntry
+	m               *metrics.Metrics
+	logger          *slog.Logger
+	snapshotPath    string
+	firstLive       atomic.Bool // set to true on the first live publishMetrics call
+	snapshotWriteFn      func(string, snapshot.File) error
+	snapshotWriteTimeout time.Duration
 }
 
 // NewHub constructs a Hub ready to accept spoke pushes. snapshotPath enables
@@ -55,11 +57,13 @@ func NewHub(cfg config.FederationConfig, m *metrics.Metrics, logger *slog.Logger
 		logger = slog.Default()
 	}
 	return &Hub{
-		cfg:          cfg,
-		spokes:       make(map[string]spokeEntry),
-		m:            m,
-		logger:       logger,
-		snapshotPath: snapshotPath,
+		cfg:                  cfg,
+		spokes:               make(map[string]spokeEntry),
+		m:                    m,
+		logger:               logger,
+		snapshotPath:         snapshotPath,
+		snapshotWriteFn:      snapshot.Write,
+		snapshotWriteTimeout: 30 * time.Second,
 	}
 }
 
@@ -449,6 +453,14 @@ func (h *Hub) publishMetrics(g discovery.Graph, clearStale bool) {
 	}
 }
 
+// IsReady reports whether the hub has received at least one live spoke push.
+// Use this as the readiness signal for Kubernetes readiness probes: the hub
+// can serve /metrics from the startup snapshot immediately, but it is only
+// "ready" once at least one spoke has confirmed its topology.
+func (h *Hub) IsReady() bool {
+	return h.firstLive.Load()
+}
+
 // writeSnapshot persists the hub's current graph to disk (LD-13). A no-op
 // when snapshotPath is empty. Hub snapshots omit credential cache and
 // unconfirmed-age counters; those are spoke-side concerns.
@@ -460,7 +472,7 @@ func (h *Hub) writeSnapshot(g discovery.Graph) {
 		Devices: g.Devices,
 		Edges:   g.Edges,
 	}
-	if err := snapshot.Write(h.snapshotPath, f); err != nil {
+	if err := h.snapshotWriteFn(h.snapshotPath, f); err != nil {
 		h.logger.Error("hub: snapshot write failed", "error", err)
 		return
 	}
@@ -481,8 +493,8 @@ func (h *Hub) writeSnapshotAsync(g discovery.Graph) {
 		}()
 		select {
 		case <-done:
-		case <-time.After(hubSnapshotWriteTimeout):
-			h.logger.Warn("hub: snapshot write timed out (NFS stall?)", "timeout", hubSnapshotWriteTimeout)
+		case <-time.After(h.snapshotWriteTimeout):
+			h.logger.Warn("hub: snapshot write timed out (NFS stall?)", "timeout", h.snapshotWriteTimeout)
 		}
 	}(g)
 }

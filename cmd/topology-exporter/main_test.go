@@ -425,6 +425,30 @@ func TestEmitBoundaryObservations(t *testing.T) {
 	}
 }
 
+// TestReadyzHandlerNotReady verifies that /readyz returns 503 before the first
+// cycle or spoke push has completed.
+func TestReadyzHandlerNotReady(t *testing.T) {
+	handler := newReadyzHandler(func() bool { return false })
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503 when not ready", rec.Code)
+	}
+}
+
+// TestReadyzHandlerReady verifies that /readyz returns 200 once the readiness
+// function returns true.
+func TestReadyzHandlerReady(t *testing.T) {
+	handler := newReadyzHandler(func() bool { return true })
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 when ready", rec.Code)
+	}
+}
+
 // TestPublishInventoryMetrics verifies that publishInventoryMetrics populates
 // DeviceInfo, TopologyEdgeInfo, and OutOfScopeNeighboursTotal, and that a
 // second call with an empty graph resets the series to reflect the new state.
@@ -496,6 +520,7 @@ func TestRunDiscoveryLoopClearsGraphStale(t *testing.T) {
 
 	m := metrics.New()
 	var status atomic.Pointer[cycleStatus]
+	var ready atomic.Bool
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -503,7 +528,7 @@ func TestRunDiscoveryLoopClearsGraphStale(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runDiscoveryLoop(ctx, slog.Default(), cfg, m, &status, nil)
+		runDiscoveryLoop(ctx, slog.Default(), cfg, m, &status, &ready, nil)
 	}()
 
 	// Poll until GraphStale is cleared — set to 0 after the first successful cycle.
@@ -520,6 +545,9 @@ func TestRunDiscoveryLoopClearsGraphStale(t *testing.T) {
 				<-done
 				if s := status.Load(); s == nil {
 					t.Error("cycleStatus was never set after first cycle")
+				}
+				if !ready.Load() {
+					t.Error("ready flag was not set after first cycle")
 				}
 				return
 			}
