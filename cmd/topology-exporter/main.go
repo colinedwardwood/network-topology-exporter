@@ -34,6 +34,7 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/ospf"
 	snmpwalk "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
 	"github.com/colinedwardwood/network-topology-exporter/internal/events"
+	"github.com/colinedwardwood/network-topology-exporter/internal/federation"
 	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
 	"github.com/colinedwardwood/network-topology-exporter/internal/snapshot"
@@ -118,12 +119,60 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	var discoveryDone sync.WaitGroup
-	discoveryDone.Add(1)
-	go func() {
-		defer discoveryDone.Done()
-		runDiscoveryLoop(ctx, logger, cfg, m, &status)
-	}()
+	var workerDone sync.WaitGroup
+
+	switch cfg.Federation.Role {
+	case "hub":
+		// Hub mode: pure aggregator — no local SNMP discovery. The hub server
+		// exposes /spoke/push on a separate mTLS listener (LD-20).
+		hub := federation.NewHub(cfg.Federation, m, logger, cfg.Snapshot.Path)
+
+		// LD-13: load snapshot so the hub can serve stale-but-valid metrics
+		// (GraphStale=1) until the first live spoke push arrives.
+		m.GraphStale.Set(1)
+		hubSnap, err := snapshot.Load(cfg.Snapshot.Path)
+		if err != nil {
+			if errors.Is(err, snapshot.ErrVersionMismatch) {
+				logger.Warn("hub snapshot version mismatch, cold start", "path", cfg.Snapshot.Path, "error", err)
+			} else {
+				logger.Warn("hub snapshot load failed, cold start", "path", cfg.Snapshot.Path, "error", err)
+			}
+		}
+		if hubSnap != nil {
+			hub.RestoreGraph(discovery.Graph{
+				Devices: hubSnap.Devices,
+				Edges:   hubSnap.Edges,
+			})
+			logger.Info("hub snapshot loaded", "devices", len(hubSnap.Devices), "edges", len(hubSnap.Edges))
+			m.SnapshotLoadedDevicesTotal.Set(float64(len(hubSnap.Devices)))
+		}
+
+		workerDone.Add(1)
+		go func() {
+			defer workerDone.Done()
+			if err := hub.Serve(ctx); err != nil && ctx.Err() == nil {
+				logger.Error("hub federation server error", "error", err)
+				cancel()
+			}
+		}()
+	default: // standalone, uncoordinated, spoke
+		// Build the spoke client now so TLS errors surface at startup, not
+		// mid-cycle.
+		var spoke *federation.Spoke
+		if cfg.Federation.Role == "spoke" {
+			var err error
+			spoke, err = federation.NewSpoke(cfg.Federation, logger, m)
+			if err != nil {
+				logger.Error("building federation spoke", "error", err)
+				os.Exit(1)
+			}
+		}
+		workerDone.Add(1)
+		go func() {
+			defer workerDone.Done()
+			runDiscoveryLoop(ctx, logger, cfg, m, &status, spoke)
+		}()
+	}
 
 	go func() {
 		logger.Info("http server listening", "addr", *listenAddr)
@@ -142,7 +191,7 @@ func main() {
 		logger.Error("http shutdown error", "error", err)
 	}
 	drainDone := make(chan struct{})
-	go func() { discoveryDone.Wait(); close(drainDone) }()
+	go func() { workerDone.Wait(); close(drainDone) }()
 	select {
 	case <-drainDone:
 	case <-time.After(cfg.Discovery.TimeoutPerDevice + 5*time.Second):
@@ -156,8 +205,9 @@ func main() {
 // periodic cycles. Each cycle probes all configured targets concurrently
 // under the LD-12 rate limiter, reconciles the resulting graph, diffs
 // against the previous cycle, emits change events, updates metrics, and
-// writes a new snapshot.
-func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Config, m *metrics.Metrics, status *atomic.Pointer[cycleStatus]) {
+// writes a new snapshot. When spoke is non-nil (federation.role: spoke),
+// it also pushes the pre-reconciled graph to the hub after each cycle.
+func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Config, m *metrics.Metrics, status *atomic.Pointer[cycleStatus], spoke *federation.Spoke) {
 	evLogger := events.New(logger)
 
 	// LD-13: load snapshot, serve stale-but-valid metrics until first live cycle.
@@ -204,13 +254,13 @@ func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Conf
 
 	cycle := func() {
 		start := time.Now()
-		newGraph, newAges, conflicts := runCycle(ctx, logger, cfg, m, resolver, allowedNets, ages)
+		newGraph, newAges, conflicts, deviceErrors := runCycle(ctx, logger, cfg, m, resolver, allowedNets, ages)
 		if ctx.Err() != nil {
 			return
 		}
 		status.Store(&cycleStatus{
 			LastCycleAt:  time.Now(),
-			DeviceErrors: int64(len(cfg.Targets) - len(newGraph.Devices)),
+			DeviceErrors: int64(deviceErrors),
 		})
 		changes := graph.Diff(prevGraph.Edges, newGraph.Edges)
 		if len(changes) > 0 {
@@ -237,7 +287,9 @@ func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Conf
 		m.GraphStale.Set(0)
 		m.DiscoveryCycleDuration.Observe(time.Since(start).Seconds())
 
-		// LD-13: write snapshot.
+		// LD-13: write snapshot in a goroutine with a timeout so an NFS stall
+		// cannot block the discovery cycle. f is passed by value so the next
+		// cycle cannot mutate the data while the write is in progress.
 		credCache := resolver.SnapshotCache()
 		f := snapshot.File{
 			Devices:         newGraph.Devices,
@@ -246,10 +298,40 @@ func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Conf
 			CredentialCache: credCache,
 			UnconfirmedAges: graph.EdgeKeysToAges(ages),
 		}
-		if err := snapshot.Write(cfg.Snapshot.Path, f); err != nil {
-			logger.Error("snapshot write failed", "error", err)
-		} else {
-			m.SnapshotLastWrittenUnix.Set(float64(time.Now().Unix()))
+		go func(f snapshot.File) {
+			done := make(chan error, 1)
+			go func() { done <- snapshot.Write(cfg.Snapshot.Path, f) }()
+			select {
+			case err := <-done:
+				if err != nil {
+					logger.Error("snapshot write failed", "error", err)
+				} else {
+					m.SnapshotLastWrittenUnix.Set(float64(time.Now().Unix()))
+				}
+			case <-time.After(30 * time.Second):
+				logger.Warn("snapshot write timed out after 30s (NFS stall?); discovery continues")
+			}
+		}(f)
+
+		// LD-15: uncoordinated mode — emit canonical-pair boundary observations
+		// so a Mimir recording rule can stitch cross-boundary edges.
+		if cfg.Federation.Role == "uncoordinated" {
+			emitBoundaryObservations(newGraph.OutOfScope, m)
+		}
+
+		// LD-16/LD-17: spoke mode — push pre-reconciled graph to hub.
+		if spoke != nil {
+			payload := federation.SpokePayload{
+				SpokeID:    cfg.Federation.Spoke.SpokeID,
+				CycleAt:    time.Now(),
+				Devices:    newGraph.Devices,
+				Edges:      newGraph.Edges,
+				OutOfScope: newGraph.OutOfScope,
+				Ages:       graph.EdgeKeysToAges(ages),
+			}
+			if err := spoke.Push(ctx, payload); err != nil && ctx.Err() == nil {
+				logger.Warn("spoke push failed", "error", err)
+			}
 		}
 	}
 
@@ -267,7 +349,8 @@ func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Conf
 }
 
 // runCycle probes all configured targets concurrently and returns the
-// resulting graph and updated unconfirmed-age counters.
+// resulting graph, updated unconfirmed-age counters, any reconciliation
+// conflicts, and the count of targets that failed discovery.
 func runCycle(
 	ctx context.Context,
 	logger *slog.Logger,
@@ -276,7 +359,7 @@ func runCycle(
 	resolver *credentials.Resolver,
 	allowedNets []*net.IPNet,
 	prevAges map[graph.EdgeKey]int,
-) (discovery.Graph, map[graph.EdgeKey]int, []graph.Conflict) {
+) (discovery.Graph, map[graph.EdgeKey]int, []graph.Conflict, int) {
 	type probeResult struct {
 		device     *discovery.Device
 		edges      []discovery.Edge
@@ -325,31 +408,9 @@ func runCycle(
 				return
 			}
 
-			if err := resolver.AcquireTrial(ctx); err != nil {
-				return
-			}
-
-			params, profileName, ok := resolveParams(cfg, resolver, ip, target)
-			if !ok {
-				logger.Warn("no credential profile found", "target", target.Host)
-				m.CredentialTrialsTotal.WithLabelValues("failed").Inc()
-				mu.Lock()
-				failCount++
-				mu.Unlock()
-				return
-			}
-
-			devCtx, cancel := context.WithTimeout(ctx, cfg.Discovery.TimeoutPerDevice)
-			defer cancel()
-
-			dev, err := snmpwalk.Walk(devCtx, params)
+			dev, params, profileName, err := walkSystemWithCredentials(ctx, cfg, resolver, ip, target)
 			if err != nil {
 				logger.Debug("snmp walk failed", "target", target.Host, "error", err)
-				// Don't invalidate the credential cache on context cancellation
-				// (SIGTERM, timeout): those are not auth failures.
-				if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-					resolver.RecordFailure(ip.String())
-				}
 				m.CredentialTrialsTotal.WithLabelValues("failed").Inc()
 				if errors.Is(err, context.DeadlineExceeded) {
 					m.SNMPWalksTotal.WithLabelValues("timeout").Inc()
@@ -361,6 +422,9 @@ func runCycle(
 				mu.Unlock()
 				return
 			}
+
+			devCtx, cancel := context.WithTimeout(ctx, cfg.Discovery.TimeoutPerDevice)
+			defer cancel()
 
 			resolver.RecordSuccess(ip.String(), profileName)
 			m.CredentialTrialsTotal.WithLabelValues("ok").Inc()
@@ -402,6 +466,12 @@ func runCycle(
 				}
 				m.SNMPWalksTotal.WithLabelValues("ok").Inc()
 				allEdges = append(allEdges, edges...)
+				// Tag each OOS entry with the protocol that reported it so the
+				// boundary_observation_info metric and hub OOS matching have a
+				// proto label.
+				for i := range oos {
+					oos[i].Proto = mod.proto
+				}
 				allOOS = append(allOOS, oos...)
 			}
 
@@ -450,24 +520,27 @@ func runCycle(
 		Devices:    devices,
 		Edges:      reconciledEdges,
 		OutOfScope: allOOS,
-	}, ages, conflicts
+	}, ages, conflicts, int(failCount)
 }
 
-// resolveParams builds an snmpwalk.Params for the given target IP.
-// Returns (params, profileName, true) on success, ("", "", false) when no
-// usable credential is found.
-func resolveParams(cfg *config.Config, resolver *credentials.Resolver, ip net.IP, t config.TargetConfig) (snmpwalk.Params, string, bool) {
+type credentialCandidate struct {
+	params      snmpwalk.Params
+	profileName string
+}
+
+func credentialCandidates(cfg *config.Config, resolver *credentials.Resolver, ip net.IP, t config.TargetConfig) []credentialCandidate {
 	port := uint16(t.Port)
 	if port == 0 {
 		port = 161
 	}
 
-	// Fast path: cached winning profile from a previous cycle.
+	var candidates []credentialCandidate
+	seen := make(map[string]bool)
 	if profileName, ok := resolver.CachedProfile(ip.String()); ok {
 		if p, found := resolver.Profile(profileName); found {
-			params, err := profileToParams(ip, port, cfg.Discovery.TimeoutPerDevice, p)
-			if err == nil {
-				return params, profileName, true
+			if params, err := profileToParams(ip, port, cfg.Discovery.TimeoutPerDevice, p); err == nil {
+				candidates = append(candidates, credentialCandidate{params: params, profileName: profileName})
+				seen[profileName] = true
 			}
 		}
 	}
@@ -479,27 +552,58 @@ func resolveParams(cfg *config.Config, resolver *credentials.Resolver, ip net.IP
 		if community == "" {
 			community = "public"
 		}
-		return snmpwalk.Params{
-			IP:        ip,
-			Port:      port,
-			Timeout:   cfg.Discovery.TimeoutPerDevice,
-			Community: community,
-		}, "", true
+		return append(candidates, credentialCandidate{
+			params: snmpwalk.Params{
+				IP:        ip,
+				Port:      port,
+				Timeout:   cfg.Discovery.TimeoutPerDevice,
+				Community: community,
+			},
+		})
 	}
 
-	// Trial path: try each profile in resolve order.
-	names := resolver.Resolve(ip)
-	for _, name := range names {
+	for _, name := range resolver.Resolve(ip) {
+		if seen[name] {
+			continue
+		}
 		p, ok := resolver.Profile(name)
 		if !ok {
 			continue
 		}
 		params, err := profileToParams(ip, port, cfg.Discovery.TimeoutPerDevice, p)
+		if err != nil {
+			continue
+		}
+		candidates = append(candidates, credentialCandidate{params: params, profileName: name})
+		seen[name] = true
+	}
+	return candidates
+}
+
+func walkSystemWithCredentials(ctx context.Context, cfg *config.Config, resolver *credentials.Resolver, ip net.IP, t config.TargetConfig) (*discovery.Device, snmpwalk.Params, string, error) {
+	candidates := credentialCandidates(cfg, resolver, ip, t)
+	if len(candidates) == 0 {
+		return nil, snmpwalk.Params{}, "", errors.New("no usable credential profiles")
+	}
+
+	var lastErr error
+	for _, c := range candidates {
+		if err := resolver.AcquireTrial(ctx); err != nil {
+			return nil, snmpwalk.Params{}, "", err
+		}
+		trialCtx, cancel := context.WithTimeout(ctx, cfg.Discovery.TimeoutPerDevice)
+		dev, err := snmpwalk.Walk(trialCtx, c.params)
+		cancel()
 		if err == nil {
-			return params, name, true
+			return dev, c.params, c.profileName, nil
+		}
+		lastErr = err
+		if errors.Is(err, context.Canceled) {
+			return nil, snmpwalk.Params{}, "", err
 		}
 	}
-	return snmpwalk.Params{}, "", false
+	resolver.RecordFailure(ip.String())
+	return nil, snmpwalk.Params{}, "", lastErr
 }
 
 func profileToParams(ip net.IP, port uint16, timeout time.Duration, p config.CredentialProfile) (snmpwalk.Params, error) {
@@ -565,6 +669,27 @@ type module struct {
 	proto   string
 	enabled bool
 	walk    moduleWalkFn
+}
+
+// emitBoundaryObservations resets and repopulates BoundaryObservationInfo for
+// the current cycle. Each out-of-scope neighbour becomes one series; peer_a is
+// always the alphabetically-smaller endpoint so a simple count == 2 recording
+// rule detects confirmed cross-boundary edges (LD-15).
+func emitBoundaryObservations(oos []discovery.OutOfScopeNeighbour, m *metrics.Metrics) {
+	m.BoundaryObservationInfo.Reset()
+	for _, n := range oos {
+		peerA, peerB := canonicalPair(n.ReportingDevice, n.NeighbourHint)
+		m.BoundaryObservationInfo.WithLabelValues(
+			peerA, peerB, n.ReportingDevice, n.ReportingPort, n.Proto,
+		).Set(1)
+	}
+}
+
+func canonicalPair(a, b string) (string, string) {
+	if a <= b {
+		return a, b
+	}
+	return b, a
 }
 
 func newLogger(level string) *slog.Logger {
