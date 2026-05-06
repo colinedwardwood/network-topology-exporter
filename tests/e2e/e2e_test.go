@@ -7,11 +7,11 @@
 // Prerequisites:
 //   - Docker running (or compatible container runtime)
 //   - containerlab installed: https://containerlab.dev/install/
-//   - ghcr.io/nokia/srlinux:24.7.2 pulled (CI pre-pulls; local: docker pull)
+//   - nte-testnode:latest built: make e2e-image
 //
-// Run locally:
+// Run locally (macOS via Docker):
 //
-//	CLAB_SUDO=1 go test ./tests/e2e/... -tags e2e -v -timeout 15m
+//	make e2e-image && CLAB_DOCKER=1 make test-e2e
 //
 // Set CLAB_SUDO=1 when containerlab requires root (Linux default install).
 // Omit it when running as root or when containerlab is in rootless mode.
@@ -84,10 +84,33 @@ func clabRun(args ...string) error {
 	return cmd.Run()
 }
 
-// clabCmd builds an exec.Cmd for containerlab, prepending sudo when
-// CLAB_SUDO is set (required on most Linux installs where containerlab
-// needs elevated privileges for network namespace creation).
+// clabCmd builds an exec.Cmd for a containerlab subcommand. Three modes:
+//
+//   - CLAB_DOCKER=1  — runs via the ghcr.io/srl-labs/clab Docker image;
+//     required on macOS where no native binary exists. Mounts the current
+//     working directory at the same path inside the container so relative
+//     topology file paths resolve correctly.
+//   - CLAB_SUDO=1    — prepends sudo; needed on most Linux installs.
+//   - (neither)      — runs containerlab directly (rootless / already root).
 func clabCmd(args ...string) *exec.Cmd { //nolint:gosec
+	if os.Getenv("CLAB_DOCKER") != "" {
+		wd, _ := os.Getwd()
+		// --pid host: lets containerlab resolve container network namespace
+		// paths via /proc/<pid>/ns/net, which are relative to the host PID
+		// namespace. Without it, containers start but namespace attachment fails.
+		dockerArgs := []string{
+			"run", "--rm", "--privileged",
+			"--network", "host",
+			"--pid", "host",
+			"-v", "/var/run/docker.sock:/var/run/docker.sock",
+			"-v", wd + ":" + wd,
+			"-w", wd,
+			"ghcr.io/srl-labs/clab",
+			"containerlab",
+		}
+		dockerArgs = append(dockerArgs, args...)
+		return exec.Command("docker", dockerArgs...) //nolint:gosec
+	}
 	if os.Getenv("CLAB_SUDO") != "" {
 		return exec.Command("sudo", append([]string{"containerlab"}, args...)...) //nolint:gosec
 	}

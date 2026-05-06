@@ -56,9 +56,13 @@ docker: ## Build the container image
 test-integration: ## Run integration tests (requires no extra dependencies)
 	go test ./tests/integration/... -tags integration -race -count=1 -timeout 60s
 
+.PHONY: e2e-image
+e2e-image: ## Build the lightweight test-node image (Alpine + lldpd + snmpd)
+	docker build -t nte-testnode:latest tests/e2e/testnode/
+
 .PHONY: test-e2e
 test-e2e: ## Run e2e tests against a live containerlab topology (requires Docker + containerlab)
-	CLAB_SUDO=1 go test ./tests/e2e/... -tags e2e -v -count=1 -timeout 15m
+	CLAB_DOCKER=1 go test ./tests/e2e/... -tags e2e -v -count=1 -timeout 15m
 
 .PHONY: clean
 clean: ## Remove build artifacts
