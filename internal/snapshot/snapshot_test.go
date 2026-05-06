@@ -164,6 +164,74 @@ func TestWriteFailsWhenParentIsFile(t *testing.T) {
 	}
 }
 
+// TestQuarantineRollsToNextAvailableSuffix verifies that when both .bad and
+// .bad.1 already exist the quarantine function advances to .bad.2.
+func TestQuarantineRollsToNextAvailableSuffix(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snap.json")
+
+	// Pre-create both .bad and .bad.1 so quarantine must use .bad.2.
+	for _, suffix := range []string{".bad", ".bad.1"} {
+		if err := os.WriteFile(path+suffix, []byte("old"), 0o600); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+	if err := os.WriteFile(path, []byte("{bad json"), 0o600); err != nil {
+		t.Fatalf("write corrupt: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for corrupt JSON, got nil")
+	}
+
+	if _, err := os.Stat(path + ".bad.2"); err != nil {
+		t.Fatalf("expected .bad.2 to exist: %v", err)
+	}
+	// Original .bad and .bad.1 must still be the old content.
+	for _, suffix := range []string{".bad", ".bad.1"} {
+		b, _ := os.ReadFile(path + suffix)
+		if string(b) != "old" {
+			t.Errorf("%s was overwritten; want %q, got %q", suffix, "old", string(b))
+		}
+	}
+}
+
+// TestWriteCreatesDirectoryIfAbsent verifies that Write creates intermediate
+// directories (MkdirAll behaviour) when the directory does not yet exist.
+func TestWriteCreatesDirectoryIfAbsent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "dir", "snap.json")
+	if err := Write(path, File{}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("Load after Write into new dir: %v", err)
+	}
+}
+
+// TestLoadVersionMismatchQuarantinesFile confirms that a version mismatch
+// moves the file to .bad rather than deleting it silently.
+func TestLoadVersionMismatchQuarantinesFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snap.json")
+	if err := os.WriteFile(path, []byte(`{"version":99}`), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	_, err := Load(path)
+	if !errors.Is(err, ErrVersionMismatch) {
+		t.Fatalf("error = %v, want ErrVersionMismatch", err)
+	}
+
+	// The original file should be gone (renamed to .bad).
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Error("original snap.json should have been quarantined (renamed away)")
+	}
+	if _, statErr := os.Stat(path + ".bad"); statErr != nil {
+		t.Errorf(".bad file should exist after version mismatch: %v", statErr)
+	}
+}
+
 // LD-13: a crash mid-write must leave the previous snapshot intact and the
 // .tmp file behind. We can't simulate a crash, but we can verify the path
 // is updated atomically by writing twice and confirming the second write
