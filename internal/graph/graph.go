@@ -98,8 +98,9 @@ type Conflict struct {
 // into a single ranked edge set.
 //
 // Algorithm:
-//  1. Group edges by their canonical EdgeKey (endpoint-sorted so A→B and B→A
-//     land in the same bucket).
+//  1. Group edges by their normalised EdgeKey (endpoint-sorted, port names
+//     passed through NormalizePortName) so that encoding variants like
+//     "GigabitEthernet0/1" and "Gi0/1" land in the same bucket.
 //  2. Within each bucket, detect bidirectionality: if both endpoint devices
 //     appear as the SrcDevice of at least one observation, the link is
 //     DirectionBidirectional. Otherwise DirectionUnidirectional.
@@ -107,12 +108,10 @@ type Conflict struct {
 //     When multiple edges tie at the winning rank, prefer the one from the
 //     canonical (alphabetically-first) side so output is deterministic.
 //  4. Normalise the chosen edge's SrcDevice/SrcPort/DstDevice/DstPort to the
-//     canonical order so callers and the snapshot see consistent identifiers.
+//     canonical order. Port names are preserved from the winning observation
+//     (not from the normalised group key) so the emitted edge reflects the
+//     original encoding of the highest-precedence source.
 //  5. Sort the result by EdgeKey so output order is deterministic across calls.
-//
-// Conflict surfacing (v0.2+): NeighbourDisagreement and PortNameMismatch are
-// detected between different EdgeKey groups that share the same
-// (SrcDevice, SrcPort). Returning an empty conflicts slice is valid for v0.1.
 func Reconcile(edges []discovery.Edge) ([]discovery.Edge, []Conflict) {
 	if len(edges) == 0 {
 		return nil, nil
@@ -127,7 +126,7 @@ func Reconcile(edges []discovery.Edge) ([]discovery.Edge, []Conflict) {
 	groups := make(map[EdgeKey]*group, len(edges))
 	for i := range edges {
 		e := &edges[i]
-		k := Key(*e)
+		k := normalizedGroupKey(*e)
 		g, ok := groups[k]
 		if !ok {
 			g = &group{
@@ -145,6 +144,7 @@ func Reconcile(edges []discovery.Edge) ([]discovery.Edge, []Conflict) {
 	}
 
 	result := make([]discovery.Edge, 0, len(groups))
+	resultByNormKey := make(map[EdgeKey]discovery.Edge, len(groups))
 	for k, g := range groups {
 		bidirectional := len(g.sides) >= 2
 		candidates := g.byRank[g.minRank]
@@ -158,10 +158,12 @@ func Reconcile(edges []discovery.Edge) ([]discovery.Edge, []Conflict) {
 			}
 		}
 
-		// Normalise to canonical endpoint order.
+		// Normalise to canonical endpoint order using the chosen edge's own
+		// port names so the emitted edge preserves the original port encoding
+		// from the winning observation (not the normalised group key form).
 		if chosen.SrcDevice != k.SrcDevice {
-			chosen.SrcDevice, chosen.DstDevice = k.SrcDevice, k.DstDevice
-			chosen.SrcPort, chosen.DstPort = k.SrcPort, k.DstPort
+			chosen.SrcDevice, chosen.DstDevice = chosen.DstDevice, chosen.SrcDevice
+			chosen.SrcPort, chosen.DstPort = chosen.DstPort, chosen.SrcPort
 		}
 		if bidirectional {
 			chosen.Direction = discovery.DirectionBidirectional
@@ -169,31 +171,45 @@ func Reconcile(edges []discovery.Edge) ([]discovery.Edge, []Conflict) {
 			chosen.Direction = discovery.DirectionUnidirectional
 		}
 		result = append(result, chosen)
+		resultByNormKey[k] = chosen
 	}
 
 	slices.SortFunc(result, func(a, b discovery.Edge) int {
 		return compareEdgeKey(Key(a), Key(b))
 	})
 
+	// Single pass over groups builds the portNeighbours conflict index.
+	// SrcPort in portKey is normalised so that "Gi0/1" and "GigabitEthernet0/1"
+	// observations land in the same bucket and can be compared for neighbour
+	// disagreement regardless of port name encoding.
+	type portKey struct{ SrcDevice, SrcPort string }
+	type portObservation struct {
+		key       EdgeKey
+		dstDevice string
+	}
+	portNeighbours := make(map[portKey][]portObservation, len(groups))
+	for k, g := range groups {
+		for _, candidates := range g.byRank {
+			for _, observed := range candidates {
+				pk := portKey{observed.SrcDevice, NormalizePortName(observed.SrcPort)}
+				portNeighbours[pk] = append(portNeighbours[pk], portObservation{
+					key:       k,
+					dstDevice: observed.DstDevice,
+				})
+			}
+		}
+	}
+
 	var conflicts []Conflict
 
-	// Index 1: portNeighbours — groups EdgeKeys by (SrcDevice, SrcPort) to find
-	// cases where a single local port claims different neighbour devices.
-	type portKey struct{ SrcDevice, SrcPort string }
-	portNeighbours := make(map[portKey][]EdgeKey, len(groups))
-	for k := range groups {
-		pk := portKey{SrcDevice: k.SrcDevice, SrcPort: k.SrcPort}
-		portNeighbours[pk] = append(portNeighbours[pk], k)
-	}
-	for pk, keys := range portNeighbours {
-		if len(keys) < 2 {
+	for pk, observations := range portNeighbours {
+		if len(observations) < 2 {
 			continue
 		}
-		// Check whether the DstDevice values actually differ.
-		dst := keys[0].DstDevice
+		dst := observations[0].dstDevice
 		allSame := true
-		for _, k := range keys[1:] {
-			if k.DstDevice != dst {
+		for _, obs := range observations[1:] {
+			if obs.dstDevice != dst {
 				allSame = false
 				break
 			}
@@ -201,11 +217,16 @@ func Reconcile(edges []discovery.Edge) ([]discovery.Edge, []Conflict) {
 		if allSame {
 			continue
 		}
-		// Collect deduped sources and the chosen edges from each conflicting group.
 		seenProto := make(map[string]bool)
 		var sources []string
 		var conflictEdges []discovery.Edge
-		for _, k := range keys {
+		seenKey := make(map[EdgeKey]bool)
+		for _, obs := range observations {
+			k := obs.key
+			if seenKey[k] {
+				continue
+			}
+			seenKey[k] = true
 			g := groups[k]
 			for _, c := range g.byRank[g.minRank] {
 				if !seenProto[c.DiscoveryProto] {
@@ -213,12 +234,8 @@ func Reconcile(edges []discovery.Edge) ([]discovery.Edge, []Conflict) {
 					sources = append(sources, c.DiscoveryProto)
 				}
 			}
-			// Find the chosen edge for this key from result.
-			for _, e := range result {
-				if Key(e) == k {
-					conflictEdges = append(conflictEdges, e)
-					break
-				}
+			if e, ok := resultByNormKey[k]; ok {
+				conflictEdges = append(conflictEdges, e)
 			}
 		}
 		slices.Sort(sources)
@@ -231,74 +248,14 @@ func Reconcile(edges []discovery.Edge) ([]discovery.Edge, []Conflict) {
 		})
 	}
 
-	// Index 2: devicePair — groups EdgeKeys by canonical (SrcDevice, DstDevice)
-	// pair (A < B) to find port-name mismatches across protocols.
-	type pairKey struct{ A, B string }
-	devicePair := make(map[pairKey][]EdgeKey, len(groups))
-	for k := range groups {
-		var pk pairKey
-		if k.SrcDevice <= k.DstDevice {
-			pk = pairKey{A: k.SrcDevice, B: k.DstDevice}
-		} else {
-			pk = pairKey{A: k.DstDevice, B: k.SrcDevice}
-		}
-		devicePair[pk] = append(devicePair[pk], k)
-	}
-	for _, keys := range devicePair {
-		if len(keys) < 2 {
-			continue
-		}
-		// Confirm that ports actually differ (not just ordering variation).
-		first := keys[0]
-		mismatch := false
-		for _, k := range keys[1:] {
-			if k.SrcPort != first.SrcPort || k.DstPort != first.DstPort {
-				mismatch = true
-				break
-			}
-		}
-		if !mismatch {
-			continue
-		}
-		var conflictEdges []discovery.Edge
-		for _, k := range keys {
-			for _, e := range result {
-				if Key(e) == k {
-					conflictEdges = append(conflictEdges, e)
-					break
-				}
-			}
-		}
-		// Use the canonical (alphabetically first) device pair for SrcDevice/SrcPort.
-		slices.SortFunc(conflictEdges, func(a, b discovery.Edge) int {
-			return compareEdgeKey(Key(a), Key(b))
-		})
-		ref := conflictEdges[0]
-		conflicts = append(conflicts, Conflict{
-			SrcDevice: ref.SrcDevice,
-			SrcPort:   ref.SrcPort,
-			Kind:      ConflictPortNameMismatch,
-			Edges:     conflictEdges,
-		})
-	}
-
 	if len(conflicts) == 0 {
 		return result, nil
 	}
 	slices.SortFunc(conflicts, func(a, b Conflict) int {
-		if a.SrcDevice != b.SrcDevice {
-			if a.SrcDevice < b.SrcDevice {
-				return -1
-			}
-			return 1
+		if c := strings.Compare(a.SrcDevice, b.SrcDevice); c != 0 {
+			return c
 		}
-		if a.SrcPort < b.SrcPort {
-			return -1
-		}
-		if a.SrcPort > b.SrcPort {
-			return 1
-		}
-		return 0
+		return strings.Compare(a.SrcPort, b.SrcPort)
 	})
 	return result, conflicts
 }
@@ -351,6 +308,62 @@ func edgeMateriallyChanged(before, after discovery.Edge) bool {
 		before.Confidence != after.Confidence ||
 		before.PrecedenceRank != after.PrecedenceRank ||
 		before.LinkKind != after.LinkKind
+}
+
+// portPrefixes maps vendor long-form interface name prefixes to their
+// canonical short form. Ordered longest-first to prevent shorter prefixes
+// matching prematurely (e.g. "GigabitEthernet" before "TenGigabitEthernet").
+var portPrefixes = []struct{ long, short string }{
+	{"HundredGigabitEthernet", "Hu"},
+	{"HundredGigE", "Hu"},
+	{"FortyGigabitEthernet", "Fo"},
+	{"TwentyFiveGigE", "Twe"},
+	{"TenGigabitEthernet", "Te"},
+	{"TwoGigabitEthernet", "Tw"},
+	{"GigabitEthernet", "Gi"},
+	{"FastEthernet", "Fa"},
+	{"Ethernet", "Eth"},
+	{"Management", "Mgmt"},
+	{"Port-channel", "Po"},
+	{"Loopback", "Lo"},
+	{"Tunnel", "Tu"},
+	{"Vlan", "Vl"},
+}
+
+// NormalizePortName maps long-form interface names to their canonical short
+// form so that LLDP and CDP observations for the same physical port land in
+// the same edge group during reconciliation regardless of encoding. Matching
+// is case-insensitive against the prefix table; the suffix (slot/module/port
+// numbers) is preserved verbatim from the input.
+//
+// Ports without a known prefix are returned unchanged, so Junos ge-0/0/0
+// style names pass through without modification.
+func NormalizePortName(name string) string {
+	lower := strings.ToLower(name)
+	for _, p := range portPrefixes {
+		if strings.HasPrefix(lower, strings.ToLower(p.long)) {
+			return p.short + name[len(p.long):]
+		}
+	}
+	return name
+}
+
+// normalizedGroupKey returns the canonical EdgeKey for grouping purposes,
+// with port names passed through NormalizePortName. Used only inside
+// Reconcile so that encoding variants of the same port land in one bucket.
+func normalizedGroupKey(e discovery.Edge) EdgeKey {
+	a := EdgeKey{
+		SrcDevice: e.SrcDevice, SrcPort: NormalizePortName(e.SrcPort),
+		DstDevice: e.DstDevice, DstPort: NormalizePortName(e.DstPort),
+	}
+	b := EdgeKey{
+		SrcDevice: e.DstDevice, SrcPort: NormalizePortName(e.DstPort),
+		DstDevice: e.SrcDevice, DstPort: NormalizePortName(e.SrcPort),
+	}
+	if compareEdgeKey(a, b) <= 0 {
+		return a
+	}
+	return b
 }
 
 // EdgeKey is the LD-14 lifecycle key. Two Edge observations describe the
@@ -421,8 +434,6 @@ func AgeUnconfirmed(current []discovery.Edge, ages map[EdgeKey]int, ttl int) []E
 			delete(ages, k) // reset so a reappearing edge gets a fresh counter
 		}
 	}
-	// Edges that were unconfirmed last cycle but absent this cycle don't
-	// linger in the counter map.
 	for k := range ages {
 		if !seen[k] {
 			delete(ages, k)
