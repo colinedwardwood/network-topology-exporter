@@ -7,6 +7,10 @@ set -e
 RAW=$(hostname)
 SYSNAME=$(echo "$RAW" | sed 's/^clab-[A-Za-z0-9_-]*-//')
 
+# Reset the kernel hostname to the logical name so lldpd advertises the short
+# name (e.g. "spine1") as the LLDP system name TLV, not the full container ID.
+hostname "$SYSNAME"
+
 # Write a minimal snmpd config: SNMPv2c community "public", AgentX master.
 cat > /tmp/snmpd.conf << EOF
 rocommunity public
@@ -25,9 +29,23 @@ for i in $(seq 1 20); do
     sleep 0.5
 done
 
-# -d: foreground (debug) mode  -x: register with AgentX master (snmpd)
-# -S: override sysName so it matches the logical node name, not the container ID.
-# -I !eth0: exclude the containerlab management interface so only the data-plane
-#   links (eth1, eth2, ...) participate in LLDP. Without this, all nodes see
-#   each other via the shared management network, which breaks topology assertions.
-exec lldpd -d -x -S "$SYSNAME" -I '!eth0'
+# containerlab attaches data-plane interfaces (eth1, eth2, ...) after the
+# container starts. Wait until eth1 has carrier (LOWER_UP) before starting
+# lldpd; checking existence alone is not sufficient because lldpd may scan
+# before the link is ready and never pick up the interface via netlink events.
+until ip link show eth1 2>/dev/null | grep -q "LOWER_UP"; do
+    sleep 0.5
+done
+
+# -d: foreground mode (do not daemonize — keeps this script as PID 1 supervisor)
+# -x: register with AgentX master (snmpd)
+# -I eth*,!eth0: include all eth interfaces, exclude eth0 (the containerlab
+#   management interface) so only data-plane links (eth1, eth2, ...) participate
+#   in LLDP. An exclusion-only pattern like !eth0 is broken in lldpd 1.0.18 —
+#   it defaults to "include nothing" unless at least one positive pattern is
+#   present. eth* covers the positive side.
+# System name TLV comes from the kernel hostname, set above via hostname(1).
+lldpd -d -x -I 'eth*,!eth0' &
+
+# Keep this script running as PID 1; exit when any background daemon exits.
+wait
