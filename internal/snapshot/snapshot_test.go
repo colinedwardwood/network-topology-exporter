@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
@@ -88,6 +89,45 @@ func TestLoadCorruptJSON(t *testing.T) {
 	}
 	if _, err := Load(path); err == nil {
 		t.Fatal("expected error for corrupt JSON, got nil")
+	}
+}
+
+func TestLoadCorruptJSONDoesNotOverwriteExistingBadFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "corrupt.json")
+	badPath := path + ".bad"
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatalf("write corrupt snapshot: %v", err)
+	}
+	if err := os.WriteFile(badPath, []byte("previous bad snapshot"), 0o600); err != nil {
+		t.Fatalf("write existing bad snapshot: %v", err)
+	}
+
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for corrupt JSON, got nil")
+	}
+
+	existing, err := os.ReadFile(badPath)
+	if err != nil {
+		t.Fatalf("read existing bad snapshot: %v", err)
+	}
+	if string(existing) != "previous bad snapshot" {
+		t.Fatalf("%s was overwritten with %q", badPath, string(existing))
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	foundQuarantine := false
+	for _, e := range entries {
+		if e.Name() != "corrupt.json.bad" && strings.HasPrefix(e.Name(), "corrupt.json.bad.") {
+			foundQuarantine = true
+			break
+		}
+	}
+	if !foundQuarantine {
+		t.Fatalf("expected corrupt snapshot to be moved to a unique .bad path, entries: %v", entries)
 	}
 }
 
