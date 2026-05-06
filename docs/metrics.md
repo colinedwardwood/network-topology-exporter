@@ -47,6 +47,16 @@ For a 500-device network with an average of 4 links per device and 2 protocols r
 
 This is well within Prometheus defaults. If LLDP and CDP both report the same link, the reconciler collapses them to the highest-precedence source before metric emission — duplicate edges do not multiply series.
 
+## Federation (LD-15–LD-20)
+
+| Metric | Type | Labels | Notes |
+|--------|------|--------|-------|
+| `network_topology_boundary_observation_info` | gauge (always 1) | `peer_a`, `peer_b`, `reporting_device`, `src_port`, `proto` | LD-15 uncoordinated mode only. One series per out-of-scope neighbour, reset each cycle. `peer_a` is always the alphabetically-smaller endpoint. Recording rule: `count by(peer_a, peer_b, proto)(...) == 2` fires when both sides have reported, producing a confirmed cross-boundary edge. |
+| `network_topology_federation_spoke_up` | gauge (0/1) | `spoke_id` | LD-18 hub mode only. 1 while a spoke has pushed within `federation.spoke_timeout`; drops to 0 after eviction. Alert: `network_topology_federation_spoke_up == 0` |
+| `network_topology_federation_spoke_last_push_unix` | gauge | `spoke_id` | LD-18 hub mode only. Wall-clock time of the most recent push from each spoke. Alert: `time() - network_topology_federation_spoke_last_push_unix > federation.spoke_timeout` |
+| `network_topology_federation_spoke_push_failures_total` | counter | (none) | LD-17 spoke mode only. Incremented each time a push attempt exhausts all retries. A non-zero rate means the hub is not receiving topology data from this spoke. |
+| `network_topology_hub_oos_unmatched_total` | gauge | (none) | LD-18 hub mode only. Count of out-of-scope hints received this cycle that could not be matched to any known device name via `normalizeDeviceName`. A value > 0 indicates vendor chassis-id encoding differences; add static `known_inter_domain_links` entries as the reliable workaround. |
+
 ## Recommended alerts
 
 ```promql
