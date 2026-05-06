@@ -29,3 +29,4 @@ vendor/
 # Claude Code agent worktrees and built binaries at repo root
 .claude/worktrees/
 /topology-exporter
+clab-nte-e2e/
