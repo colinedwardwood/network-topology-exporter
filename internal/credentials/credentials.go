@@ -22,9 +22,9 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 )
 
-// Resolver implements discovery.Resolver against the validated config. It is
-// safe for concurrent use; the rate-limiter and the cache are both internally
-// synchronised.
+// Resolver implements the LD-12 credential-resolution contract against the
+// validated config. It is safe for concurrent use; the rate-limiter and the
+// cache are both internally synchronised.
 type Resolver struct {
 	profiles      map[string]config.CredentialProfile // by name
 	exact         map[string][]string                 // ip → profile names
