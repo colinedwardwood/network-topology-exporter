@@ -115,6 +115,31 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  e2e-test:
+    name: e2e tests (containerlab)
+    runs-on: ubuntu-latest
+    # Run on main-branch pushes only — image pull (~1.5 GB) and LLDP convergence
+    # wait (45 s) make this too slow for every PR.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build-test]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: install containerlab
+        run: bash -c "$(curl -sL https://get.containerlab.dev)"
+
+      - name: pull SR Linux image
+        run: docker pull ghcr.io/nokia/srlinux:24.7.2
+
+      - name: e2e tests
+        run: CLAB_SUDO=1 go test ./tests/e2e/... -tags e2e -v -count=1 -timeout 15m
+
   release:
     name: release
     runs-on: ubuntu-latest

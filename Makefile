@@ -52,6 +52,14 @@ tidy: ## go mod tidy
 docker: ## Build the container image
 	docker build -t network-topology-exporter:$(VERSION) -t network-topology-exporter:dev .
 
+.PHONY: test-integration
+test-integration: ## Run integration tests (requires no extra dependencies)
+	go test ./tests/integration/... -tags integration -race -count=1 -timeout 60s
+
+.PHONY: test-e2e
+test-e2e: ## Run e2e tests against a live containerlab topology (requires Docker + containerlab)
+	CLAB_SUDO=1 go test ./tests/e2e/... -tags e2e -v -count=1 -timeout 15m
+
 .PHONY: clean
 clean: ## Remove build artifacts
 	rm -rf bin coverage.out coverage.html
