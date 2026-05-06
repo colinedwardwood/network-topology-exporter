@@ -300,7 +300,7 @@ func TestAgesToEdgeKeys(t *testing.T) {
 func TestAgesToEdgeKeysMalformed(t *testing.T) {
 	in := map[string]int{
 		"sw-a|Gi0/1|sw-b|Gi0/2": 1,
-		"bad-key":                99,
+		"bad-key":               99,
 	}
 	got := AgesToEdgeKeys(in)
 	if len(got) != 1 {
@@ -365,8 +365,37 @@ func TestReconcileConflictNeighbourDisagreement(t *testing.T) {
 	}
 }
 
+func TestReconcileConflictNeighbourDisagreementUsesReportedLocalPort(t *testing.T) {
+	lldpEdge := discovery.Edge{
+		SrcDevice: "zz-sw", SrcPort: "Gi0/1",
+		DstDevice: "aa-neighbour", DstPort: "Gi0/2",
+		DiscoveryProto: "lldp", PrecedenceRank: 1,
+	}
+	cdpEdge := discovery.Edge{
+		SrcDevice: "zz-sw", SrcPort: "Gi0/1",
+		DstDevice: "bb-neighbour", DstPort: "Gi0/3",
+		DiscoveryProto: "cdp", PrecedenceRank: 1,
+	}
+
+	_, conflicts := Reconcile([]discovery.Edge{lldpEdge, cdpEdge})
+
+	if len(conflicts) != 1 {
+		t.Fatalf("expected 1 conflict, got %d: %v", len(conflicts), conflicts)
+	}
+	c := conflicts[0]
+	if c.Kind != ConflictNeighbourDisagreement {
+		t.Fatalf("conflict kind = %q, want %q", c.Kind, ConflictNeighbourDisagreement)
+	}
+	if c.SrcDevice != "zz-sw" || c.SrcPort != "Gi0/1" {
+		t.Fatalf("conflict local endpoint = %s/%s, want zz-sw/Gi0/1", c.SrcDevice, c.SrcPort)
+	}
+}
+
 // Reconcile: two edges for the same device pair with different port-name
-// encodings produce a ConflictPortNameMismatch.
+// encodings ("Gi0/1" vs "GigabitEthernet0/1", "Eth0/1" vs "Ethernet0/1")
+// normalise to the same physical link — one collapsed edge, no false-positive
+// PortNameMismatch conflict. A genuine PortNameMismatch (different dst ports
+// after normalisation) is tested by TestReconcilePortNameMismatchFiresForDifferentPorts.
 func TestReconcileConflictPortNameMismatch(t *testing.T) {
 	lldpEdge := discovery.Edge{
 		SrcDevice: "sw-01", SrcPort: "Gi0/1",
@@ -381,21 +410,17 @@ func TestReconcileConflictPortNameMismatch(t *testing.T) {
 
 	edges, conflicts := Reconcile([]discovery.Edge{lldpEdge, cdpEdge})
 
-	if len(edges) != 2 {
-		t.Fatalf("expected 2 reconciled edges, got %d", len(edges))
+	// After normalisation, "Gi0/1"=="GigabitEthernet0/1" and "Eth0/1"=="Ethernet0/1"
+	// so both observations collapse to a single edge. Both report from sw-01 so
+	// the direction remains unidirectional — bidirectionality requires a reverse
+	// observation from sw-02, which this test intentionally omits.
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 reconciled edge (encoding variants collapse), got %d", len(edges))
 	}
-	found := false
 	for _, c := range conflicts {
 		if c.Kind == ConflictPortNameMismatch {
-			found = true
-			if c.SrcDevice != "sw-01" && c.SrcDevice != "sw-02" {
-				t.Errorf("conflict SrcDevice = %q, want sw-01 or sw-02", c.SrcDevice)
-			}
-			break
+			t.Errorf("unexpected PortNameMismatch for mere encoding difference: %+v", c)
 		}
-	}
-	if !found {
-		t.Fatalf("expected at least one ConflictPortNameMismatch, got %v", conflicts)
 	}
 }
 
@@ -423,5 +448,217 @@ func TestReconcileNoConflictSamePort(t *testing.T) {
 	}
 	if len(conflicts) != 0 {
 		t.Errorf("expected no conflicts for same-port same-neighbour edges, got %v", conflicts)
+	}
+}
+
+func TestReconcileNilInput(t *testing.T) {
+	edges, conflicts := Reconcile(nil)
+	if edges != nil {
+		t.Errorf("Reconcile(nil) edges = %v, want nil", edges)
+	}
+	if conflicts != nil {
+		t.Errorf("Reconcile(nil) conflicts = %v, want nil", conflicts)
+	}
+}
+
+func TestReconcileEmptyInput(t *testing.T) {
+	edges, conflicts := Reconcile([]discovery.Edge{})
+	if len(edges) != 0 {
+		t.Errorf("Reconcile([]) edges = %v, want empty", edges)
+	}
+	if len(conflicts) != 0 {
+		t.Errorf("Reconcile([]) conflicts = %v, want empty", conflicts)
+	}
+}
+
+// ── Port name normalisation ───────────────────────────────────────────────
+
+func TestNormalizePortName(t *testing.T) {
+	cases := []struct{ in, want string }{
+		// Cisco long → short
+		{"GigabitEthernet0/1", "Gi0/1"},
+		{"FastEthernet0/1", "Fa0/1"},
+		{"TenGigabitEthernet1/0/1", "Te1/0/1"},
+		{"TwoGigabitEthernet0/1", "Tw0/1"},
+		{"HundredGigE0/0/0", "Hu0/0/0"},
+		{"HundredGigabitEthernet0/0/0", "Hu0/0/0"},
+		{"FortyGigabitEthernet0/0/0", "Fo0/0/0"},
+		{"TwentyFiveGigE0/0/0", "Twe0/0/0"},
+		{"Ethernet1/1", "Eth1/1"},
+		{"Management0", "Mgmt0"},
+		{"Port-channel1", "Po1"},
+		{"Loopback0", "Lo0"},
+		{"Tunnel1", "Tu1"},
+		{"Vlan10", "Vl10"},
+		// Already-short forms — idempotent
+		{"Gi0/1", "Gi0/1"},
+		{"Fa0/1", "Fa0/1"},
+		{"Te1/0/1", "Te1/0/1"},
+		{"Po1", "Po1"},
+		// Case-insensitive prefix matching
+		{"gigabitethernet0/1", "Gi0/1"},
+		{"GIGABITETHERNET0/1", "Gi0/1"},
+		// Junos-style — pass through unchanged
+		{"ge-0/0/0", "ge-0/0/0"},
+		{"xe-1/0/1", "xe-1/0/1"},
+		{"et-0/0/0", "et-0/0/0"},
+	}
+	for _, tc := range cases {
+		got := NormalizePortName(tc.in)
+		if got != tc.want {
+			t.Errorf("NormalizePortName(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestReconcileCollapsesPortNameEncodings verifies that LLDP "Gi0/1" and CDP
+// "GigabitEthernet0/1" are treated as the same physical port, producing one
+// bidirectional edge with the winning observation's original port names.
+func TestReconcileCollapsesPortNameEncodings(t *testing.T) {
+	edges := []discovery.Edge{
+		{
+			SrcDevice: "sw-a", SrcPort: "Gi0/1",
+			DstDevice: "sw-b", DstPort: "Gi0/2",
+			DiscoveryProto: "lldp", PrecedenceRank: 1,
+			Direction: discovery.DirectionUnidirectional, LinkKind: "ethernet",
+		},
+		{
+			SrcDevice: "sw-b", SrcPort: "GigabitEthernet0/2",
+			DstDevice: "sw-a", DstPort: "GigabitEthernet0/1",
+			DiscoveryProto: "cdp", PrecedenceRank: 2,
+			Direction: discovery.DirectionUnidirectional, LinkKind: "ethernet",
+		},
+	}
+	result, conflicts := Reconcile(edges)
+	if len(result) != 1 {
+		t.Fatalf("edge count = %d, want 1 (encoding variants should collapse)", len(result))
+	}
+	if result[0].Direction != discovery.DirectionBidirectional {
+		t.Errorf("direction = %q, want bidirectional", result[0].Direction)
+	}
+	// Winning observation is LLDP (rank 1 < rank 2); original port names preserved.
+	if result[0].SrcPort != "Gi0/1" || result[0].DstPort != "Gi0/2" {
+		t.Errorf("ports = (%s, %s), want (Gi0/1, Gi0/2)", result[0].SrcPort, result[0].DstPort)
+	}
+	if len(conflicts) != 0 {
+		t.Errorf("conflicts = %v, want none (encoding differences are not conflicts)", conflicts)
+	}
+}
+
+// TestReconcilePortNameMismatchFiresForDifferentPorts — previously this
+// verified that the devicePair check produced a ConflictPortNameMismatch when
+// LLDP and CDP reported different dst ports for the same normalised src port.
+// That check has been removed: it fired false positives for every LAG bond
+// (parallel member links between the same device pair). Two observations from
+// sw-a:Gi0/1 to sw-b on different dst ports still produce two distinct
+// reconciled edges; neither PortNameMismatch nor NeighbourDisagreement fires
+// because the neighbour device (sw-b) is identical in both observations.
+func TestReconcilePortNameMismatchFiresForDifferentPorts(t *testing.T) {
+	edges := []discovery.Edge{
+		{
+			SrcDevice: "sw-a", SrcPort: "Gi0/1",
+			DstDevice: "sw-b", DstPort: "Gi0/2",
+			DiscoveryProto: "lldp", PrecedenceRank: 1,
+			Direction: discovery.DirectionUnidirectional, LinkKind: "ethernet",
+		},
+		{
+			// Same src port (different encoding), different dst port.
+			SrcDevice: "sw-a", SrcPort: "GigabitEthernet0/1",
+			DstDevice: "sw-b", DstPort: "GigabitEthernet0/3",
+			DiscoveryProto: "cdp", PrecedenceRank: 2,
+			Direction: discovery.DirectionUnidirectional, LinkKind: "ethernet",
+		},
+	}
+	result, conflicts := Reconcile(edges)
+	// Two distinct normalised EdgeKeys → two reconciled edges.
+	if len(result) != 2 {
+		t.Errorf("expected 2 reconciled edges (different dst ports = different links), got %d", len(result))
+	}
+	// No PortNameMismatch: the devicePair check has been removed to prevent
+	// false positives on LAG parallel member links.
+	for _, c := range conflicts {
+		if c.Kind == ConflictPortNameMismatch {
+			t.Errorf("unexpected ConflictPortNameMismatch after devicePair detection removal: %+v", c)
+		}
+	}
+}
+
+// TestReconcileMultiLinkLAGNoFalsePositive verifies that two parallel member
+// links between the same device pair (a LAG bond) do not produce a false
+// positive ConflictPortNameMismatch. Previously the devicePair check fired
+// because Gi0/1 ≠ Gi0/2, polluting the network_topology_conflict_total counter
+// in spine-leaf fabrics.
+func TestReconcileMultiLinkLAGNoFalsePositive(t *testing.T) {
+	edges := []discovery.Edge{
+		// Member link 1 — seen from both sides.
+		{
+			SrcDevice: "sw-a", SrcPort: "Gi0/1",
+			DstDevice: "sw-b", DstPort: "Gi0/1",
+			DiscoveryProto: "lldp", PrecedenceRank: 1,
+			Direction: discovery.DirectionUnidirectional, LinkKind: "ethernet",
+		},
+		{
+			SrcDevice: "sw-b", SrcPort: "Gi0/1",
+			DstDevice: "sw-a", DstPort: "Gi0/1",
+			DiscoveryProto: "lldp", PrecedenceRank: 1,
+			Direction: discovery.DirectionUnidirectional, LinkKind: "ethernet",
+		},
+		// Member link 2 — seen from both sides.
+		{
+			SrcDevice: "sw-a", SrcPort: "Gi0/2",
+			DstDevice: "sw-b", DstPort: "Gi0/2",
+			DiscoveryProto: "lldp", PrecedenceRank: 1,
+			Direction: discovery.DirectionUnidirectional, LinkKind: "ethernet",
+		},
+		{
+			SrcDevice: "sw-b", SrcPort: "Gi0/2",
+			DstDevice: "sw-a", DstPort: "Gi0/2",
+			DiscoveryProto: "lldp", PrecedenceRank: 1,
+			Direction: discovery.DirectionUnidirectional, LinkKind: "ethernet",
+		},
+	}
+	result, conflicts := Reconcile(edges)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 reconciled edges for 2-member LAG, got %d: %v", len(result), result)
+	}
+	for _, e := range result {
+		if e.Direction != discovery.DirectionBidirectional {
+			t.Errorf("edge %s:%s↔%s:%s direction = %q, want bidirectional",
+				e.SrcDevice, e.SrcPort, e.DstDevice, e.DstPort, e.Direction)
+		}
+	}
+	if len(conflicts) != 0 {
+		t.Errorf("expected 0 conflicts for LAG parallel links, got %d: %v", len(conflicts), conflicts)
+	}
+}
+
+// TestReconcileNeighbourDisagreementAcrossEncodings verifies that
+// NeighbourDisagreement fires when the same port (under different encodings)
+// names different neighbor devices.
+func TestReconcileNeighbourDisagreementAcrossEncodings(t *testing.T) {
+	edges := []discovery.Edge{
+		{
+			SrcDevice: "sw-a", SrcPort: "Gi0/1",
+			DstDevice: "sw-b", DstPort: "Gi0/2",
+			DiscoveryProto: "lldp", PrecedenceRank: 1,
+			Direction: discovery.DirectionUnidirectional, LinkKind: "ethernet",
+		},
+		{
+			// Same src port (long encoding), different neighbor — genuine disagreement.
+			SrcDevice: "sw-a", SrcPort: "GigabitEthernet0/1",
+			DstDevice: "sw-c", DstPort: "Gi0/1",
+			DiscoveryProto: "cdp", PrecedenceRank: 2,
+			Direction: discovery.DirectionUnidirectional, LinkKind: "ethernet",
+		},
+	}
+	_, conflicts := Reconcile(edges)
+	found := false
+	for _, c := range conflicts {
+		if c.Kind == ConflictNeighbourDisagreement {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected ConflictNeighbourDisagreement for same port naming different neighbors, got %v", conflicts)
 	}
 }
