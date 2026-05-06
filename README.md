@@ -13,7 +13,7 @@ The Prometheus / Grafana stack already covers storage, query, alerting, and visu
 
 ## Status
 
-**Pre-v1, in active development.** v0.1.0 ships the SNMP / LLDP / CDP discovery surface with Prometheus metric emission. BGP / OSPF / FDB land in v0.2.0.
+**Pre-v1, in active development.** SNMP / LLDP / CDP / BGP / OSPF / FDB discovery, graph reconciliation, credential management, snapshot persistence, and multi-instance federation are all implemented.
 
 ## Quickstart
 
@@ -74,6 +74,18 @@ See [`config/example.yaml`](config/example.yaml) for the full schema. Four opera
 - **Credentials are named profiles with rate-limited trial.** Per-IP and per-CIDR assignments resolve before the fallback list; the global trial rate is bounded so cold start doesn't lock devices out. Cold-start runbook: [`docs/operator/cold-start-credentials.md`](docs/operator/cold-start-credentials.md).
 - **The graph survives restarts.** A versioned JSON snapshot reloads on startup so `/metrics` serves the previous edge set immediately with `network_topology_graph_stale=1` until the first live cycle completes.
 - **Unidirectional links expire.** A link reported by only one endpoint for three consecutive cycles is removed and emits a `network_topology_change_total{change_kind="removed"}` increment.
+
+## Federation
+
+A single instance covers one contiguous CIDR range. Links that cross a boundary between ranges are visible to each side independently but neither produces a confirmed bidirectional edge because that requires both endpoint observations in a single reconcile call. Three modes bridge this:
+
+| Mode | How it works |
+|---|---|
+| `uncoordinated` | Each instance emits `network_topology_boundary_observation_info` per OOS neighbour. A Mimir recording rule `count by(peer_a,peer_b,proto)(...) == 2` fires when both sides report — no inter-instance coordination required. |
+| `spoke` | Instances push their reconciled graph to a hub after each cycle. The hub aggregates, re-reconciles across all domains, and emits unified metrics. Requires mTLS. |
+| `hub` | Pure aggregator — no local SNMP discovery. Receives spoke pushes on a separate listener (default `:9101`). |
+
+Federation runbook (mTLS setup, tuning, troubleshooting): [`docs/operator/federation.md`](docs/operator/federation.md).
 
 ## Architecture
 

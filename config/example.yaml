@@ -77,6 +77,46 @@ credentials:
 snapshot:
   path: /var/lib/network-topology-exporter/snapshot.json
 
+# ─── LD-15–LD-20 federation ────────────────────────────────────────────────
+# Three modes beyond standalone:
+#
+# uncoordinated: adds network_topology_boundary_observation_info metric for
+#   Mimir recording-rule stitching. No inter-instance coordination needed.
+#   Recording rule: count by(peer_a,peer_b,proto)(network_topology_boundary_observation_info) == 2
+#
+# spoke: runs normal discovery + pushes pre-reconciled graph to a hub binary
+#   after each cycle (LD-16/LD-17). mTLS is required (LD-20).
+#
+# hub: pure aggregator — no local SNMP discovery. Receives spoke pushes,
+#   reconciles combined graph, emits unified Prometheus metrics.
+#   Exposes /spoke/push on a separate mTLS listener.
+#
+# federation:
+#   role: standalone                  # standalone (default) | uncoordinated | spoke | hub
+#   spoke_timeout: 3m                 # LD-18: evict a silent spoke after this duration
+#
+#   # LD-19: static stitching overrides for boundary ports with inconsistent names.
+#   known_inter_domain_links:
+#     - local_device: sw-dc-a
+#       local_port: Gi0/1
+#       remote_device: sw-dc-b
+#       remote_port: Gi0/2
+#
+#   # Hub-side settings (role: hub). Per LD-20, mTLS is required.
+#   hub:
+#     listen_addr: :9101
+#     tls_ca_cert: /etc/topology-exporter/pki/ca.pem
+#     tls_cert: /etc/topology-exporter/pki/hub.crt
+#     tls_key: /etc/topology-exporter/pki/hub.key
+#
+#   # Spoke-side settings (role: spoke). Per LD-20, mTLS is required.
+#   spoke:
+#     spoke_id: dc-a                  # unique identifier; used in hub metric labels
+#     hub_url: https://hub.example.com:9101
+#     tls_ca_cert: /etc/topology-exporter/pki/ca.pem
+#     tls_cert: /etc/topology-exporter/pki/spoke-dc-a.crt
+#     tls_key: /etc/topology-exporter/pki/spoke-dc-a.key
+
 # ─── Per-device enrichment ─────────────────────────────────────────────────
 # Targets provide enrichment metadata (SNMP port, site label, custom labels)
 # for devices discovered within the CIDR allow-list. The CIDR drives what
