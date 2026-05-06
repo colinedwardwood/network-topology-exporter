@@ -45,7 +45,7 @@ func NewSpoke(cfg config.FederationConfig, logger *slog.Logger, m *metrics.Metri
 	tlsCfg := &tls.Config{
 		RootCAs:      caPool,
 		Certificates: []tls.Certificate{clientCert},
-		MinVersion:   tls.VersionTLS12,
+		MinVersion:   tls.VersionTLS13,
 	}
 	return &Spoke{
 		cfg: cfg,
