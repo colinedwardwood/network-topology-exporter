@@ -26,20 +26,20 @@ import (
 // validated config. It is safe for concurrent use; the rate-limiter and the
 // cache are both internally synchronised.
 type Resolver struct {
-	profiles      map[string]config.CredentialProfile // by name
-	exact         map[string][]string                 // ip → profile names
-	cidrs         []cidrAssignment
-	fallback      []string
-	limiter       *tokenBucket
+	profiles map[string]config.CredentialProfile // by name
+	exact    map[string][]string                 // ip → profile names
+	cidrs    []cidrAssignment
+	fallback []string
+	limiter  *tokenBucket
 
 	mu    sync.RWMutex
 	cache map[string]string // IP string → profile name
 }
 
 type cidrAssignment struct {
-	net      *net.IPNet
+	net       *net.IPNet
 	prefixLen int
-	profiles []string
+	profiles  []string
 }
 
 // New builds a Resolver from validated CredentialsConfig. Returns an error
@@ -161,10 +161,10 @@ func (r *Resolver) AcquireTrial(ctx context.Context) error {
 // second up to a burst of ratePerSecond. Adequate for the LD-12 trial limiter;
 // we don't need a full leaky-bucket library for one-token-per-second granularity.
 type tokenBucket struct {
-	mu          sync.Mutex
-	rate        int
-	tokens      int
-	lastRefill  time.Time
+	mu         sync.Mutex
+	rate       int
+	tokens     int
+	lastRefill time.Time
 }
 
 func newTokenBucket(rate int) *tokenBucket {

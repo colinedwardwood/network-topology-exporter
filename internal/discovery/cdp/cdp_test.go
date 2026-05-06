@@ -211,10 +211,11 @@ func TestWalkEndToEnd(t *testing.T) {
 //
 // ifName: ifIndex 1 → "GigabitEthernet0/1"
 // cdpCacheTable: ifIndex=1, neighIndex=1
-//   col 3 (addrType) = 1 (IPv4)
-//   col 4 (addr)     = 10.0.0.2
-//   col 6 (deviceId) = "remote-sw"
-//   col 7 (devPort)  = "GigabitEthernet0/2"
+//
+//	col 3 (addrType) = 1 (IPv4)
+//	col 4 (addr)     = 10.0.0.2
+//	col 6 (deviceId) = "remote-sw"
+//	col 7 (devPort)  = "GigabitEthernet0/2"
 func buildCDPAgentPDUs() []gsnmp.SnmpPDU {
 	ifNameOID := ".1.3.6.1.2.1.31.1.1.1.1.1"
 	// cdpCacheTable: 1.3.6.1.4.1.9.9.23.1.2.1.1.{col}.{ifIndex}.{neighIndex}
@@ -229,4 +230,3 @@ func buildCDPAgentPDUs() []gsnmp.SnmpPDU {
 		{Name: base + strconv.Itoa(colDevicePort) + "." + idx, Type: gsnmp.OctetString, Value: []byte("GigabitEthernet0/2")},
 	}
 }
-

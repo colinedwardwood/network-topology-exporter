@@ -107,7 +107,7 @@ func TestLoadCorruptJSONDoesNotOverwriteExistingBadFile(t *testing.T) {
 		t.Fatal("expected error for corrupt JSON, got nil")
 	}
 
-	existing, err := os.ReadFile(badPath)
+	existing, err := os.ReadFile(badPath) //nolint:gosec
 	if err != nil {
 		t.Fatalf("read existing bad snapshot: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestQuarantineRollsToNextAvailableSuffix(t *testing.T) {
 	}
 	// Original .bad and .bad.1 must still be the old content.
 	for _, suffix := range []string{".bad", ".bad.1"} {
-		b, _ := os.ReadFile(path + suffix)
+		b, _ := os.ReadFile(path + suffix) //nolint:gosec
 		if string(b) != "old" {
 			t.Errorf("%s was overwritten; want %q, got %q", suffix, "old", string(b))
 		}

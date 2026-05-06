@@ -328,7 +328,7 @@ func TestHubOOSNoMatchProducesNoEdge(t *testing.T) {
 // TestHubConcurrentPushAndEviction exercises concurrent combinedGraphLocked and
 // publishMetrics calls to surface data races under the race detector. Run with
 // `go test -race ./internal/federation/...`.
-func TestHubConcurrentPushAndEviction(t *testing.T) {
+func TestHubConcurrentPushAndEviction(_ *testing.T) {
 	h := newTestHub(nil)
 
 	const goroutines = 20
@@ -630,7 +630,7 @@ func TestHubWriteSnapshotPersistsGraph(t *testing.T) {
 
 // TestHubWriteSnapshotNoopWhenPathEmpty verifies that writeSnapshot is a no-op
 // when snapshotPath is empty (the normal test configuration).
-func TestHubWriteSnapshotNoopWhenPathEmpty(t *testing.T) {
+func TestHubWriteSnapshotNoopWhenPathEmpty(_ *testing.T) {
 	h := newTestHub(nil) // snapshotPath = ""
 	// Should not panic or error; just return immediately.
 	h.writeSnapshot(discovery.Graph{})

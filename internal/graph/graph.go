@@ -47,6 +47,7 @@ import (
 // ChangeKind describes a topology mutation between two cycles.
 type ChangeKind string
 
+// ChangeKind values: the type of topology mutation between cycles.
 const (
 	ChangeAdded   ChangeKind = "added"
 	ChangeRemoved ChangeKind = "removed"

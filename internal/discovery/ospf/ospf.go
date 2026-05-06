@@ -53,7 +53,7 @@ const (
 
 // ospfNbrTable column numbers (RFC 4750 §11.2).
 const (
-	colNbrIpAddr = "1"
+	colNbrIPAddr = "1"
 	colNbrState  = "6"
 )
 
@@ -75,7 +75,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	if err != nil {
 		return nil, nil, fmt.Errorf("ospf %s: %w", p.IP, err)
 	}
-	defer client.Conn.Close()
+	defer func() { _ = client.Conn.Close() }()
 
 	rows, err := walkOspfNbrTable(ctx, client)
 	if err != nil {
@@ -103,7 +103,7 @@ func walkOspfNbrTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*nb
 			rows[key] = row
 		}
 		switch col {
-		case colNbrIpAddr:
+		case colNbrIPAddr:
 			if b := snmputil.PDUBytes(pdu); len(b) == 4 {
 				ip := make(net.IP, 4)
 				copy(ip, b)

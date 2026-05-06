@@ -124,7 +124,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, _ []*net.I
 	if err != nil {
 		return nil, nil, fmt.Errorf("fdb %s: %w", p.IP, err)
 	}
-	defer client.Conn.Close()
+	defer func() { _ = client.Conn.Close() }()
 
 	entries, err := walkFdbTable(ctx, client)
 	if err != nil {
@@ -307,7 +307,7 @@ func walkVlanCommunityFdbs(ctx context.Context, p snmputil.Params, client *gsnmp
 		}
 		vlanEntries := make(map[string]*fdbEntry)
 		_ = walkFdbTableInto(ctx, client, vlanEntries)
-		client.Conn.Close()
+		_ = client.Conn.Close()
 		for key, e := range vlanEntries {
 			if _, exists := entries[key]; !exists {
 				entries[key] = e

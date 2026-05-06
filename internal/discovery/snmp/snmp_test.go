@@ -342,7 +342,7 @@ func TestOpenConnect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer client.Conn.Close()
+	defer func() { _ = client.Conn.Close() }()
 
 	if client.Target != ip.String() {
 		t.Errorf("Target = %q, want %s", client.Target, ip.String())
@@ -359,7 +359,7 @@ func TestBulkWalkCancelledCtx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer client.Conn.Close()
+	defer func() { _ = client.Conn.Close() }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -409,7 +409,7 @@ func TestBulkWalk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer client.Conn.Close()
+	defer func() { _ = client.Conn.Close() }()
 
 	results, err := BulkWalk(context.Background(), client, "1.3.6.1.2.1.1")
 	if err != nil {

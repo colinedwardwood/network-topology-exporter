@@ -82,7 +82,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	if err != nil {
 		return nil, nil, fmt.Errorf("bgp %s: %w", p.IP, err)
 	}
-	defer client.Conn.Close()
+	defer func() { _ = client.Conn.Close() }()
 
 	peers, err := walkBgpPeerTable(ctx, client)
 	if err != nil {

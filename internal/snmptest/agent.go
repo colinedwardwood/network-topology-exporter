@@ -45,7 +45,7 @@ func Start(t *testing.T, community string, pdus []gsnmp.SnmpPDU) string {
 
 	done := make(chan struct{})
 	t.Cleanup(func() {
-		conn.Close()
+		_ = conn.Close()
 		<-done
 	})
 
@@ -95,7 +95,7 @@ func StartMultiCommunity(t *testing.T, communities map[string][]gsnmp.SnmpPDU) s
 
 	done := make(chan struct{})
 	t.Cleanup(func() {
-		conn.Close()
+		_ = conn.Close()
 		<-done
 	})
 

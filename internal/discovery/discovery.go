@@ -39,7 +39,7 @@ type Device struct {
 	Vendor    string
 	Model     string
 	OSVersion string
-	Site      string            // from per-target enrichment config, not SNMP
+	Site      string // from per-target enrichment config, not SNMP
 	Uptime    time.Duration
 	Labels    map[string]string // free-form labels from per-target enrichment config
 }
@@ -50,8 +50,9 @@ type Device struct {
 // in the graph but at lower precedence per LD-10.
 type Direction string
 
+// Direction values: confirmed from both endpoints or only one.
 const (
-	DirectionBidirectional Direction = "bidirectional"
+	DirectionBidirectional  Direction = "bidirectional"
 	DirectionUnidirectional Direction = "unidirectional"
 )
 
@@ -61,6 +62,7 @@ const (
 // changing this enum.
 type Confidence string
 
+// Confidence bucket values: high for LLDP/CDP direct, medium for FDB indirect, low for heuristics.
 const (
 	ConfidenceHigh   Confidence = "high"
 	ConfidenceMedium Confidence = "medium"
@@ -74,6 +76,7 @@ const (
 // label per LD-10.
 type Adjacency string
 
+// Adjacency values: direct means one MAC on the port; indirect means multiple (downstream switch, hypervisor).
 const (
 	AdjacencyDirect   Adjacency = "direct"
 	AdjacencyIndirect Adjacency = "indirect"
@@ -92,7 +95,7 @@ type Edge struct {
 
 	// LD-10 reconciliation labels. The metric layer maps these directly onto
 	// `network_topology_edge_info` labels.
-	DiscoveryProto string     // "lldp" | "cdp" | "bgp" | "ospf" | "fdb"
+	DiscoveryProto string // "lldp" | "cdp" | "bgp" | "ospf" | "fdb"
 	Direction      Direction
 	Confidence     Confidence
 	Adjacency      Adjacency

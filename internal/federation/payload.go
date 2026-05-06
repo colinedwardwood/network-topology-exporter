@@ -15,10 +15,10 @@ import (
 // cross-domain bidirectionality via name matching. Ages carries the LD-14
 // unconfirmed-link counters so they survive spoke restarts.
 type SpokePayload struct {
-	SpokeID    string                       `json:"spoke_id"`
-	CycleAt    time.Time                    `json:"cycle_at"`
-	Devices    []discovery.Device           `json:"devices"`
-	Edges      []discovery.Edge             `json:"edges"`
+	SpokeID    string                          `json:"spoke_id"`
+	CycleAt    time.Time                       `json:"cycle_at"`
+	Devices    []discovery.Device              `json:"devices"`
+	Edges      []discovery.Edge                `json:"edges"`
 	OutOfScope []discovery.OutOfScopeNeighbour `json:"out_of_scope"`
-	Ages       map[string]int               `json:"ages"` // EdgeKeyString → consecutive unconfirmed cycles (LD-14)
+	Ages       map[string]int                  `json:"ages"` // EdgeKeyString → consecutive unconfirmed cycles (LD-14)
 }

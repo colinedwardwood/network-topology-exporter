@@ -66,7 +66,7 @@ func TestSpokePushSuccess(t *testing.T) {
 
 func TestSpokePushRetryExhaustionIncrementsCounter(t *testing.T) {
 	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -87,7 +87,7 @@ func TestSpokePushRetryExhaustionIncrementsCounter(t *testing.T) {
 }
 
 func TestSpokePushContextCancelledBeforeFirstAttempt(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Error("server should not be reached when context is already cancelled")
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -159,7 +159,7 @@ func TestNewSpokeErrorOnEmptyCAFile(t *testing.T) {
 
 func TestSpokePushContextCancelledDuringRetry(t *testing.T) {
 	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
 		w.WriteHeader(http.StatusInternalServerError)
 	}))

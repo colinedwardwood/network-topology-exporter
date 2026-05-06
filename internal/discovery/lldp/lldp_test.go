@@ -311,15 +311,17 @@ func TestWalkEndToEnd(t *testing.T) {
 // buildLLDPAgentPDUs builds the minimal PDU set for one local port and one remote entry.
 //
 // lldpLocPortTable (1.0.8802.1.1.2.1.3.7.1.{col}.{portNum}):
-//   col 2 (idSubtype) = 5 (interfaceName)
-//   col 3 (id)        = "Ethernet1"
+//
+//	col 2 (idSubtype) = 5 (interfaceName)
+//	col 3 (id)        = "Ethernet1"
 //
 // lldpRemTable (1.0.8802.1.1.2.1.4.1.1.{col}.{timeMark}.{portNum}.{remIndex}):
-//   col 4 (chassisSubtype) = 4 (MAC)
-//   col 5 (chassisID)      = 00:01:02:03:04:05
-//   col 6 (portSubtype)    = 5 (interfaceName)
-//   col 7 (portID)         = "Ethernet2"
-//   col 9 (sysName)        = "spine-01"
+//
+//	col 4 (chassisSubtype) = 4 (MAC)
+//	col 5 (chassisID)      = 00:01:02:03:04:05
+//	col 6 (portSubtype)    = 5 (interfaceName)
+//	col 7 (portID)         = "Ethernet2"
+//	col 9 (sysName)        = "spine-01"
 func buildLLDPAgentPDUs() []gsnmp.SnmpPDU {
 	locBase := ".1.0.8802.1.1.2.1.3.7.1."
 	remBase := ".1.0.8802.1.1.2.1.4.1.1."
@@ -341,4 +343,3 @@ func buildLLDPAgentPDUs() []gsnmp.SnmpPDU {
 		{Name: remBase + "9." + remSuffix, Type: gsnmp.OctetString, Value: []byte("spine-01")},
 	}
 }
-
