@@ -41,6 +41,10 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/version"
 )
 
+// snapshotWriteTimeout caps how long the background snapshot write goroutine
+// waits before declaring an NFS stall and continuing the discovery cycle.
+const snapshotWriteTimeout = 30 * time.Second
+
 type cycleStatus struct {
 	LastCycleAt  time.Time
 	DeviceErrors int64
@@ -309,8 +313,8 @@ func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Conf
 				} else {
 					m.SnapshotLastWrittenUnix.Set(float64(time.Now().Unix()))
 				}
-			case <-time.After(30 * time.Second):
-				logger.Warn("snapshot write timed out after 30s (NFS stall?); discovery continues")
+			case <-time.After(snapshotWriteTimeout):
+				logger.Warn("snapshot write timed out (NFS stall?); discovery continues", "timeout", snapshotWriteTimeout)
 			}
 		}(f)
 
@@ -584,10 +588,11 @@ func credentialCandidates(cfg *config.Config, resolver *credentials.Resolver, ip
 func walkSystemWithCredentials(ctx context.Context, cfg *config.Config, resolver *credentials.Resolver, ip net.IP, t config.TargetConfig) (*discovery.Device, snmpwalk.Params, string, error) {
 	candidates := credentialCandidates(cfg, resolver, ip, t)
 	if len(candidates) == 0 {
-		return nil, snmpwalk.Params{}, "", errors.New("no usable credential profiles")
+		return nil, snmpwalk.Params{}, "", fmt.Errorf("no usable credential profiles for %s", ip)
 	}
 
 	var lastErr error
+	allTimedOut := true // true until we see a non-timeout failure
 	for _, c := range candidates {
 		if err := resolver.AcquireTrial(ctx); err != nil {
 			return nil, snmpwalk.Params{}, "", err
@@ -600,10 +605,19 @@ func walkSystemWithCredentials(ctx context.Context, cfg *config.Config, resolver
 		}
 		lastErr = err
 		if errors.Is(err, context.Canceled) {
+			// Parent context cancelled (SIGTERM) — stop immediately.
 			return nil, snmpwalk.Params{}, "", err
 		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			allTimedOut = false
+		}
 	}
-	resolver.RecordFailure(ip.String())
+	// Don't invalidate the cache when all failures were timeouts: a timeout
+	// means the device was unreachable this cycle (not an auth failure), so
+	// the cached profile is still likely correct.
+	if !allTimedOut {
+		resolver.RecordFailure(ip.String())
+	}
 	return nil, snmpwalk.Params{}, "", lastErr
 }
 
