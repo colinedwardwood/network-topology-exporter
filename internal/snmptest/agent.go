@@ -107,14 +107,19 @@ func StartMultiCommunity(t *testing.T, communities map[string][]gsnmp.SnmpPDU) s
 	return conn.LocalAddr().String()
 }
 
+// maxUDPSize is the maximum size of a UDP datagram (IPv4 limit).
+const maxUDPSize = 65535
+
+// defaultMaxRepetitions mirrors gosnmp's default when MaxRepetitions is 0.
+const defaultMaxRepetitions = 50
+
 func serveMulti(conn net.PacketConn, communities map[string][]gsnmp.SnmpPDU, decoder *gsnmp.GoSNMP) {
-	buf := make([]byte, 65535)
+	buf := make([]byte, maxUDPSize)
 	for {
 		n, src, err := conn.ReadFrom(buf)
 		if err != nil {
 			return
 		}
-
 		pkt, err := decoder.SnmpDecodePacket(buf[:n])
 		if err != nil {
 			continue
@@ -123,42 +128,21 @@ func serveMulti(conn net.PacketConn, communities map[string][]gsnmp.SnmpPDU, dec
 		if !ok {
 			continue
 		}
-
-		var resp []gsnmp.SnmpPDU
-		switch pkt.PDUType {
-		case gsnmp.GetRequest:
-			resp = handleGet(pdus, pkt.Variables)
-		case gsnmp.GetNextRequest:
-			resp = handleGetNext(pdus, pkt.Variables)
-		case gsnmp.GetBulkRequest:
-			resp = handleBulk(pdus, pkt.Variables, int(pkt.NonRepeaters), int(pkt.MaxRepetitions))
-		default:
+		resp := dispatchPDU(pdus, pkt)
+		if resp == nil {
 			continue
 		}
-
-		reply := &gsnmp.SnmpPacket{
-			Version:   gsnmp.Version2c,
-			Community: pkt.Community,
-			PDUType:   gsnmp.GetResponse,
-			RequestID: pkt.RequestID,
-			Variables: resp,
-		}
-		raw, err := reply.MarshalMsg()
-		if err != nil {
-			continue
-		}
-		_, _ = conn.WriteTo(raw, src)
+		sendReply(conn, src, pkt.Community, pkt, resp)
 	}
 }
 
 func serve(conn net.PacketConn, community string, pdus []gsnmp.SnmpPDU, decoder *gsnmp.GoSNMP) {
-	buf := make([]byte, 65535)
+	buf := make([]byte, maxUDPSize)
 	for {
 		n, src, err := conn.ReadFrom(buf)
 		if err != nil {
 			return // conn closed by Cleanup
 		}
-
 		pkt, err := decoder.SnmpDecodePacket(buf[:n])
 		if err != nil {
 			continue
@@ -166,32 +150,42 @@ func serve(conn net.PacketConn, community string, pdus []gsnmp.SnmpPDU, decoder 
 		if pkt.Community != community {
 			continue
 		}
-
-		var resp []gsnmp.SnmpPDU
-		switch pkt.PDUType {
-		case gsnmp.GetRequest:
-			resp = handleGet(pdus, pkt.Variables)
-		case gsnmp.GetNextRequest:
-			resp = handleGetNext(pdus, pkt.Variables)
-		case gsnmp.GetBulkRequest:
-			resp = handleBulk(pdus, pkt.Variables, int(pkt.NonRepeaters), int(pkt.MaxRepetitions))
-		default:
+		resp := dispatchPDU(pdus, pkt)
+		if resp == nil {
 			continue
 		}
-
-		reply := &gsnmp.SnmpPacket{
-			Version:   gsnmp.Version2c,
-			Community: community,
-			PDUType:   gsnmp.GetResponse,
-			RequestID: pkt.RequestID,
-			Variables: resp,
-		}
-		raw, err := reply.MarshalMsg()
-		if err != nil {
-			continue
-		}
-		_, _ = conn.WriteTo(raw, src)
+		sendReply(conn, src, community, pkt, resp)
 	}
+}
+
+// dispatchPDU routes a decoded request packet to the appropriate handler.
+// Returns nil for unsupported PDU types so the caller can skip sending a reply.
+func dispatchPDU(pdus []gsnmp.SnmpPDU, pkt *gsnmp.SnmpPacket) []gsnmp.SnmpPDU {
+	switch pkt.PDUType {
+	case gsnmp.GetRequest:
+		return handleGet(pdus, pkt.Variables)
+	case gsnmp.GetNextRequest:
+		return handleGetNext(pdus, pkt.Variables)
+	case gsnmp.GetBulkRequest:
+		return handleBulk(pdus, pkt.Variables, int(pkt.NonRepeaters), int(pkt.MaxRepetitions))
+	default:
+		return nil
+	}
+}
+
+func sendReply(conn net.PacketConn, src net.Addr, community string, pkt *gsnmp.SnmpPacket, resp []gsnmp.SnmpPDU) {
+	reply := &gsnmp.SnmpPacket{
+		Version:   gsnmp.Version2c,
+		Community: community,
+		PDUType:   gsnmp.GetResponse,
+		RequestID: pkt.RequestID,
+		Variables: resp,
+	}
+	raw, err := reply.MarshalMsg()
+	if err != nil {
+		return
+	}
+	_, _ = conn.WriteTo(raw, src)
 }
 
 func handleGet(pdus []gsnmp.SnmpPDU, vars []gsnmp.SnmpPDU) []gsnmp.SnmpPDU {
@@ -220,7 +214,7 @@ func handleGetNext(pdus []gsnmp.SnmpPDU, vars []gsnmp.SnmpPDU) []gsnmp.SnmpPDU {
 
 func handleBulk(pdus []gsnmp.SnmpPDU, vars []gsnmp.SnmpPDU, nonRepeaters, maxReps int) []gsnmp.SnmpPDU {
 	if maxReps == 0 {
-		maxReps = 50 // mirrors gosnmp defaultMaxRepetitions
+		maxReps = defaultMaxRepetitions
 	}
 	var resp []gsnmp.SnmpPDU
 

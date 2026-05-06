@@ -1,12 +1,40 @@
 package snmp
 
 import (
+	"context"
 	"net"
 	"strconv"
 	"strings"
 
 	g "github.com/gosnmp/gosnmp"
 )
+
+// oidIfNameTable is the IF-MIB ifXTable.ifName column (RFC 2863 §3.1.4).
+const oidIfNameTable = "1.3.6.1.2.1.31.1.1.1.1"
+
+// WalkIfNames walks the IF-MIB ifXTable.ifName column (RFC 2863) and returns
+// a map of ifIndex → ifName. Multiple discovery modules (CDP, FDB) require
+// this mapping to translate bridge/CDP port numbers to human-readable names.
+func WalkIfNames(ctx context.Context, client *g.GoSNMP) (map[int]string, error) {
+	pdus, err := BulkWalk(ctx, client, oidIfNameTable)
+	if err != nil {
+		return nil, err
+	}
+	const prefix = "." + oidIfNameTable + "."
+	names := make(map[int]string, len(pdus))
+	for _, pdu := range pdus {
+		idxStr, ok := TrimOIDPrefix(pdu.Name, prefix)
+		if !ok {
+			continue
+		}
+		idx, err := strconv.Atoi(idxStr)
+		if err != nil {
+			continue
+		}
+		names[idx] = PDUString(pdu)
+	}
+	return names, nil
+}
 
 // PDUString extracts a string value from a PDU. It handles both string and
 // []byte value types, returning "" for any other type.

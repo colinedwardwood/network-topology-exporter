@@ -32,7 +32,6 @@ import (
 
 const (
 	oidCDPCacheTable = "1.3.6.1.4.1.9.9.23.1.2.1"
-	oidIfName        = "1.3.6.1.2.1.31.1.1.1.1"
 	precedenceRank   = 3
 )
 
@@ -62,7 +61,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	}
 	defer client.Conn.Close()
 
-	ifNames, err := walkIfNames(ctx, client)
+	ifNames, err := snmputil.WalkIfNames(ctx, client)
 	if err != nil {
 		return nil, nil, fmt.Errorf("cdp ifname %s: %w", p.IP, err)
 	}
@@ -73,28 +72,6 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	}
 
 	return buildEdges(localDevice, ifNames, entries, allowedNets)
-}
-
-func walkIfNames(ctx context.Context, client *gsnmp.GoSNMP) (map[int]string, error) {
-	pdus, err := snmputil.BulkWalk(ctx, client, oidIfName)
-	if err != nil {
-		return nil, err
-	}
-
-	const prefix = ".1.3.6.1.2.1.31.1.1.1.1."
-	names := make(map[int]string, len(pdus))
-	for _, pdu := range pdus {
-		idxStr, ok := snmputil.TrimOIDPrefix(pdu.Name, prefix)
-		if !ok {
-			continue
-		}
-		idx, err := strconv.Atoi(idxStr)
-		if err != nil {
-			continue
-		}
-		names[idx] = snmputil.PDUString(pdu)
-	}
-	return names, nil
 }
 
 func walkCacheTable(ctx context.Context, client *gsnmp.GoSNMP) (map[cacheKey]*cacheEntry, error) {

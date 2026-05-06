@@ -81,15 +81,14 @@ import (
 )
 
 const (
-	oidFdbTable        = "1.3.6.1.2.1.17.4.3"
-	oidBasePortTable   = "1.3.6.1.2.1.17.1.4"
-	oidStpPortTable    = "1.3.6.1.2.1.17.2.15"
-	oidIfName          = "1.3.6.1.2.1.31.1.1.1.1"
-	oidQBridgeFdbTable = "1.3.6.1.2.1.17.7.1.2.2"
+	oidFdbTable         = "1.3.6.1.2.1.17.4.3"
+	oidBasePortTable    = "1.3.6.1.2.1.17.1.4"
+	oidStpPortTable     = "1.3.6.1.2.1.17.2.15"
+	oidQBridgeFdbTable  = "1.3.6.1.2.1.17.7.1.2.2"
 	oidVlanCurrentTable = "1.3.6.1.2.1.17.7.1.4.2"
-	precedenceRank     = 4
-	fdbStatusLearned   = 3
-	stpStateForwarding = 5
+	precedenceRank      = 4
+	fdbStatusLearned    = 3
+	stpStateForwarding  = 5
 )
 
 // dot1dTpFdbTable column numbers (RFC 4188).
@@ -134,7 +133,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, _ []*net.I
 	// Q-BRIDGE walk failures are non-fatal: devices that implement only B-MIB
 	// return an empty result or a no-such-object error, both of which are fine.
 	_ = walkQBridgeFdbTable(ctx, client, entries)
-	walkVlanCommunityFdbs(ctx, p, entries)
+	walkVlanCommunityFdbs(ctx, p, client, entries)
 	bridgePorts, err := walkBasePortTable(ctx, client)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fdb baseport %s: %w", p.IP, err)
@@ -143,7 +142,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, _ []*net.I
 	if err != nil {
 		return nil, nil, fmt.Errorf("fdb stpport %s: %w", p.IP, err)
 	}
-	ifNames, err := walkIfNames(ctx, client)
+	ifNames, err := snmputil.WalkIfNames(ctx, client)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fdb ifname %s: %w", p.IP, err)
 	}
@@ -249,15 +248,9 @@ func walkQBridgeFdbTable(ctx context.Context, client *gsnmp.GoSNMP, entries map[
 }
 
 // discoverVlanIDs walks dot1qVlanCurrentTable and returns a deduplicated,
-// sorted list of active VLAN IDs. Returns nil on any error so the caller can
-// treat nil as "no VLANs found" without propagating a non-fatal failure.
-func discoverVlanIDs(ctx context.Context, p snmputil.Params) []int {
-	client, err := snmputil.Open(p)
-	if err != nil {
-		return nil
-	}
-	defer client.Conn.Close()
-
+// sorted list of active VLAN IDs. Returns nil on any error — the VLAN
+// community walk is a best-effort IOS-only path, not a required step.
+func discoverVlanIDs(ctx context.Context, client *gsnmp.GoSNMP) []int {
 	pdus, err := snmputil.BulkWalk(ctx, client, oidVlanCurrentTable)
 	if err != nil {
 		return nil
@@ -300,12 +293,11 @@ func discoverVlanIDs(ctx context.Context, p snmputil.Params) []int {
 // These devices maintain one BRIDGE-MIB instance per VLAN and expose it only
 // through community-string indexing; Q-BRIDGE is not available on IOS 12.x/15.x.
 // Entries already present in the map (from B-MIB or Q-BRIDGE) are not overwritten.
-func walkVlanCommunityFdbs(ctx context.Context, p snmputil.Params, entries map[string]*fdbEntry) {
-	// Community-string indexing is a v2c-only mechanism.
+func walkVlanCommunityFdbs(ctx context.Context, p snmputil.Params, client *gsnmp.GoSNMP, entries map[string]*fdbEntry) {
 	if p.V3 || p.Community == "" {
 		return
 	}
-	vlanIDs := discoverVlanIDs(ctx, p)
+	vlanIDs := discoverVlanIDs(ctx, client)
 	for _, vlanID := range vlanIDs {
 		vp := p
 		vp.Community = fmt.Sprintf("%s@%d", p.Community, vlanID)
@@ -376,27 +368,6 @@ func walkStpPortStates(ctx context.Context, client *gsnmp.GoSNMP) (map[int]int, 
 		states[portNum] = snmputil.PDUInt(pdu)
 	}
 	return states, nil
-}
-
-func walkIfNames(ctx context.Context, client *gsnmp.GoSNMP) (map[int]string, error) {
-	pdus, err := snmputil.BulkWalk(ctx, client, oidIfName)
-	if err != nil {
-		return nil, err
-	}
-	const prefix = ".1.3.6.1.2.1.31.1.1.1.1."
-	names := make(map[int]string, len(pdus))
-	for _, pdu := range pdus {
-		idxStr, ok := snmputil.TrimOIDPrefix(pdu.Name, prefix)
-		if !ok {
-			continue
-		}
-		idx, err := strconv.Atoi(idxStr)
-		if err != nil {
-			continue
-		}
-		names[idx] = snmputil.PDUString(pdu)
-	}
-	return names, nil
 }
 
 // buildEdges applies the Bejerano direct/indirect classification: a port with
