@@ -36,14 +36,38 @@ const (
 	snmpCommunity = "public"
 )
 
-// nodeIPs holds the management-plane IP of each SR Linux node, populated by
-// TestMain before any test function runs.
+// nodeIPs holds the management-plane IP of each containerlab node, populated
+// by TestMain before any test function runs.
 var nodeIPs map[string]net.IP
 
+// testBinPath is the path to the topology-exporter binary built once in
+// TestMain and shared by all tests that need to run the real binary.
+var testBinPath string
+
 func TestMain(m *testing.M) {
+	// Build the binary once. Tests that run the exporter use testBinPath
+	// directly rather than each running their own go build.
+	binDir, err := os.MkdirTemp("", "nte-e2e-bin-*")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "e2e: create bin dir:", err)
+		os.Exit(1)
+	}
+	testBinPath = binDir + "/topology-exporter"
+	buildCmd := exec.Command("go", "build", "-o", testBinPath, "./cmd/topology-exporter")
+	buildCmd.Dir = "../../"
+	buildCmd.Stdout = os.Stderr
+	buildCmd.Stderr = os.Stderr
+	if err := buildCmd.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, "e2e: build binary:", err)
+		_ = os.RemoveAll(binDir)
+		os.Exit(1)
+	}
+	fmt.Println("e2e: binary built at", testBinPath)
+
 	fmt.Println("e2e: deploying containerlab topology", topoName)
 	if err := clabRun("deploy", "--topo", topoFile, "--reconfigure"); err != nil {
 		fmt.Fprintln(os.Stderr, "e2e: containerlab deploy failed:", err)
+		_ = os.RemoveAll(binDir)
 		os.Exit(1)
 	}
 
@@ -52,6 +76,7 @@ func TestMain(m *testing.M) {
 	if initErr != nil {
 		fmt.Fprintln(os.Stderr, "e2e: get node IPs:", initErr)
 		_ = clabRun("destroy", "--name", topoName, "--cleanup")
+		_ = os.RemoveAll(binDir)
 		os.Exit(1)
 	}
 	for node, ip := range nodeIPs {
@@ -62,6 +87,7 @@ func TestMain(m *testing.M) {
 	if err := waitForSNMP(2 * time.Minute); err != nil {
 		fmt.Fprintln(os.Stderr, "e2e: SNMP readiness timeout:", err)
 		_ = clabRun("destroy", "--name", topoName, "--cleanup")
+		_ = os.RemoveAll(binDir)
 		os.Exit(1)
 	}
 
@@ -73,6 +99,7 @@ func TestMain(m *testing.M) {
 
 	fmt.Println("e2e: destroying topology")
 	_ = clabRun("destroy", "--name", topoName, "--cleanup")
+	_ = os.RemoveAll(binDir)
 	os.Exit(code)
 }
 
