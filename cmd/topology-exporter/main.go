@@ -127,6 +127,7 @@ func run(ctx context.Context, args []string) int {
 	)
 
 	m := metrics.New(cfg.Federation.Role == "uncoordinated")
+	m.SnapshotLastWrittenUnix.SetToCurrentTime()
 
 	var status atomic.Pointer[cycleStatus]
 	var ready atomic.Bool // set to true after the first live cycle or spoke push
@@ -150,12 +151,15 @@ func run(ctx context.Context, args []string) int {
 		Addr:              *listenAddr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
 	}
 
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	var workerDone sync.WaitGroup
+	var otlpWg sync.WaitGroup
 
 	switch cfg.Federation.Role {
 	case "hub":
@@ -233,6 +237,7 @@ func run(ctx context.Context, args []string) int {
 				spoke:   spoke,
 				otlpExp: otlpExp,
 				otlpSem: otlpSem,
+				otlpWg:  &otlpWg,
 			})
 		}()
 	}
@@ -262,6 +267,8 @@ func run(ctx context.Context, args []string) int {
 	case <-time.After(cfg.Discovery.TimeoutPerDevice + 5*time.Second):
 		logger.Warn("discovery drain timed out, forcing exit")
 	}
+	otlpWg.Wait()
+	logger.Info("otlp push goroutines drained")
 	logger.Info("clean shutdown complete")
 	return 0
 }
@@ -280,7 +287,8 @@ type loopConfig struct {
 	ready   *atomic.Bool
 	spoke   *federation.Spoke
 	otlpExp *otlp.Exporter
-	otlpSem chan struct{} // semaphore bounding concurrent OTLP pushes; nil when OTLP disabled
+	otlpSem chan struct{}   // semaphore bounding concurrent OTLP pushes; nil when OTLP disabled
+	otlpWg  *sync.WaitGroup // tracks in-flight OTLP push goroutines for clean shutdown
 }
 
 func (lc loopConfig) otlpPush(ctx context.Context, fn func(context.Context) error, warnMsg string) {
@@ -293,7 +301,13 @@ func (lc loopConfig) otlpPush(ctx context.Context, fn func(context.Context) erro
 			return
 		}
 	}
+	if lc.otlpWg != nil {
+		lc.otlpWg.Add(1)
+	}
 	go func() {
+		if lc.otlpWg != nil {
+			defer lc.otlpWg.Done()
+		}
 		if lc.otlpSem != nil {
 			defer func() { <-lc.otlpSem }()
 		}

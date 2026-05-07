@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1727,6 +1728,48 @@ func TestOtlpPushDropsWhenSemaphoreFull(t *testing.T) {
 		t.Errorf("OTLPPushTotal{dropped} = %v, want 1", got)
 	}
 	_ = dropped
+}
+
+// TestOtlpPushDrainsOnShutdown verifies that otlpWg.Wait() drains all in-flight
+// goroutines before returning: the goroutine spawned by otlpPush must finish
+// before Wait() unblocks.
+func TestOtlpPushDrainsOnShutdown(t *testing.T) {
+	var wg sync.WaitGroup
+	started := make(chan struct{})
+	unblock := make(chan struct{})
+
+	lc := loopConfig{
+		logger: slog.Default(),
+		m:      metrics.New(false),
+		otlpWg: &wg,
+	}
+
+	ctx := context.Background()
+	lc.otlpPush(ctx, func(_ context.Context) error {
+		close(started) // signal that the goroutine has begun
+		<-unblock      // block until the test says go
+		return nil
+	}, "drain test")
+
+	// Wait until the goroutine has started before calling wg.Wait.
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("goroutine did not start within 5s")
+	}
+
+	// Release the goroutine and wait for the WaitGroup to drain.
+	close(unblock)
+
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+
+	select {
+	case <-done:
+		// WaitGroup drained cleanly.
+	case <-time.After(5 * time.Second):
+		t.Fatal("otlpWg.Wait() did not return within 5s after goroutine finished")
+	}
 }
 
 // TestWalkSystemWithCredentialsNonTimeoutFailure verifies that when the parent
