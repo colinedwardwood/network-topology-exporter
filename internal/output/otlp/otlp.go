@@ -10,15 +10,19 @@ package otlp
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
+	"github.com/colinedwardwood/network-topology-exporter/internal/version"
 )
 
 // Config holds the settings for the OTLP exporter.
@@ -132,10 +136,17 @@ const (
 	severityWarn = 13
 )
 
-var serviceRes = resource{
-	Attributes: []kv{
-		{Key: "service.name", Value: kvValue{StringValue: serviceName}},
-	},
+var serviceRes resource
+
+func init() {
+	hostname, _ := os.Hostname()
+	serviceRes = resource{
+		Attributes: []kv{
+			{Key: "service.name", Value: kvValue{StringValue: serviceName}},
+			{Key: "service.version", Value: kvValue{StringValue: version.Version}},
+			{Key: "service.instance.id", Value: kvValue{StringValue: hostname}},
+		},
+	}
 }
 
 // PushGraph serialises graph.Edges and graph.Devices as OTLP gauge metrics and
@@ -268,28 +279,80 @@ func (e *Exporter) PushChanges(ctx context.Context, changes []graph.EdgeChange) 
 	return e.post(ctx, "/v1/logs", payload)
 }
 
+const (
+	postMaxAttempts   = 3
+	postBaseDelay     = 100 * time.Millisecond
+	postMaxJitter     = 50 * time.Millisecond
+	postMaxRetryAfter = 10 * time.Second
+)
+
+// cryptoJitter returns a random duration in [0, max) using crypto/rand so the
+// retry jitter is not flagged as a weak-random-number-generator lint issue.
+func cryptoJitter(max time.Duration) time.Duration {
+	var b [4]byte
+	_, _ = rand.Read(b[:])
+	n := int64(binary.LittleEndian.Uint32(b[:]))
+	return time.Duration(n % int64(max))
+}
+
 // post marshals payload to JSON and POSTs it to e.cfg.Endpoint+path.
-// Returns an error for any HTTP error or status >= 400.
+// It retries on HTTP 429 and 503 with exponential backoff (up to 3 attempts
+// total). On 429 it honours a Retry-After header (integer seconds, ≤ 10s).
+// Returns an error only after all attempts are exhausted.
 func (e *Exporter) post(ctx context.Context, path string, payload any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("otlp: marshal payload: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.cfg.Endpoint+path, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("otlp: build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
+	var lastErr error
+	delay := postBaseDelay
+	for attempt := range postMaxAttempts {
+		if attempt > 0 {
+			jitter := cryptoJitter(postMaxJitter)
+			select {
+			case <-time.After(delay + jitter):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			delay *= 2
+		}
 
-	resp, err := e.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("otlp: post %s: %w", path, err)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.cfg.Endpoint+path, bytes.NewReader(body))
+		if err != nil {
+			return fmt.Errorf("otlp: build request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := e.client.Do(req)
+		if err != nil {
+			return fmt.Errorf("otlp: post %s: %w", path, err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+
+		if resp.StatusCode < 400 {
+			return nil
+		}
+
+		lastErr = fmt.Errorf("otlp: post %s: server returned %d", path, resp.StatusCode)
+
+		// Only retry on 429 and 503.
+		if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode != http.StatusServiceUnavailable {
+			return lastErr
+		}
+
+		// On 429, honour Retry-After if present and within our cap.
+		if resp.StatusCode == http.StatusTooManyRequests {
+			if ra := resp.Header.Get("Retry-After"); ra != "" {
+				if secs, err := strconv.ParseInt(ra, 10, 64); err == nil {
+					d := time.Duration(secs) * time.Second
+					if d <= postMaxRetryAfter {
+						delay = d
+					}
+				}
+			}
+		}
 	}
-	_, _ = io.Copy(io.Discard, resp.Body)
-	_ = resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("otlp: post %s: server returned %d", path, resp.StatusCode)
-	}
-	return nil
+	return lastErr
 }

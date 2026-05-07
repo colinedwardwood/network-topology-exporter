@@ -90,7 +90,7 @@ func New(emitBoundaryObs bool) *Metrics {
 			Help: "Device count loaded from the LD-13 snapshot at startup.",
 		}),
 		DiscoveryDevicesTotal: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "network_topology_discovery_devices_total",
+			Name: "network_topology_discovery_devices",
 			Help: "Per-cycle device-discovery outcome count.",
 		}, []string{"status"}), // success | failed | timeout
 		DiscoveryCycleDuration: prometheus.NewHistogram(prometheus.HistogramOpts{

@@ -341,3 +341,88 @@ func TestPostClientError(t *testing.T) {
 		t.Fatal("expected error for 400 response, got nil")
 	}
 }
+
+// TestPostRetries503 verifies that post retries on 503 and succeeds on the
+// third attempt (initial + 2 retries = 3 total requests).
+func TestPostRetries503(t *testing.T) {
+	var hitCount int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hitCount++
+		if hitCount < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+
+	err := exp.PushGraph(context.Background(), discovery.Graph{})
+	if err != nil {
+		t.Fatalf("expected no error after retry, got: %v", err)
+	}
+	if hitCount != 3 {
+		t.Errorf("server hit count = %d, want 3 (initial + 2 retries)", hitCount)
+	}
+}
+
+// TestPostRetryAfterHeader verifies that post honours a Retry-After: 0 header
+// on a 429 response and succeeds on the second attempt.
+func TestPostRetryAfterHeader(t *testing.T) {
+	var hitCount int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hitCount++
+		if hitCount == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+
+	err := exp.PushGraph(context.Background(), discovery.Graph{})
+	if err != nil {
+		t.Fatalf("expected no error after retry, got: %v", err)
+	}
+}
+
+// TestServiceResourceAttributes verifies that the serialised OTLP payload
+// includes service.version and service.instance.id resource attributes.
+func TestServiceResourceAttributes(t *testing.T) {
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody = decodeBody(t, r)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+
+	if err := exp.PushGraph(context.Background(), discovery.Graph{}); err != nil {
+		t.Fatalf("PushGraph: %v", err)
+	}
+
+	rm := gotBody["resourceMetrics"].([]any)[0].(map[string]any)
+	resource := rm["resource"].(map[string]any)
+	attrs := resource["attributes"].([]any)
+
+	attrMap := make(map[string]string, len(attrs))
+	for _, a := range attrs {
+		kv := a.(map[string]any)
+		key := kv["key"].(string)
+		val := kv["value"].(map[string]any)["stringValue"].(string)
+		attrMap[key] = val
+	}
+
+	if _, ok := attrMap["service.version"]; !ok {
+		t.Error("service.version attribute missing from resource")
+	}
+	if _, ok := attrMap["service.instance.id"]; !ok {
+		t.Error("service.instance.id attribute missing from resource")
+	}
+}
