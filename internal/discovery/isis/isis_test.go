@@ -245,10 +245,8 @@ func TestWalkAdjIPAddrsAdjKeyExtraction(t *testing.T) {
 				if edges[0].DstDevice != tc.wantDstIP {
 					t.Errorf("DstDevice = %q, want %s", edges[0].DstDevice, tc.wantDstIP)
 				}
-			} else {
-				if len(edges) != 0 {
-					t.Errorf("expected 0 edges, got %d", len(edges))
-				}
+			} else if len(edges) != 0 {
+				t.Errorf("expected 0 edges, got %d", len(edges))
 			}
 		})
 	}
