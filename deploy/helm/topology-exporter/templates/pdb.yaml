@@ -1,0 +1,13 @@
+{{- if .Values.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "topology-exporter.fullname" . }}
+  labels:
+    {{- include "topology-exporter.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "topology-exporter.selectorLabels" . | nindent 6 }}
+{{- end }}

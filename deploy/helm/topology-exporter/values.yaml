@@ -27,6 +27,8 @@ podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65534
   fsGroup: 65534
+  seccompProfile:
+    type: RuntimeDefault
 
 securityContext:
   readOnlyRootFilesystem: true
@@ -74,7 +76,7 @@ livenessProbe:
 
 readinessProbe:
   httpGet:
-    path: /healthz
+    path: /readyz
     port: metrics
   initialDelaySeconds: 5
   periodSeconds: 10
@@ -148,6 +150,10 @@ extraEnv: []
 # Extra volumes and mounts for custom cert bundles, credential files, etc.
 extraVolumes: []
 extraVolumeMounts: []
+
+pdb:
+  enabled: false
+  maxUnavailable: 0
 
 nodeSelector: {}
 tolerations: []
