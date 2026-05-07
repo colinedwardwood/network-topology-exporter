@@ -26,6 +26,7 @@ package mpls
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"strconv"
 	"strings"
@@ -39,6 +40,7 @@ const (
 	oidMplsTunnelOperStatus  = "1.3.6.1.2.1.10.166.3.2.2.1.17"
 	oidMplsTunnelAdminStatus = "1.3.6.1.2.1.10.166.3.2.2.1.13"
 	mplsTunnelOperUp         = 1
+	metaKeyAdminStatus       = "mpls_te.admin_status"
 	// precedenceRank 8: lowest priority in the graph merge ladder.
 	// Ladder: LLDP=2, CDP=3, FDB=4, IS-IS=5, OSPF=6, BGP=7, MPLS-TE=8.
 	// Higher rank = lower precedence in graph merge.
@@ -60,9 +62,9 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 		return nil, nil, fmt.Errorf("mpls_te tunnel table %s: %w", p.IP, err)
 	}
 
-	adminPDUs, err := snmputil.BulkWalk(ctx, client, oidMplsTunnelAdminStatus)
-	if err != nil {
-		return nil, nil, fmt.Errorf("mpls_te admin status table %s: %w", p.IP, err)
+	adminPDUs, adminErr := snmputil.BulkWalk(ctx, client, oidMplsTunnelAdminStatus)
+	if adminErr != nil {
+		slog.Debug("mpls_te: admin status walk failed; admin_status will be unknown", "device", p.IP, "err", adminErr)
 	}
 
 	const adminPrefix = "." + oidMplsTunnelAdminStatus + "."
@@ -113,7 +115,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 			LinkKind:       "mpls-te",
 			ObservedAt:     now,
 			Metadata: map[string]string{
-				"mpls_te.admin_status": mplsAdminStatusString(adminStatus),
+				metaKeyAdminStatus: mplsAdminStatusString(adminStatus),
 			},
 		})
 	}

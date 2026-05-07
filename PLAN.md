@@ -1,15 +1,24 @@
-# v1.3 — SHIPPED
+# v1.4 — open
 
-All P1–P5 items closed. 2026-05-07.
+## P1 — snmputil generic walk helpers
 
-## What shipped
+Three callers (isis `walkCircuitIfNames`, isis `walkAdjStates`, mpls admin-status) share the identical pattern:
 
-- **P1** — Optional TLS (`listen.tls_cert_file` / `listen.tls_key_file`) for `/metrics`; plain HTTP when unconfigured.
-- **P2** — NetworkPolicy Helm template (`networkPolicy.enabled: false` default) restricting hub port 9101 to spoke pods.
-- **P3** — IS-IS `SrcPort` populated from `isisISCircTable` + `ifDescr` walk; degrades gracefully when circuit table absent.
-- **P4** — MPLS-TE tunnel `Metadata["mpls_te.admin_status"]` (up/down/testing/unknown) via second `mplsTunnelAdminStatus` bulk walk.
-- **P5** — OTLP `schemaUrl: https://opentelemetry.io/schemas/1.21.0` on all resource payloads; `Edge.Metadata` serialised as `network.topology.*` attributes; `docs/otlp-schema.md` documents all emitted attributes.
+```
+BulkWalk → TrimOIDPrefix loop → PDUInt/PDUString → map
+```
 
-## No open items
+Extract `WalkToIntMap(ctx, client, oid) (map[string]int, error)` and
+`WalkToStringMap(ctx, client, oid) (map[string]string, error)` in
+`internal/discovery/snmp/`. Move `oidIfDescr` into snmputil alongside `oidIfNameTable`.
 
-Next work should be tracked in a new plan.
+---
+
+# v1.3 — SHIPPED 2026-05-07
+
+- **P1** — Optional TLS (`listen.tls_cert_file` / `listen.tls_key_file`) for `/metrics`.
+- **P2** — NetworkPolicy Helm template restricting hub port 9101 to spoke pods.
+- **P3** — IS-IS `SrcPort` from `isisISCircTable` + `ifDescr` walk; degrades gracefully.
+- **P4** — MPLS-TE `Metadata["mpls_te.admin_status"]` via `mplsTunnelAdminStatus` walk.
+- **P5** — OTLP schema URL on all resource payloads; `Edge.Metadata` as `network.topology.*` attributes; `docs/otlp-schema.md`.
+- **simplify** — Collapsed duplicate HTTP server goroutines; `fs.Visit()` for flag override detection; removed WHAT comments; guarded circuit walk behind `len(states) > 0`; MPLS admin-status degraded mode; extracted `metaKeyAdminStatus` and `metadataAttrPrefix` constants.
