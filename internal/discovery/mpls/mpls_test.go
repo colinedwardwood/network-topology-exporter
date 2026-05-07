@@ -2,6 +2,7 @@ package mpls
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -270,5 +271,71 @@ func TestParseTunnelSuffixValid(t *testing.T) {
 	}
 	if egressIP.String() != "192.0.2.1" {
 		t.Errorf("egressIP = %q, want 192.0.2.1", egressIP.String())
+	}
+}
+
+// adminStatusPDUs returns PDUs for mplsTunnelAdminStatus for the given
+// tunnelIdx and adminStatus value. The tunnel instance, ingress, and egress
+// addresses are fixed: instance=1, ingress=10.0.0.1, egress=192.0.2.1 —
+// matching the oper-status OIDs used in the existing tests.
+func adminStatusPDUs(tunnelIdx, adminStatus int) []gsnmp.SnmpPDU {
+	oid := fmt.Sprintf(".1.3.6.1.2.1.10.166.3.2.2.1.13.%d.1.10.0.0.1.192.0.2.1", tunnelIdx)
+	return []gsnmp.SnmpPDU{
+		{Name: oid, Type: gsnmp.Integer, Value: adminStatus},
+	}
+}
+
+// Walk: admin status PDU present → Metadata["mpls_te.admin_status"] is set correctly.
+func TestWalkPopulatesAdminStatus(t *testing.T) {
+	operOID := tunnelOID("1", "1", "10.0.0.1", "192.0.2.1")
+	pdus := append(
+		[]gsnmp.SnmpPDU{{Name: operOID, Type: gsnmp.Integer, Value: mplsTunnelOperUp}},
+		adminStatusPDUs(1, 1)..., // adminStatus up(1)
+	)
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	edges, _, err := Walk(context.Background(), p, "router-a", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(edges))
+	}
+	e := edges[0]
+	if e.Metadata == nil {
+		t.Fatal("Metadata is nil, want non-nil")
+	}
+	got := e.Metadata["mpls_te.admin_status"]
+	if got != "up" {
+		t.Errorf("Metadata[mpls_te.admin_status] = %q, want %q", got, "up")
+	}
+}
+
+// Walk: no admin status PDUs present → Metadata["mpls_te.admin_status"] == "unknown".
+func TestWalkAdminStatusMissingIsUnknown(t *testing.T) {
+	operOID := tunnelOID("1", "1", "10.0.0.1", "192.0.2.1")
+	pdus := []gsnmp.SnmpPDU{
+		{Name: operOID, Type: gsnmp.Integer, Value: mplsTunnelOperUp},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	edges, _, err := Walk(context.Background(), p, "router-a", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(edges))
+	}
+	e := edges[0]
+	if e.Metadata == nil {
+		t.Fatal("Metadata is nil, want non-nil")
+	}
+	got := e.Metadata["mpls_te.admin_status"]
+	if got != "unknown" {
+		t.Errorf("Metadata[mpls_te.admin_status] = %q, want %q", got, "unknown")
 	}
 }
