@@ -71,4 +71,7 @@ time() - network_topology_snapshot_last_written_unix > 300
 
 # Sustained credential failures (possible lockout)
 increase(network_topology_credential_trials_total{status="failed"}[10m]) > 20
+
+# Federation spoke not pushing (hub mode)
+network_topology_federation_spoke_up == 0
 ```

@@ -1,9 +1,10 @@
 # network-topology-exporter
 
-A standalone, Apache 2.0 Go exporter that discovers network topology over SNMP, LLDP, CDP, BGP, OSPF, and FDB, and emits only two signals:
+A standalone, Apache 2.0 Go exporter that discovers network topology over SNMP, LLDP, CDP, BGP, OSPF, and FDB, and emits three signals:
 
 - **Prometheus metrics** for device inventory and topology edges, scraped via `/metrics`.
 - **Structured log lines** (JSON to stderr) for topology change events and operational state.
+- **A versioned JSON snapshot** on disk so `/metrics` serves the previous graph immediately on restart.
 
 There is no bespoke control-plane API. Anything that needs the topology graph queries Prometheus / Mimir. Topology change events are log lines — ship them to Loki, Elasticsearch, or any log aggregator using the collector agent already in your stack (Promtail, Alloy, Fluentd). The exporter does not push to external systems.
 
@@ -20,7 +21,9 @@ The Prometheus / Grafana stack already covers storage, query, alerting, and visu
 ```bash
 go build -o bin/topology-exporter ./cmd/topology-exporter
 ./bin/topology-exporter --config.file=config/example.yaml
-curl http://localhost:9100/metrics
+curl http://localhost:9100/metrics   # topology metrics
+curl http://localhost:9100/readyz    # 503 during startup, 200 after first cycle
+curl http://localhost:9100/healthz   # last cycle timestamp and error count
 ```
 
 Or via Docker:
@@ -51,6 +54,11 @@ docker run --rm -p 9100:9100 \
 | `network_topology_discovery_module_duration_seconds` | histogram | `module` | Per-module wall time within a cycle. |
 | `network_topology_snmp_walks_total` | counter | `status` (ok\|timeout\|error) | SNMP walk outcomes, aggregated across all devices. |
 | `network_topology_credential_trials_total` | counter | `status` (ok\|failed) | Credential trial attempts under the LD-12 rate limiter. |
+| `network_topology_conflict_total` | counter | `conflict_type` | Source disagreements detected during reconciliation (port_name_mismatch, neighbour_disagreement, direction_asymmetry, documented_vs_observed). |
+| `network_topology_federation_spoke_up` | gauge (0/1) | `spoke_id` | Hub mode only. 1 while spoke has pushed within `spoke_timeout`; 0 after eviction. |
+| `network_topology_federation_spoke_last_push_unix` | gauge | `spoke_id` | Hub mode only. Wall-clock time of most recent push from each spoke. |
+| `network_topology_federation_spoke_push_failures_total` | counter | (none) | Spoke mode only. Incremented each time a push exhausts all retries. |
+| `network_topology_hub_oos_unmatched_total` | gauge | (none) | Hub mode only. OOS neighbour hints that could not be matched to any known device name. |
 
 Full label reference, cardinality budget, and recommended alerts: [`docs/metrics.md`](docs/metrics.md).
 
@@ -86,6 +94,8 @@ A single instance covers one contiguous CIDR range. Links that cross a boundary 
 | `hub` | Pure aggregator — no local SNMP discovery. Receives spoke pushes on a separate listener (default `:9101`). |
 
 Federation runbook (mTLS setup, tuning, troubleshooting): [`docs/operator/federation.md`](docs/operator/federation.md).
+
+Operator troubleshooting (no edges, SNMP timeouts, credential failures, slow cycles, snapshot issues): [`docs/operator/troubleshooting.md`](docs/operator/troubleshooting.md).
 
 ## Development
 
