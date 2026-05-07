@@ -963,6 +963,9 @@ func TestRunDiscoveryLoopWithSnapshot(t *testing.T) {
 		defer close(done1)
 		runDiscoveryLoop(ctx1, cancel1, slog.Default(), cfg, m1, &s1, &r1, nil)
 	}()
+	// Wait for the snapshot write to complete (SnapshotLastWrittenUnix > 0),
+	// not just GraphStale == 0. The write runs in a detached goroutine that may
+	// still be in-flight when GraphStale first clears.
 	deadline1 := time.After(12 * time.Second)
 	poll1 := time.NewTicker(50 * time.Millisecond)
 	defer poll1.Stop()
@@ -971,7 +974,7 @@ func TestRunDiscoveryLoopWithSnapshot(t *testing.T) {
 		case <-deadline1:
 			t.Fatal("first runDiscoveryLoop: snapshot not written within deadline")
 		case <-poll1.C:
-			if testutil.ToFloat64(m1.GraphStale) == 0 {
+			if testutil.ToFloat64(m1.SnapshotLastWrittenUnix) > 0 {
 				cancel1()
 				<-done1
 				goto snapshotReady
