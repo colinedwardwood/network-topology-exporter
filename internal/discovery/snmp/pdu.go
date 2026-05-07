@@ -6,7 +6,6 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"sync"
 
 	g "github.com/gosnmp/gosnmp"
 )
@@ -30,28 +29,27 @@ type DecodeIssue struct {
 
 // IntMapDecodeStats reports anomalies from WalkToIntMapStrict.
 type IntMapDecodeStats struct {
+	TotalRows      int
+	ValidRows      int
+	InvalidRows    int
+	InvalidRatio   float64
 	DecodeFailures int
 	TrimFailures   int
 	Samples        []string
 }
 
-var (
-	decodeIssueObserverMu sync.RWMutex
-	decodeIssueObserver   func(DecodeIssue)
-)
+type decodeIssueReporterKey struct{}
 
-// SetDecodeIssueObserver installs a process-wide callback for decode anomalies.
-// Passing nil clears the observer.
-func SetDecodeIssueObserver(fn func(DecodeIssue)) {
-	decodeIssueObserverMu.Lock()
-	defer decodeIssueObserverMu.Unlock()
-	decodeIssueObserver = fn
+// ContextWithDecodeIssueReporter returns a child context with a decode issue reporter.
+func ContextWithDecodeIssueReporter(ctx context.Context, fn func(DecodeIssue)) context.Context {
+	if fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, decodeIssueReporterKey{}, fn)
 }
 
-func reportDecodeIssue(issue DecodeIssue) {
-	decodeIssueObserverMu.RLock()
-	fn := decodeIssueObserver
-	decodeIssueObserverMu.RUnlock()
+func reportDecodeIssue(ctx context.Context, issue DecodeIssue) {
+	fn, _ := ctx.Value(decodeIssueReporterKey{}).(func(DecodeIssue))
 	if fn != nil {
 		fn(issue)
 	}
@@ -63,6 +61,12 @@ func appendDecodeSample(samples []string, sample string) []string {
 		return samples
 	}
 	return append(samples, sample)
+}
+
+// RequiredTablePolicy defines hard-fail thresholds for required tables.
+type RequiredTablePolicy struct {
+	MinValidRows    int
+	MaxInvalidRatio float64
 }
 
 // WalkToIntMapStrict walks oid and returns a map from OID suffix to integer
@@ -91,9 +95,15 @@ func WalkToIntMapStrict(ctx context.Context, client *g.GoSNMP, module, oid strin
 		}
 		result[key] = v
 	}
+	stats.TotalRows = len(pdus)
+	stats.ValidRows = len(result)
+	stats.InvalidRows = stats.DecodeFailures + stats.TrimFailures
+	if stats.TotalRows > 0 {
+		stats.InvalidRatio = float64(stats.InvalidRows) / float64(stats.TotalRows)
+	}
 	if module != "" {
 		if stats.DecodeFailures > 0 {
-			reportDecodeIssue(DecodeIssue{
+			reportDecodeIssue(ctx, DecodeIssue{
 				Module: module,
 				OID:    oid,
 				Reason: "invalid_type",
@@ -101,7 +111,7 @@ func WalkToIntMapStrict(ctx context.Context, client *g.GoSNMP, module, oid strin
 			})
 		}
 		if stats.TrimFailures > 0 {
-			reportDecodeIssue(DecodeIssue{
+			reportDecodeIssue(ctx, DecodeIssue{
 				Module: module,
 				OID:    oid,
 				Reason: "invalid_oid",
@@ -121,6 +131,20 @@ func WalkToIntMap(ctx context.Context, client *g.GoSNMP, oid string) (map[string
 		return nil, err
 	}
 	return m, nil
+}
+
+// EvaluateRequiredTablePolicy checks decode stats against the required table policy.
+func EvaluateRequiredTablePolicy(stats IntMapDecodeStats, policy RequiredTablePolicy) (degraded bool, hardFailReason string) {
+	if stats.ValidRows < policy.MinValidRows {
+		return false, "required_table_no_valid_rows"
+	}
+	if policy.MaxInvalidRatio >= 0 && stats.InvalidRatio > policy.MaxInvalidRatio {
+		return false, "required_table_invalid_ratio_exceeded"
+	}
+	if stats.InvalidRows > 0 {
+		return true, ""
+	}
+	return false, ""
 }
 
 // WalkIfNames walks the IF-MIB ifXTable.ifName column (RFC 2863 §3.1.4) and

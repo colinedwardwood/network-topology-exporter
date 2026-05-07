@@ -36,15 +36,16 @@ type Metrics struct {
 	SnapshotLoadedDevicesTotal prometheus.Gauge
 
 	// Discovery cycle health. All aggregates — no per-device label values.
-	DiscoveryDevicesTotal   *prometheus.GaugeVec
-	DiscoveryCycleDuration  prometheus.Histogram
-	DiscoveryModuleDuration *prometheus.HistogramVec
-	SNMPWalksTotal          *prometheus.CounterVec
-	DiscoveryDecodeIssues   *prometheus.CounterVec
-	DiscoveryDegradedTotal  *prometheus.CounterVec
-	DiscoveryHardFailTotal  *prometheus.CounterVec
-	CredentialTrialsTotal   *prometheus.CounterVec
-	OTLPPushTotal           *prometheus.CounterVec
+	DiscoveryDevicesTotal         *prometheus.GaugeVec
+	DiscoveryCycleDuration        prometheus.Histogram
+	DiscoveryModuleDuration       *prometheus.HistogramVec
+	SNMPWalksTotal                *prometheus.CounterVec
+	DiscoveryDecodeIssues         *prometheus.CounterVec
+	DiscoveryQuarantinedRowsTotal *prometheus.CounterVec
+	DiscoveryDegradedTotal        *prometheus.CounterVec
+	DiscoveryHardFailTotal        *prometheus.CounterVec
+	CredentialTrialsTotal         *prometheus.CounterVec
+	OTLPPushTotal                 *prometheus.CounterVec
 
 	// LD-16/LD-18: hub-mode spoke-liveness signals. Only populated when
 	// federation.role is hub; registered always so the metric is present
@@ -114,14 +115,18 @@ func New(emitBoundaryObs bool) *Metrics {
 			Name: "network_topology_discovery_decode_issues_total",
 			Help: "SNMP decode anomalies by module, OID, and reason.",
 		}, []string{"module", "oid", "reason"}),
+		DiscoveryQuarantinedRowsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "network_topology_discovery_quarantined_rows_total",
+			Help: "SNMP table rows quarantined due to decode anomalies, by module, OID, and reason.",
+		}, []string{"module", "oid", "reason"}),
 		DiscoveryDegradedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "network_topology_discovery_degraded_total",
 			Help: "Discovery module runs that completed in degraded mode by reason.",
 		}, []string{"module", "reason"}),
 		DiscoveryHardFailTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "network_topology_discovery_hard_fail_total",
-			Help: "Discovery hard failures by module and stage.",
-		}, []string{"module", "stage"}),
+			Help: "Discovery hard failures by module and policy/runtime reason.",
+		}, []string{"module", "reason"}),
 		CredentialTrialsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "network_topology_credential_trials_total",
 			Help: "Credential trial attempts under the LD-12 rate limiter.",
@@ -160,6 +165,7 @@ func New(emitBoundaryObs bool) *Metrics {
 		m.DiscoveryModuleDuration,
 		m.SNMPWalksTotal,
 		m.DiscoveryDecodeIssues,
+		m.DiscoveryQuarantinedRowsTotal,
 		m.DiscoveryDegradedTotal,
 		m.DiscoveryHardFailTotal,
 		m.CredentialTrialsTotal,
