@@ -252,6 +252,68 @@ func TestWalkAdjIPAddrsAdjKeyExtraction(t *testing.T) {
 	}
 }
 
+// isisCircPDUs returns PDUs for isisISCircIfIndex: sysInst=0, circIdx=1 → ifIndex=3.
+func isisCircPDUs() []gsnmp.SnmpPDU {
+	return []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.138.1.4.1.1.3.0.1", Type: gsnmp.Integer, Value: 3},
+	}
+}
+
+// ifDescrPDUs returns PDUs for ifDescr: ifIndex=3 → "GigabitEthernet0/0".
+func ifDescrPDUs() []gsnmp.SnmpPDU {
+	return []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.2.2.1.2.3", Type: gsnmp.OctetString, Value: []byte("GigabitEthernet0/0")},
+	}
+}
+
+// Walk: up adjacency with circuit and ifDescr tables present → SrcPort populated.
+func TestWalkPopulatesSrcPort(t *testing.T) {
+	// sysInst=0, circIdx=1, adjIdx=1, IP=192.0.2.1
+	pdus := []gsnmp.SnmpPDU{
+		{Name: adjStateBase + adjKey, Type: gsnmp.Integer, Value: isisAdjStateUp},
+		{Name: adjIPBase + adjKey + ".1.4.192.0.2.1", Type: gsnmp.OctetString, Value: []byte{192, 0, 2, 1}},
+	}
+	pdus = append(pdus, isisCircPDUs()...)
+	pdus = append(pdus, ifDescrPDUs()...)
+
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	edges, _, err := Walk(context.Background(), p, "router-a", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(edges))
+	}
+	if edges[0].SrcPort != "GigabitEthernet0/0" {
+		t.Errorf("SrcPort = %q, want GigabitEthernet0/0", edges[0].SrcPort)
+	}
+}
+
+// Walk: up adjacency without circuit table PDUs → SrcPort empty (graceful degradation).
+func TestWalkSrcPortEmptyWhenCircuitMissing(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: adjStateBase + adjKey, Type: gsnmp.Integer, Value: isisAdjStateUp},
+		{Name: adjIPBase + adjKey + ".1.4.192.0.2.1", Type: gsnmp.OctetString, Value: []byte{192, 0, 2, 1}},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	edges, _, err := Walk(context.Background(), p, "router-a", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(edges))
+	}
+	if edges[0].SrcPort != "" {
+		t.Errorf("SrcPort = %q, want empty string", edges[0].SrcPort)
+	}
+}
+
 // Walk: Open fails when the connection cannot be established.
 func TestWalkOpenFails(t *testing.T) {
 	p := snmputil.Params{
