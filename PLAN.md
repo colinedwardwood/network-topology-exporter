@@ -52,9 +52,9 @@ Ship a stable `v1.0.0` release with predictable runtime behavior, reliable metri
 
 ## 5) Release Execution
 
-- [ ] Tag `v1.0.0` on `main`.
-- [ ] Verify CI publishes container images and release binaries.
-- [ ] Verify deployment repo consumes stable `v1.0.0` tag.
+- [x] Tag `v1.0.0` on `main`.
+- [x] Verify CI publishes container images and release binaries.
+- [x] Verify deployment repo consumes stable `v1.0.0` tag.
 
 ## Exit Criteria
 
