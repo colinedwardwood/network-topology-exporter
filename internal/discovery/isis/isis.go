@@ -75,10 +75,12 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 		return nil, nil, fmt.Errorf("isis adjState %s: %w", p.IP, err)
 	}
 
-	circIfNames, err := walkCircuitIfNames(ctx, client)
-	if err != nil {
-		slog.Debug("isis: circuit ifName walk failed; SrcPort will be empty", "device", p.IP, "err", err)
-		circIfNames = nil
+	var circIfNames map[string]string
+	if len(states) > 0 {
+		circIfNames, err = walkCircuitIfNames(ctx, client)
+		if err != nil {
+			slog.Debug("isis: circuit ifName walk failed; SrcPort will be empty", "device", p.IP, "err", err)
+		}
 	}
 
 	edges, oos, err := walkAdjIPAddrs(ctx, client, localDevice, states, circIfNames, allowedNets)
@@ -109,7 +111,6 @@ func walkAdjStates(ctx context.Context, client *gsnmp.GoSNMP) (map[string]int, e
 // name string, built by joining isisISCircIfIndex (circuit → ifIndex) with
 // ifDescr (ifIndex → interface name).
 func walkCircuitIfNames(ctx context.Context, client *gsnmp.GoSNMP) (map[string]string, error) {
-	// Step 1: walk isisISCircIfIndex to get circuit key → ifIndex.
 	circPDUs, err := snmputil.BulkWalk(ctx, client, oidISISCircIfIndex)
 	if err != nil {
 		return nil, err
@@ -124,7 +125,6 @@ func walkCircuitIfNames(ctx context.Context, client *gsnmp.GoSNMP) (map[string]s
 		circIfIndex[key] = snmputil.PDUInt(pdu)
 	}
 
-	// Step 2: walk ifDescr to get ifIndex → interface name.
 	descrPDUs, err := snmputil.BulkWalk(ctx, client, oidIfDescr)
 	if err != nil {
 		return nil, err
@@ -143,7 +143,6 @@ func walkCircuitIfNames(ctx context.Context, client *gsnmp.GoSNMP) (map[string]s
 		ifNames[idx] = snmputil.PDUString(pdu)
 	}
 
-	// Step 3: join circuit key → ifIndex → interface name.
 	result := make(map[string]string, len(circIfIndex))
 	for key, ifIdx := range circIfIndex {
 		if name, ok := ifNames[ifIdx]; ok {

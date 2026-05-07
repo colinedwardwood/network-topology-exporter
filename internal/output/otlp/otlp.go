@@ -132,11 +132,12 @@ type logsPayload struct {
 }
 
 const (
-	serviceName   = "network-topology-exporter"
-	scopeName     = "github.com/colinedwardwood/network-topology-exporter"
-	severityInfo  = 9
-	severityWarn  = 13
-	otlpSchemaURL = "https://opentelemetry.io/schemas/1.21.0"
+	serviceName        = "network-topology-exporter"
+	scopeName          = "github.com/colinedwardwood/network-topology-exporter"
+	severityInfo       = 9
+	severityWarn       = 13
+	otlpSchemaURL      = "https://opentelemetry.io/schemas/1.21.0"
+	metadataAttrPrefix = "network.topology."
 )
 
 var serviceRes resource
@@ -168,7 +169,7 @@ func (e *Exporter) PushGraph(ctx context.Context, g discovery.Graph) error {
 			{Key: "link_kind", Value: kvValue{StringValue: edge.LinkKind}},
 		}
 		for k, v := range edge.Metadata {
-			attrs = append(attrs, kv{Key: "network.topology." + k, Value: kvValue{StringValue: v}})
+			attrs = append(attrs, kv{Key: metadataAttrPrefix + k, Value: kvValue{StringValue: v}})
 		}
 		edgePoints = append(edgePoints, dataPoint{
 			Attributes:   attrs,
