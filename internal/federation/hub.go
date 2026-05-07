@@ -39,7 +39,6 @@ type spokeEntry struct {
 type Hub struct {
 	cfg                  config.FederationConfig
 	mu                   sync.Mutex
-	publishMu            sync.Mutex // serialises Reset+repopulate to prevent interleaved scrape gaps
 	spokes               map[string]spokeEntry
 	m                    *metrics.Metrics
 	logger               *slog.Logger
@@ -421,32 +420,12 @@ func (h *Hub) evictSilentSpokes() {
 	}
 }
 
-// publishMetrics updates the shared Prometheus gauge sets with the unified
-// graph. publishMu serialises concurrent Reset+repopulate sequences so a
-// scrape arriving between Reset and re-population from one goroutine cannot
-// interleave with another goroutine's Reset, causing label-set corruption.
-// When clearStale is true, GraphStale is set to 0 at the end of the critical
-// section so a scrape never observes fresh edges alongside GraphStale=1.
+// publishMetrics atomically swaps the Topology collector snapshot and, on the
+// first live push, clears GraphStale. The atomic pointer swap in
+// TopologyCollector.Update means concurrent spoke pushes cannot produce an
+// interleaved or empty scrape window.
 func (h *Hub) publishMetrics(g discovery.Graph, clearStale bool) {
-	h.publishMu.Lock()
-	defer h.publishMu.Unlock()
-
-	h.m.DeviceInfo.Reset()
-	h.m.DeviceUptimeSeconds.Reset()
-	for _, d := range g.Devices {
-		h.m.DeviceInfo.WithLabelValues(d.ID, d.Vendor, d.Model, d.OSVersion, d.Site).Set(1)
-		h.m.DeviceUptimeSeconds.WithLabelValues(d.ID).Set(d.Uptime.Seconds())
-	}
-	h.m.TopologyEdgeInfo.Reset()
-	for _, e := range g.Edges {
-		h.m.TopologyEdgeInfo.WithLabelValues(
-			e.SrcDevice, e.SrcPort,
-			e.DstDevice, e.DstPort,
-			e.DiscoveryProto,
-			e.LinkKind,
-			string(e.Direction),
-		).Set(1)
-	}
+	h.m.Topology.Update(g)
 	if clearStale {
 		h.m.GraphStale.Set(0)
 	}

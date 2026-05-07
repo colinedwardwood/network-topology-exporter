@@ -20,16 +20,15 @@ import (
 type Metrics struct {
 	registry *prometheus.Registry
 
-	// Topology inventory.
-	DeviceInfo            *prometheus.GaugeVec
-	DeviceUptimeSeconds   *prometheus.GaugeVec
-	TopologyEdgeInfo      *prometheus.GaugeVec
+	// Topology is a custom Collector that holds an atomic graph snapshot and
+	// generates device, edge, uptime, OOS-count, and boundary-observation
+	// metrics on-the-fly at scrape time (no Reset race).
+	Topology *TopologyCollector
+
+	// Event-driven counters and histograms — updated by the discovery loop,
+	// not derived from the graph snapshot.
 	TopologyChangeTotal   *prometheus.CounterVec
 	TopologyConflictTotal *prometheus.CounterVec
-
-	// LD-11: count of out-of-scope neighbours seen in the current cycle.
-	// Detail (which device, which port, what hint) goes in log lines.
-	OutOfScopeNeighboursTotal prometheus.Gauge
 
 	// LD-13: graph freshness signals.
 	GraphStale                 prometheus.Gauge
@@ -42,11 +41,6 @@ type Metrics struct {
 	DiscoveryModuleDuration *prometheus.HistogramVec
 	SNMPWalksTotal          *prometheus.CounterVec
 	CredentialTrialsTotal   *prometheus.CounterVec
-
-	// LD-15: uncoordinated mode — one series per out-of-scope boundary
-	// observation, with canonical pair ordering so the Mimir recording rule
-	// is count by(peer_a, peer_b, proto)(...) == 2. Reset each cycle.
-	BoundaryObservationInfo *prometheus.GaugeVec
 
 	// LD-16/LD-18: hub-mode spoke-liveness signals. Only populated when
 	// federation.role is hub; registered always so the metric is present
@@ -63,8 +57,9 @@ type Metrics struct {
 	HubOOSUnmatchedTotal prometheus.Gauge
 }
 
-// New builds and registers the exporter's metric set.
-func New() *Metrics {
+// New builds and registers the exporter's metric set. emitBoundaryObs should
+// be true only when federation.role is "uncoordinated" (LD-15).
+func New(emitBoundaryObs bool) *Metrics {
 	reg := prometheus.NewRegistry()
 
 	reg.MustRegister(collectors.NewGoCollector())
@@ -72,18 +67,7 @@ func New() *Metrics {
 
 	m := &Metrics{
 		registry: reg,
-		DeviceInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "network_device_info",
-			Help: "One series per discovered device. Value is always 1; inventory data is in the labels.",
-		}, []string{"device_id", "vendor", "model", "os_version", "site"}),
-		DeviceUptimeSeconds: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "network_device_uptime_seconds",
-			Help: "Per-device uptime from the SNMP SYSTEM group (sysUpTime).",
-		}, []string{"device_id"}),
-		TopologyEdgeInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "network_topology_edge_info",
-			Help: "One series per discovered topology edge. Value is always 1.",
-		}, []string{"src_device", "src_port", "dst_device", "dst_port", "discovery_proto", "link_type", "direction"}),
+		Topology: newTopologyCollector(emitBoundaryObs),
 		TopologyChangeTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "network_topology_change_total",
 			Help: "Topology mutations between discovery cycles. Resets on restart; use increase() not rate().",
@@ -92,10 +76,6 @@ func New() *Metrics {
 			Name: "network_topology_conflict_total",
 			Help: "Source disagreements detected during reconciliation, by conflict type.",
 		}, []string{"conflict_type"}),
-		OutOfScopeNeighboursTotal: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "network_topology_out_of_scope_neighbours_total",
-			Help: "Count of LLDP/CDP-discovered neighbours whose IP falls outside the LD-11 CIDR allow-list. Detail in log lines.",
-		}),
 		GraphStale: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "network_topology_graph_stale",
 			Help: "1 while serving the LD-13 snapshot on startup; 0 once the first live cycle completes.",
@@ -130,12 +110,6 @@ func New() *Metrics {
 			Name: "network_topology_credential_trials_total",
 			Help: "Credential trial attempts under the LD-12 rate limiter.",
 		}, []string{"status"}), // ok | failed
-		BoundaryObservationInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "network_topology_boundary_observation_info",
-			Help: "LD-15 uncoordinated mode: one series per out-of-scope boundary observation. " +
-				"peer_a is always the alphabetically-smaller endpoint. " +
-				"A Mimir recording rule fires count by(peer_a,peer_b,proto)(...)==2 for confirmed cross-boundary edges.",
-		}, []string{"peer_a", "peer_b", "reporting_device", "src_port", "proto"}),
 		FederationSpokeUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "network_topology_federation_spoke_up",
 			Help: "LD-18 hub mode: 1 while a spoke is active (pushed within federation.spoke_timeout), 0 after eviction.",
@@ -155,12 +129,9 @@ func New() *Metrics {
 	}
 
 	reg.MustRegister(
-		m.DeviceInfo,
-		m.DeviceUptimeSeconds,
-		m.TopologyEdgeInfo,
+		m.Topology,
 		m.TopologyChangeTotal,
 		m.TopologyConflictTotal,
-		m.OutOfScopeNeighboursTotal,
 		m.GraphStale,
 		m.SnapshotLastWrittenUnix,
 		m.SnapshotLoadedDevicesTotal,
@@ -169,7 +140,6 @@ func New() *Metrics {
 		m.DiscoveryModuleDuration,
 		m.SNMPWalksTotal,
 		m.CredentialTrialsTotal,
-		m.BoundaryObservationInfo,
 		m.FederationSpokeUp,
 		m.FederationSpokeLastPushUnix,
 		m.FederationSpokePushFailuresTotal,

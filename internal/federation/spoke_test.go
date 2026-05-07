@@ -2,12 +2,20 @@ package federation
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"io"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -32,7 +40,7 @@ func newTestSpokeFor(t *testing.T, hubURL string) *Spoke {
 		},
 		client: &http.Client{Timeout: 5 * time.Second},
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		m:      metrics.New(),
+		m:      metrics.New(false),
 	}
 }
 
@@ -112,7 +120,7 @@ func TestSpokePostInvalidURL(t *testing.T) {
 		},
 		client: &http.Client{},
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		m:      metrics.New(),
+		m:      metrics.New(false),
 	}
 	err := s.post(context.Background(), []byte("{}"))
 	if err == nil {
@@ -130,7 +138,7 @@ func TestNewSpokeErrorOnMissingCAFile(t *testing.T) {
 			TLSKey:    "/nonexistent/client.key",
 		},
 	}
-	_, err := NewSpoke(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), metrics.New())
+	_, err := NewSpoke(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), metrics.New(false))
 	if err == nil {
 		t.Fatal("NewSpoke: expected error for missing CA file, got nil")
 	}
@@ -151,9 +159,168 @@ func TestNewSpokeErrorOnEmptyCAFile(t *testing.T) {
 			TLSKey:    filepath.Join(dir, "client.key"),
 		},
 	}
-	_, err := NewSpoke(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), metrics.New())
+	_, err := NewSpoke(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), metrics.New(false))
 	if err == nil {
 		t.Fatal("NewSpoke: expected error for non-PEM CA file, got nil")
+	}
+}
+
+// TestNewSpokeErrorOnBadKeyFile verifies that NewSpoke returns an error when the
+// CA cert file is valid PEM but the cert/key pair cannot be loaded because the
+// key file contains garbage (LoadX509KeyPair failure path).
+func TestNewSpokeErrorOnBadKeyFile(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write a minimal self-signed CA PEM so AppendCertsFromPEM succeeds.
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate CA key: %v", err)
+	}
+	caTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create CA cert: %v", err)
+	}
+	caPath := filepath.Join(dir, "ca.crt")
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+	if err := os.WriteFile(caPath, caPEM, 0o600); err != nil {
+		t.Fatalf("write CA cert: %v", err)
+	}
+
+	// Write a valid cert file and a garbage key file.
+	srvKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate server key: %v", err)
+	}
+	caCertParsed, _ := x509.ParseCertificate(caDER)
+	srvTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "spoke"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	srvDER, err := x509.CreateCertificate(rand.Reader, srvTmpl, caCertParsed, &srvKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create server cert: %v", err)
+	}
+	certPath := filepath.Join(dir, "client.crt")
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srvDER})
+	if err := os.WriteFile(certPath, certPEM, 0o600); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+	keyPath := filepath.Join(dir, "client.key")
+	if err := os.WriteFile(keyPath, []byte("this is not a valid key"), 0o600); err != nil {
+		t.Fatalf("write garbage key: %v", err)
+	}
+
+	cfg := config.FederationConfig{
+		Spoke: config.FederationSpokeConfig{
+			TLSCACert: caPath,
+			TLSCert:   certPath,
+			TLSKey:    keyPath,
+		},
+	}
+	_, err = NewSpoke(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), metrics.New(false))
+	if err == nil {
+		t.Fatal("NewSpoke: expected error for garbage key file, got nil")
+	}
+	if !strings.Contains(err.Error(), "load client cert/key") {
+		t.Errorf("error = %q, want to contain 'load client cert/key'", err.Error())
+	}
+}
+
+// TestSpokePostNetworkError verifies that post() returns an error when the HTTP
+// client cannot connect (connection refused), covering the client.Do error branch.
+func TestSpokePostNetworkError(t *testing.T) {
+	// Use a closed server so the connection is immediately refused.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	srv.Close() // close immediately so any connection attempt fails
+
+	s := newTestSpokeFor(t, srv.URL)
+	err := s.post(context.Background(), []byte("{}"))
+	if err == nil {
+		t.Fatal("post: expected network error for closed server, got nil")
+	}
+}
+
+// TestNewSpokeSuccess verifies that NewSpoke returns a non-nil Spoke (and no
+// error) when the CA cert file, client cert file, and key file are all valid.
+func TestNewSpokeSuccess(t *testing.T) {
+	dir := t.TempDir()
+
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate CA key: %v", err)
+	}
+	caTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create CA cert: %v", err)
+	}
+	caPath := filepath.Join(dir, "ca.crt")
+	if err := os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}), 0o600); err != nil {
+		t.Fatalf("write CA cert: %v", err)
+	}
+
+	clientKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate client key: %v", err)
+	}
+	caCertParsed, _ := x509.ParseCertificate(caDER)
+	clientTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "spoke"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	clientDER, err := x509.CreateCertificate(rand.Reader, clientTmpl, caCertParsed, &clientKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create client cert: %v", err)
+	}
+	clientKeyDER, err := x509.MarshalECPrivateKey(clientKey)
+	if err != nil {
+		t.Fatalf("marshal client key: %v", err)
+	}
+
+	certPath := filepath.Join(dir, "client.crt")
+	keyPath := filepath.Join(dir, "client.key")
+	if err := os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: clientDER}), 0o600); err != nil {
+		t.Fatalf("write client cert: %v", err)
+	}
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: clientKeyDER}), 0o600); err != nil {
+		t.Fatalf("write client key: %v", err)
+	}
+
+	cfg := config.FederationConfig{
+		Spoke: config.FederationSpokeConfig{
+			TLSCACert: caPath,
+			TLSCert:   certPath,
+			TLSKey:    keyPath,
+			HubURL:    "https://hub:9101",
+		},
+	}
+	spoke, err := NewSpoke(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), metrics.New(false))
+	if err != nil {
+		t.Fatalf("NewSpoke: unexpected error: %v", err)
+	}
+	if spoke == nil {
+		t.Fatal("NewSpoke returned nil Spoke, want non-nil")
 	}
 }
 

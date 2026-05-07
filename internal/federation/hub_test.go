@@ -10,8 +10,10 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -60,7 +62,7 @@ func newTestHub(links []config.InterDomainLink) *Hub {
 			SpokeTimeout:          3 * time.Minute,
 			KnownInterDomainLinks: links,
 		},
-		metrics.New(),
+		metrics.New(false),
 		nil,
 		"", // no snapshot path in tests
 	)
@@ -471,7 +473,7 @@ func TestHubHandlePushRejectsBadSpokeID(t *testing.T) {
 // FederationSpokeUp and FederationSpokeLastPushUnix label series rather than
 // leaving stale zero values.
 func TestHubEvictionDeletesGaugeLabels(t *testing.T) {
-	m := metrics.New()
+	m := metrics.New(false)
 	h := NewHub(
 		config.FederationConfig{SpokeTimeout: 100 * time.Millisecond},
 		m,
@@ -517,7 +519,7 @@ func TestHubEvictionDeletesGaugeLabels(t *testing.T) {
 // TestHubHandlePushSuccessStoresSpokeAndSetsGauges sends a valid payload and
 // verifies the spoke is stored and the spoke-up gauge is set to 1.
 func TestHubHandlePushSuccessStoresSpokeAndSetsGauges(t *testing.T) {
-	m := metrics.New()
+	m := metrics.New(false)
 	h := NewHub(
 		config.FederationConfig{SpokeTimeout: 5 * time.Minute},
 		m, nil, "",
@@ -607,7 +609,7 @@ func TestHubHandlePushRejectsStaleCycleAt(t *testing.T) {
 // TestHubPublishMetricsClearStale verifies that passing clearStale=true sets
 // GraphStale to 0 as part of the publish.
 func TestHubPublishMetricsClearStale(t *testing.T) {
-	m := metrics.New()
+	m := metrics.New(false)
 	h := NewHub(config.FederationConfig{}, m, nil, "")
 
 	m.GraphStale.Set(1) // simulate startup state
@@ -621,7 +623,7 @@ func TestHubPublishMetricsClearStale(t *testing.T) {
 // TestHubPublishMetricsPreservesStaleWhenFalse verifies that clearStale=false
 // does not touch GraphStale.
 func TestHubPublishMetricsPreservesStaleWhenFalse(t *testing.T) {
-	m := metrics.New()
+	m := metrics.New(false)
 	h := NewHub(config.FederationConfig{}, m, nil, "")
 
 	m.GraphStale.Set(1)
@@ -638,7 +640,7 @@ func TestHubWriteSnapshotPersistsGraph(t *testing.T) {
 	dir := t.TempDir()
 	snapPath := filepath.Join(dir, "hub.json")
 
-	m := metrics.New()
+	m := metrics.New(false)
 	h := NewHub(config.FederationConfig{}, m, nil, snapPath)
 
 	g := discovery.Graph{
@@ -669,7 +671,7 @@ func TestHubWriteSnapshotPersistsGraph(t *testing.T) {
 // not block — writeSnapshotAsync must return immediately.
 func TestHubWriteSnapshotAsyncTimesOut(t *testing.T) {
 	block := make(chan struct{})
-	m := metrics.New()
+	m := metrics.New(false)
 	h := NewHub(config.FederationConfig{}, m, nil, t.TempDir()+"/snap.json")
 	// Use a short timeout and a blocking write fn; both are Hub fields, so
 	// setting them before any goroutines start establishes happens-before.
@@ -716,7 +718,7 @@ func TestHubWriteSnapshotErrorDoesNotPanic(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	m := metrics.New()
+	m := metrics.New(false)
 	h := NewHub(config.FederationConfig{}, m, nil, filepath.Join(blocker, "snap.json"))
 
 	h.writeSnapshot(discovery.Graph{})
@@ -729,7 +731,7 @@ func TestHubWriteSnapshotErrorDoesNotPanic(t *testing.T) {
 // TestHubRestoreGraphPublishesMetrics verifies that RestoreGraph pushes device
 // and edge info metrics so the hub can serve stale data immediately after startup.
 func TestHubRestoreGraphPublishesMetrics(t *testing.T) {
-	m := metrics.New()
+	m := metrics.New(false)
 	h := NewHub(config.FederationConfig{}, m, nil, "")
 
 	g := discovery.Graph{
@@ -749,16 +751,26 @@ func TestHubRestoreGraphPublishesMetrics(t *testing.T) {
 	if got := testutil.ToFloat64(m.GraphStale); got != 1 {
 		t.Errorf("GraphStale = %v after RestoreGraph, want 1 (clearStale=false)", got)
 	}
-	// DeviceInfo and TopologyEdgeInfo should have been populated.
-	if got := testutil.ToFloat64(m.DeviceInfo.WithLabelValues("sw-restore", "cisco", "", "", "")); got != 1 {
-		t.Errorf("DeviceInfo{sw-restore} = %v, want 1", got)
+	// Topology collector should have been populated with the device.
+	mfs, err := m.Registry().Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	var deviceSeries int
+	for _, mf := range mfs {
+		if mf.GetName() == "network_device_info" {
+			deviceSeries = len(mf.GetMetric())
+		}
+	}
+	if deviceSeries != 1 {
+		t.Errorf("network_device_info series after RestoreGraph = %d, want 1", deviceSeries)
 	}
 }
 
 // TestHubOOSUnmatchedMetricIncrementsOnMiss verifies that unmatched OOS hints
 // increment the HubOOSUnmatchedTotal gauge.
 func TestHubOOSUnmatchedMetricIncrementsOnMiss(t *testing.T) {
-	m := metrics.New()
+	m := metrics.New(false)
 	h := NewHub(config.FederationConfig{SpokeTimeout: 5 * time.Minute}, m, nil, "")
 
 	h.mu.Lock()
@@ -955,6 +967,341 @@ func TestHubRunEvictionFiresTickerEviction(t *testing.T) {
 
 	if present {
 		t.Error("dc-expire should have been evicted by runEviction ticker")
+	}
+}
+
+// writeTLSFiles generates a self-signed CA + server cert/key and writes them as
+// PEM files under dir. Returns paths (caPath, certPath, keyPath). Suitable for
+// populating config.FederationHubConfig in Serve() tests.
+func writeTLSFiles(t *testing.T, dir string) (caPath, certPath, keyPath string) {
+	t.Helper()
+
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate CA key: %v", err)
+	}
+	caTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create CA cert: %v", err)
+	}
+
+	srvKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate server key: %v", err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("parse CA cert: %v", err)
+	}
+	srvTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "test-hub"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	srvDER, err := x509.CreateCertificate(rand.Reader, srvTmpl, caCert, &srvKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create server cert: %v", err)
+	}
+
+	srvKeyDER, err := x509.MarshalECPrivateKey(srvKey)
+	if err != nil {
+		t.Fatalf("marshal server key: %v", err)
+	}
+
+	caPath = filepath.Join(dir, "ca.crt")
+	certPath = filepath.Join(dir, "server.crt")
+	keyPath = filepath.Join(dir, "server.key")
+
+	if err := os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}), 0o600); err != nil {
+		t.Fatalf("write CA cert: %v", err)
+	}
+	if err := os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srvDER}), 0o600); err != nil {
+		t.Fatalf("write server cert: %v", err)
+	}
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: srvKeyDER}), 0o600); err != nil {
+		t.Fatalf("write server key: %v", err)
+	}
+	return caPath, certPath, keyPath
+}
+
+// TestServeErrorMissingCAFile verifies that Serve returns an error immediately
+// when the CA cert file does not exist.
+func TestServeErrorMissingCAFile(t *testing.T) {
+	h := NewHub(
+		config.FederationConfig{
+			Hub: config.FederationHubConfig{
+				TLSCACert:  "/nonexistent/ca.crt",
+				TLSCert:    "/nonexistent/server.crt",
+				TLSKey:     "/nonexistent/server.key",
+				ListenAddr: "127.0.0.1:0",
+			},
+		},
+		metrics.New(false), nil, "",
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately — error paths return before blocking
+
+	err := h.Serve(ctx)
+	if err == nil {
+		t.Fatal("Serve: expected error for missing CA file, got nil")
+	}
+	if !strings.Contains(err.Error(), "read CA cert") {
+		t.Errorf("error = %q, want to contain 'read CA cert'", err.Error())
+	}
+}
+
+// TestServeErrorNoPEMInCAFile verifies that Serve returns an error when the CA
+// cert file exists but contains no valid PEM blocks.
+func TestServeErrorNoPEMInCAFile(t *testing.T) {
+	dir := t.TempDir()
+	caPath := filepath.Join(dir, "ca.crt")
+	if err := os.WriteFile(caPath, []byte("not a pem block"), 0o600); err != nil {
+		t.Fatalf("write CA file: %v", err)
+	}
+
+	h := NewHub(
+		config.FederationConfig{
+			Hub: config.FederationHubConfig{
+				TLSCACert:  caPath,
+				TLSCert:    filepath.Join(dir, "server.crt"),
+				TLSKey:     filepath.Join(dir, "server.key"),
+				ListenAddr: "127.0.0.1:0",
+			},
+		},
+		metrics.New(false), nil, "",
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := h.Serve(ctx)
+	if err == nil {
+		t.Fatal("Serve: expected error for non-PEM CA file, got nil")
+	}
+	if !strings.Contains(err.Error(), "no CA certs parsed") {
+		t.Errorf("error = %q, want to contain 'no CA certs parsed'", err.Error())
+	}
+}
+
+// TestServeErrorInvalidCertKeyPair verifies that Serve returns an error when
+// the server cert/key pair cannot be loaded (corrupt key file).
+func TestServeErrorInvalidCertKeyPair(t *testing.T) {
+	dir := t.TempDir()
+	caPath, certPath, _ := writeTLSFiles(t, dir)
+
+	// Replace the key with garbage so LoadX509KeyPair fails.
+	garbageKeyPath := filepath.Join(dir, "garbage.key")
+	if err := os.WriteFile(garbageKeyPath, []byte("not a real key"), 0o600); err != nil {
+		t.Fatalf("write garbage key: %v", err)
+	}
+
+	h := NewHub(
+		config.FederationConfig{
+			Hub: config.FederationHubConfig{
+				TLSCACert:  caPath,
+				TLSCert:    certPath,
+				TLSKey:     garbageKeyPath,
+				ListenAddr: "127.0.0.1:0",
+			},
+		},
+		metrics.New(false), nil, "",
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := h.Serve(ctx)
+	if err == nil {
+		t.Fatal("Serve: expected error for invalid cert/key pair, got nil")
+	}
+	if !strings.Contains(err.Error(), "load server cert/key") {
+		t.Errorf("error = %q, want to contain 'load server cert/key'", err.Error())
+	}
+}
+
+// TestServeErrorListenAddrInUse verifies that Serve returns an error when the
+// listen address is already bound by another listener.
+func TestServeErrorListenAddrInUse(t *testing.T) {
+	// Bind a port first so the hub's net.Listen call fails.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("pre-bind listener: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	addr := ln.Addr().String()
+
+	dir := t.TempDir()
+	caPath, certPath, keyPath := writeTLSFiles(t, dir)
+
+	h := NewHub(
+		config.FederationConfig{
+			Hub: config.FederationHubConfig{
+				TLSCACert:  caPath,
+				TLSCert:    certPath,
+				TLSKey:     keyPath,
+				ListenAddr: addr,
+			},
+		},
+		metrics.New(false), nil, "",
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = h.Serve(ctx)
+	if err == nil {
+		t.Fatal("Serve: expected error for already-bound listen address, got nil")
+	}
+	if !strings.Contains(err.Error(), "listen on") {
+		t.Errorf("error = %q, want to contain 'listen on'", err.Error())
+	}
+}
+
+// TestServeStartsAndShutsDownCleanly verifies that Serve starts the mTLS server
+// and returns nil when the context is cancelled (i.e. http.ErrServerClosed is
+// swallowed). This covers the happy path through srv.Serve and the shutdown
+// goroutine.
+func TestServeStartsAndShutsDownCleanly(t *testing.T) {
+	dir := t.TempDir()
+	caPath, certPath, keyPath := writeTLSFiles(t, dir)
+
+	// Use a random free port so there is no conflict.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("pre-allocate port: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close() // release so Serve can bind it
+
+	h := NewHub(
+		config.FederationConfig{
+			SpokeTimeout: 5 * time.Minute,
+			Hub: config.FederationHubConfig{
+				TLSCACert:  caPath,
+				TLSCert:    certPath,
+				TLSKey:     keyPath,
+				ListenAddr: addr,
+			},
+		},
+		metrics.New(false), nil, "",
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- h.Serve(ctx) }()
+
+	// Give Serve a moment to start listening, then cancel.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Errorf("Serve returned unexpected error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Error("Serve did not return within 3s after context cancellation")
+	}
+}
+
+// TestHubIsReadyFalseBeforeAnyPush verifies that a freshly constructed Hub
+// returns false from IsReady() before any spoke has pushed.
+func TestHubIsReadyFalseBeforeAnyPush(t *testing.T) {
+	h := newTestHub(nil)
+	if h.IsReady() {
+		t.Error("IsReady() = true on new hub, want false")
+	}
+}
+
+// TestHubIsReadyTrueAfterPush verifies that IsReady() returns true after at
+// least one successful spoke push (i.e., after handlePush calls publishMetrics
+// with clearStale=true the first time via firstLive).
+func TestHubIsReadyTrueAfterPush(t *testing.T) {
+	h := newTestHub(nil)
+
+	payload := SpokePayload{SpokeID: "dc-ready", CycleAt: time.Now()}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.handlePush(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("handlePush status = %d, want 204", rec.Code)
+	}
+	if !h.IsReady() {
+		t.Error("IsReady() = false after first successful push, want true")
+	}
+}
+
+// TestHubHandlePushRejectsOversizedPayload verifies that a payload exceeding
+// the per-push device or edge limits is rejected with HTTP 413.
+func TestHubHandlePushRejectsOversizedPayload(t *testing.T) {
+	h := newTestHub(nil)
+
+	// Build a device slice just over maxDevicesPerPush.
+	devices := make([]discovery.Device, maxDevicesPerPush+1)
+	for i := range devices {
+		devices[i] = discovery.Device{ID: fmt.Sprintf("sw-%d", i)}
+	}
+	payload := SpokePayload{
+		SpokeID: "dc-big",
+		CycleAt: time.Now(),
+		Devices: devices,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal oversized payload: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.handlePush(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413 for oversized payload", rec.Code)
+	}
+}
+
+// TestBuildCombinedGraphProtoFallbackToRemote verifies that when the local OOS
+// observation carries an empty proto field, the hub falls back to the remote
+// observation's proto when synthesising the cross-domain edge.
+func TestBuildCombinedGraphProtoFallbackToRemote(t *testing.T) {
+	h := newTestHub(nil)
+	h.mu.Lock()
+	// dc-a reports no proto; dc-b reports "cdp".
+	h.spokes["dc-a"] = spokeEntry{
+		payload: SpokePayload{
+			OutOfScope: []discovery.OutOfScopeNeighbour{
+				{ReportingDevice: "sw-a", ReportingPort: "Gi0/1", NeighbourHint: "sw-b", Proto: ""},
+			},
+		},
+		lastSeen: time.Now(),
+	}
+	h.spokes["dc-b"] = spokeEntry{
+		payload: SpokePayload{
+			OutOfScope: []discovery.OutOfScopeNeighbour{
+				{ReportingDevice: "sw-b", ReportingPort: "Gi0/2", NeighbourHint: "sw-a", Proto: "cdp"},
+			},
+		},
+		lastSeen: time.Now(),
+	}
+	g := h.combinedGraphLocked()
+	h.mu.Unlock()
+
+	if len(g.Edges) != 1 {
+		t.Fatalf("edge count = %d, want 1", len(g.Edges))
+	}
+	if g.Edges[0].DiscoveryProto != "cdp" {
+		t.Errorf("discovery_proto = %q, want cdp (remote proto fallback)", g.Edges[0].DiscoveryProto)
 	}
 }
 

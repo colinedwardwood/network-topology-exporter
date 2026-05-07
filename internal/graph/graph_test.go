@@ -632,6 +632,223 @@ func TestReconcileMultiLinkLAGNoFalsePositive(t *testing.T) {
 	}
 }
 
+// TestDiffNilInputs verifies that Diff(nil, nil) returns nil without panicking.
+func TestDiffNilInputs(t *testing.T) {
+	changes := Diff(nil, nil)
+	if changes != nil {
+		t.Errorf("Diff(nil, nil) = %v, want nil", changes)
+	}
+}
+
+// TestDiffRemovedEdge verifies that Diff returns a change with Kind=Removed
+// when the before set contains an edge not present in after.
+func TestDiffRemovedEdge(t *testing.T) {
+	before := discovery.Edge{
+		SrcDevice: "a", SrcPort: "Gi0/1",
+		DstDevice: "b", DstPort: "Gi0/2",
+		DiscoveryProto: "lldp", Direction: discovery.DirectionBidirectional,
+	}
+	changes := Diff([]discovery.Edge{before}, nil)
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 change, got %d: %v", len(changes), changes)
+	}
+	if changes[0].Kind != ChangeRemoved {
+		t.Errorf("Kind = %q, want %q", changes[0].Kind, ChangeRemoved)
+	}
+	if changes[0].Before == nil {
+		t.Error("Before must be non-nil for a removed edge")
+	}
+}
+
+// TestCompareEdgeKeyLess exercises compareEdgeKey via Key() sorting for the
+// case where a.SrcDevice < b.SrcDevice — Key() must pick the lexically smaller
+// device as SrcDevice.
+func TestCompareEdgeKeyLess(t *testing.T) {
+	// "aaa" < "zzz" so the canonical key should have aaa as SrcDevice.
+	e := discovery.Edge{SrcDevice: "zzz", SrcPort: "Gi0/1", DstDevice: "aaa", DstPort: "Gi0/2"}
+	k := Key(e)
+	if k.SrcDevice != "aaa" {
+		t.Errorf("SrcDevice = %q, want aaa (compareEdgeKey must return negative for a<b)", k.SrcDevice)
+	}
+}
+
+// TestCompareEdgeKeyGreater exercises compareEdgeKey via Key() for the case
+// where a.SrcDevice > b.SrcDevice — Key() picks the lexically smaller device.
+func TestCompareEdgeKeyGreater(t *testing.T) {
+	// "mmm" < "zzz" so the canonical key has mmm as SrcDevice.
+	e := discovery.Edge{SrcDevice: "zzz", SrcPort: "Gi0/1", DstDevice: "mmm", DstPort: "Gi0/2"}
+	k := Key(e)
+	if k.SrcDevice != "mmm" {
+		t.Errorf("SrcDevice = %q, want mmm (compareEdgeKey must return positive for a>b)", k.SrcDevice)
+	}
+}
+
+// TestCompareEdgeKeyAllFieldsEqual verifies the equal case: two identical
+// EdgeKeys must be considered the same edge (no swap needed in Key()).
+func TestCompareEdgeKeyAllFieldsEqual(t *testing.T) {
+	e := discovery.Edge{SrcDevice: "sw-a", SrcPort: "Gi0/1", DstDevice: "sw-a", DstPort: "Gi0/1"}
+	k := Key(e)
+	if k.SrcDevice != "sw-a" || k.SrcPort != "Gi0/1" || k.DstDevice != "sw-a" || k.DstPort != "Gi0/1" {
+		t.Errorf("Key for identical endpoints = %#v, expected no change", k)
+	}
+}
+
+// TestCompareEdgeKeySrcPortDiffers exercises the SrcPort comparison branch in
+// compareEdgeKey: same SrcDevice, a.SrcPort < b.SrcPort.
+func TestCompareEdgeKeySrcPortDiffers(t *testing.T) {
+	// Both have the same device pair. Key must pick the form where
+	// the src port sorts first lexically.
+	// Edge: sw-a:Gi0/1 → sw-a:Gi0/2 — device tie-breaks on port; Gi0/1 < Gi0/2.
+	a := EdgeKey{SrcDevice: "sw-a", SrcPort: "Gi0/1", DstDevice: "sw-a", DstPort: "Gi0/2"}
+	b := EdgeKey{SrcDevice: "sw-a", SrcPort: "Gi0/2", DstDevice: "sw-a", DstPort: "Gi0/1"}
+	// Reconcile uses compareEdgeKey to pick canonical form; verify via normalizedGroupKey
+	// indirectly by passing this through Reconcile with two observations.
+	e := discovery.Edge{SrcDevice: "sw-a", SrcPort: "Gi0/1", DstDevice: "sw-a", DstPort: "Gi0/2",
+		DiscoveryProto: "lldp", PrecedenceRank: 1}
+	k := Key(e)
+	// Key must resolve to the form where a ≤ b (i.e., Gi0/1 appears as SrcPort).
+	if compareEdgeKey(a, b) >= 0 {
+		t.Errorf("compareEdgeKey(a, b) = %d; expected negative (Gi0/1 < Gi0/2)",
+			compareEdgeKey(a, b))
+	}
+	_ = k
+}
+
+// TestCompareEdgeKeyDstDeviceDiffers exercises both DstDevice comparison branches:
+// same SrcDevice + SrcPort, with a.DstDevice > b.DstDevice (positive) and
+// a.DstDevice < b.DstDevice (negative).
+func TestCompareEdgeKeyDstDeviceDiffers(t *testing.T) {
+	// a.DstDevice "zzz" > b.DstDevice "aaa" → positive.
+	a := EdgeKey{SrcDevice: "sw-a", SrcPort: "Gi0/1", DstDevice: "zzz", DstPort: "Gi0/2"}
+	b := EdgeKey{SrcDevice: "sw-a", SrcPort: "Gi0/1", DstDevice: "aaa", DstPort: "Gi0/2"}
+	if got := compareEdgeKey(a, b); got <= 0 {
+		t.Errorf("compareEdgeKey(a, b) = %d; expected positive (zzz > aaa)", got)
+	}
+	// a.DstDevice "aaa" < b.DstDevice "zzz" → negative.
+	c := EdgeKey{SrcDevice: "sw-a", SrcPort: "Gi0/1", DstDevice: "aaa", DstPort: "Gi0/2"}
+	d := EdgeKey{SrcDevice: "sw-a", SrcPort: "Gi0/1", DstDevice: "zzz", DstPort: "Gi0/2"}
+	if got := compareEdgeKey(c, d); got >= 0 {
+		t.Errorf("compareEdgeKey(c, d) = %d; expected negative (aaa < zzz)", got)
+	}
+}
+
+// TestCompareEdgeKeyDstPortDiffers exercises the DstPort comparison branches
+// in compareEdgeKey: same SrcDevice, SrcPort, and DstDevice but differing DstPort.
+func TestCompareEdgeKeyDstPortDiffers(t *testing.T) {
+	// a.DstPort < b.DstPort → should return negative.
+	a := EdgeKey{SrcDevice: "sw-a", SrcPort: "Gi0/1", DstDevice: "sw-b", DstPort: "Gi0/1"}
+	b := EdgeKey{SrcDevice: "sw-a", SrcPort: "Gi0/1", DstDevice: "sw-b", DstPort: "Gi0/2"}
+	if got := compareEdgeKey(a, b); got >= 0 {
+		t.Errorf("compareEdgeKey(a,b) = %d; expected negative (Gi0/1 < Gi0/2 for DstPort)", got)
+	}
+	// a.DstPort > b.DstPort → should return positive.
+	c := EdgeKey{SrcDevice: "sw-a", SrcPort: "Gi0/1", DstDevice: "sw-b", DstPort: "Gi0/9"}
+	d := EdgeKey{SrcDevice: "sw-a", SrcPort: "Gi0/1", DstDevice: "sw-b", DstPort: "Gi0/2"}
+	if got := compareEdgeKey(c, d); got <= 0 {
+		t.Errorf("compareEdgeKey(c,d) = %d; expected positive (Gi0/9 > Gi0/2 for DstPort)", got)
+	}
+}
+
+// TestCompareEdgeKeyDefault exercises the default return 0 case: all fields equal.
+func TestCompareEdgeKeyDefault(t *testing.T) {
+	k := EdgeKey{SrcDevice: "sw-a", SrcPort: "Gi0/1", DstDevice: "sw-b", DstPort: "Gi0/2"}
+	if got := compareEdgeKey(k, k); got != 0 {
+		t.Errorf("compareEdgeKey(k, k) = %d; expected 0 for equal keys", got)
+	}
+}
+
+// TestReconcileConflictSortOrder exercises the conflict-sorting path by
+// generating multiple conflicts with different SrcDevice and SrcPort values,
+// verifying they are returned in lexical order.
+func TestReconcileConflictSortOrder(t *testing.T) {
+	// Two conflicts: one on zzz-sw:Gi0/1, one on aaa-sw:Gi0/1.
+	// After sorting, aaa-sw should come first.
+	edges := []discovery.Edge{
+		// Conflict on zzz-sw:Gi0/1 — lldp says sw-02, cdp says sw-03.
+		{SrcDevice: "zzz-sw", SrcPort: "Gi0/1", DstDevice: "sw-02", DstPort: "Gi0/1",
+			DiscoveryProto: "lldp", PrecedenceRank: 1},
+		{SrcDevice: "zzz-sw", SrcPort: "Gi0/1", DstDevice: "sw-03", DstPort: "Gi0/1",
+			DiscoveryProto: "cdp", PrecedenceRank: 1},
+		// Conflict on aaa-sw:Gi0/1 — lldp says sw-04, cdp says sw-05.
+		{SrcDevice: "aaa-sw", SrcPort: "Gi0/1", DstDevice: "sw-04", DstPort: "Gi0/1",
+			DiscoveryProto: "lldp", PrecedenceRank: 1},
+		{SrcDevice: "aaa-sw", SrcPort: "Gi0/1", DstDevice: "sw-05", DstPort: "Gi0/1",
+			DiscoveryProto: "cdp", PrecedenceRank: 1},
+	}
+	_, conflicts := Reconcile(edges)
+	if len(conflicts) < 2 {
+		t.Fatalf("expected at least 2 conflicts, got %d", len(conflicts))
+	}
+	if conflicts[0].SrcDevice != "aaa-sw" {
+		t.Errorf("first conflict SrcDevice = %q, want aaa-sw (sorted order)", conflicts[0].SrcDevice)
+	}
+	if conflicts[1].SrcDevice != "zzz-sw" {
+		t.Errorf("second conflict SrcDevice = %q, want zzz-sw (sorted order)", conflicts[1].SrcDevice)
+	}
+}
+
+// TestReconcileConflictSortOrderSameDevice exercises the SrcPort tie-break in
+// conflict sorting: two conflicts on the same device but different ports.
+func TestReconcileConflictSortOrderSameDevice(t *testing.T) {
+	edges := []discovery.Edge{
+		// Conflict on sw-a:Gi0/2 — lldp says sw-x, cdp says sw-y.
+		{SrcDevice: "sw-a", SrcPort: "Gi0/2", DstDevice: "sw-x", DstPort: "Gi0/1",
+			DiscoveryProto: "lldp", PrecedenceRank: 1},
+		{SrcDevice: "sw-a", SrcPort: "Gi0/2", DstDevice: "sw-y", DstPort: "Gi0/1",
+			DiscoveryProto: "cdp", PrecedenceRank: 1},
+		// Conflict on sw-a:Gi0/1 — lldp says sw-m, cdp says sw-n.
+		{SrcDevice: "sw-a", SrcPort: "Gi0/1", DstDevice: "sw-m", DstPort: "Gi0/1",
+			DiscoveryProto: "lldp", PrecedenceRank: 1},
+		{SrcDevice: "sw-a", SrcPort: "Gi0/1", DstDevice: "sw-n", DstPort: "Gi0/1",
+			DiscoveryProto: "cdp", PrecedenceRank: 1},
+	}
+	_, conflicts := Reconcile(edges)
+	if len(conflicts) < 2 {
+		t.Fatalf("expected at least 2 conflicts, got %d", len(conflicts))
+	}
+	// Gi0/1 < Gi0/2, so Gi0/1 should be first.
+	if conflicts[0].SrcPort != "Gi0/1" {
+		t.Errorf("first conflict SrcPort = %q, want Gi0/1 (sorted by SrcPort)", conflicts[0].SrcPort)
+	}
+	if conflicts[1].SrcPort != "Gi0/2" {
+		t.Errorf("second conflict SrcPort = %q, want Gi0/2 (sorted by SrcPort)", conflicts[1].SrcPort)
+	}
+}
+
+// TestReconcileConflictSeenKeyDedup exercises the seenKey deduplication guard
+// in the conflict-detection loop. We need the same group key to appear more
+// than once in portNeighbours[portKey] while also having a different DstDevice
+// observation to trigger conflict detection. Two observations that normalize
+// to the same EdgeKey (same group) plus one observation with a different
+// DstDevice achieves this.
+func TestReconcileConflictSeenKeyDedup(t *testing.T) {
+	// Two observations from sw-a:Gi0/1 → sw-b:Gi0/2 (same EdgeKey, rank 1)
+	// and one from sw-a:Gi0/1 → sw-c:Gi0/1 (different EdgeKey, rank 1).
+	// The same EdgeKey appears twice in portNeighbours[{sw-a,Gi0/1}], triggering
+	// the seenKey[k] dedup branch.
+	edges := []discovery.Edge{
+		// Two observations mapping to the same group/EdgeKey (same src+dst pair, diff proto).
+		{SrcDevice: "sw-a", SrcPort: "Gi0/1", DstDevice: "sw-b", DstPort: "Gi0/2",
+			DiscoveryProto: "lldp", PrecedenceRank: 1},
+		{SrcDevice: "sw-a", SrcPort: "GigabitEthernet0/1", DstDevice: "sw-b", DstPort: "Gi0/2",
+			DiscoveryProto: "cdp", PrecedenceRank: 1},
+		// Third observation — different neighbor, triggers the conflict.
+		{SrcDevice: "sw-a", SrcPort: "Gi0/1", DstDevice: "sw-c", DstPort: "Gi0/1",
+			DiscoveryProto: "ospf", PrecedenceRank: 1},
+	}
+	_, conflicts := Reconcile(edges)
+	// There should be at least one NeighbourDisagreement conflict.
+	found := false
+	for _, c := range conflicts {
+		if c.Kind == ConflictNeighbourDisagreement && c.SrcDevice == "sw-a" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected ConflictNeighbourDisagreement for sw-a, got %v", conflicts)
+	}
+}
+
 // TestReconcileNeighbourDisagreementAcrossEncodings verifies that
 // NeighbourDisagreement fires when the same port (under different encodings)
 // names different neighbor devices.

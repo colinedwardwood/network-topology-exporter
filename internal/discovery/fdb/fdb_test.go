@@ -2,6 +2,8 @@ package fdb
 
 import (
 	"context"
+	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -419,6 +421,625 @@ func TestWalkVlanCommunityFdbDiscovery(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected edge with DstDevice 00:aa:bb:cc:dd:ee, got %v", edges)
+	}
+}
+
+// startLimitedAgent starts a UDP SNMPv2c agent that responds to at most
+// maxResponses GetBulk/GetNext/Get requests with empty (EndOfMibView) results,
+// then stops responding. This lets tests drive Walk() through its sequential
+// BulkWalk calls, making the Nth+1 call fail by timeout.
+//
+// The Params returned point at the agent with a 50 ms timeout. At most
+// one retry (the gosnmp default) is performed per BulkWalkAll call, so each
+// failed call costs ~100 ms.  WalkAll fallback also adds ~100 ms, capping
+// total per-Walk-call cost at ~200 ms.
+//
+// Count of BulkWalk calls Walk() makes (with community set, !V3):
+//
+//	#1  walkFdbTable        → oidFdbTable
+//	#2  walkQBridgeFdbTable → oidQBridgeFdbTable   (error discarded)
+//	#3  discoverVlanIDs     → oidVlanCurrentTable  (called by walkVlanCommunityFdbs)
+//	#4  walkBasePortTable   → oidBasePortTable
+//	#5  walkStpPortStates   → oidStpPortTable
+//	#6  WalkIfNames         → oidIfNameTable
+//
+// Set maxResponses to the number of successful (empty) responses the agent
+// should send before going dark. The Walk call will then fail on the next BulkWalk.
+func startLimitedAgent(t *testing.T, community string, maxResponses int) (net.IP, uint16) {
+	t.Helper()
+
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("startLimitedAgent: listen: %v", err)
+	}
+
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		_ = conn.Close()
+		<-done
+	})
+
+	go func() {
+		defer close(done)
+		buf := make([]byte, 65535)
+		decoder := &gsnmp.GoSNMP{Version: gsnmp.Version2c, Community: community}
+		responded := 0
+		for responded < maxResponses {
+			n, src, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			pkt, err := decoder.SnmpDecodePacket(buf[:n])
+			if err != nil || pkt.Community != community {
+				continue
+			}
+			// Return EndOfMibView for every requested variable.
+			vars := make([]gsnmp.SnmpPDU, len(pkt.Variables))
+			for i, v := range pkt.Variables {
+				vars[i] = gsnmp.SnmpPDU{Name: v.Name, Type: gsnmp.EndOfMibView}
+			}
+			reply := &gsnmp.SnmpPacket{
+				Version:   gsnmp.Version2c,
+				Community: community,
+				PDUType:   gsnmp.GetResponse,
+				RequestID: pkt.RequestID,
+				Variables: vars,
+			}
+			raw, err := reply.MarshalMsg()
+			if err != nil {
+				continue
+			}
+			_, _ = conn.WriteTo(raw, src)
+			responded++
+		}
+		// Stop responding: close the connection so no further replies are sent.
+		_ = conn.Close()
+	}()
+
+	host, portStr, _ := net.SplitHostPort(conn.LocalAddr().String())
+	portVal, _ := net.LookupPort("udp", portStr)
+	return net.ParseIP(host), uint16(portVal) //nolint:gosec // net.LookupPort always returns 0–65535
+}
+
+// openDeadClient opens a GoSNMP session that will time out on any BulkWalk,
+// for use in tests that call individual walk functions directly.
+func openDeadClient(t *testing.T) *gsnmp.GoSNMP {
+	t.Helper()
+	// Nothing listens on port 1; UDP Connect succeeds but BulkWalkAll will time out.
+	// We use a cancelled context in the actual test, so no real timeout is incurred.
+	client := &gsnmp.GoSNMP{
+		Target:    "127.0.0.1",
+		Port:      1,
+		Community: "public",
+		Version:   gsnmp.Version2c,
+		Timeout:   50 * time.Millisecond,
+		Retries:   0,
+		MaxOids:   gsnmp.MaxOids,
+		Transport: "udp",
+	}
+	if err := client.Connect(); err != nil {
+		t.Fatalf("openDeadClient: Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Conn.Close() })
+	return client
+}
+
+// cancelledCtx returns a context that has already been cancelled.
+func cancelledCtx() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
+
+// openClientToAgent starts a snmptest agent with the given PDUs and opens a
+// GoSNMP client pointing at it. Returns the client; cleanup is handled by t.
+func openClientToAgent(t *testing.T, community string, pdus []gsnmp.SnmpPDU) *gsnmp.GoSNMP {
+	t.Helper()
+	addr := snmptest.Start(t, community, pdus)
+	ip, port := snmptest.ParseAddr(addr)
+	p := snmputil.Params{
+		IP:        ip,
+		Port:      port,
+		Community: community,
+		Timeout:   3 * time.Second,
+	}
+	client, err := snmputil.Open(p)
+	if err != nil {
+		t.Fatalf("openClientToAgent: Open: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Conn.Close() })
+	return client
+}
+
+// ---------------------------------------------------------------------------
+// Walk() error paths
+// ---------------------------------------------------------------------------
+
+// Walk: nil IP causes snmputil.Open to fail → Walk returns error.
+func TestWalkOpenFails(t *testing.T) {
+	p := snmputil.Params{
+		IP:        net.IP(nil), // "nil" resolves to "<nil>" which fails DNS lookup
+		Port:      12345,
+		Community: "public",
+		Timeout:   50 * time.Millisecond,
+	}
+	_, _, err := Walk(context.Background(), p, "sw", nil)
+	if err == nil {
+		t.Fatal("expected error when IP is nil, got nil")
+	}
+	if !strings.Contains(err.Error(), "fdb") {
+		t.Errorf("error %q does not mention 'fdb'", err)
+	}
+}
+
+// Walk: walkFdbTable fails (agent gives no response) → Walk returns "fdb table" error.
+func TestWalkFdbTableFails(t *testing.T) {
+	ip, port := startLimitedAgent(t, "public", 0) // responds to 0 requests
+	p := snmputil.Params{
+		IP:        ip,
+		Port:      port,
+		Community: "public",
+		Timeout:   50 * time.Millisecond,
+	}
+	_, _, err := Walk(context.Background(), p, "sw", nil)
+	if err == nil {
+		t.Fatal("expected error when FDB walk times out, got nil")
+	}
+	if !strings.Contains(err.Error(), "fdb table") {
+		t.Errorf("error %q does not mention 'fdb table'", err)
+	}
+}
+
+// Walk: walkBasePortTable fails → Walk returns "fdb baseport" error.
+// The agent responds to the first 3 BulkWalk calls (FDB, Q-BRIDGE, VLAN
+// discovery) with empty results, then stops responding.
+func TestWalkBasePortTableFails(t *testing.T) {
+	ip, port := startLimitedAgent(t, "public", 3)
+	p := snmputil.Params{
+		IP:        ip,
+		Port:      port,
+		Community: "public",
+		Timeout:   50 * time.Millisecond,
+	}
+	_, _, err := Walk(context.Background(), p, "sw", nil)
+	if err == nil {
+		t.Fatal("expected error when basePort walk fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "fdb baseport") {
+		t.Errorf("error %q does not mention 'fdb baseport'", err)
+	}
+}
+
+// Walk: walkStpPortStates fails → Walk returns "fdb stpport" error.
+func TestWalkStpPortStatesFails(t *testing.T) {
+	ip, port := startLimitedAgent(t, "public", 4)
+	p := snmputil.Params{
+		IP:        ip,
+		Port:      port,
+		Community: "public",
+		Timeout:   50 * time.Millisecond,
+	}
+	_, _, err := Walk(context.Background(), p, "sw", nil)
+	if err == nil {
+		t.Fatal("expected error when STP walk fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "fdb stpport") {
+		t.Errorf("error %q does not mention 'fdb stpport'", err)
+	}
+}
+
+// Walk: WalkIfNames fails → Walk returns "fdb ifname" error.
+func TestWalkIfNamesFails(t *testing.T) {
+	ip, port := startLimitedAgent(t, "public", 5)
+	p := snmputil.Params{
+		IP:        ip,
+		Port:      port,
+		Community: "public",
+		Timeout:   50 * time.Millisecond,
+	}
+	_, _, err := Walk(context.Background(), p, "sw", nil)
+	if err == nil {
+		t.Fatal("expected error when ifName walk fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "fdb ifname") {
+		t.Errorf("error %q does not mention 'fdb ifname'", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// walkFdbTableInto() coverage gaps
+// ---------------------------------------------------------------------------
+
+// walkFdbTableInto: BulkWalk fails → returns error immediately.
+func TestWalkFdbTableIntoBulkWalkError(t *testing.T) {
+	client := openDeadClient(t)
+	entries := make(map[string]*fdbEntry)
+	err := walkFdbTableInto(cancelledCtx(), client, entries)
+	if err == nil {
+		t.Fatal("expected error from walkFdbTableInto with cancelled context, got nil")
+	}
+}
+
+// walkFdbTableInto: PDU whose name starts with oidFdbTable but not with the
+// ".1." sub-table prefix is silently skipped (TrimOIDPrefix returns !ok).
+// We inject a PDU under the fictitious ".2." sub-table of dot1dTpFdbTable.
+func TestWalkFdbTableIntoTrimPrefixSkip(t *testing.T) {
+	// ".1.3.6.1.2.1.17.4.3.2.1.0.1.2.3.4.5" is within the oidFdbTable subtree
+	// (".1.3.6.1.2.1.17.4.3") but NOT under the ".1." entry sub-table that
+	// walkFdbTableInto expects. BulkWalk returns it; TrimOIDPrefix rejects it.
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.17.4.3.2.1.0.1.2.3.4.5", Type: gsnmp.Integer, Value: 0},
+	}
+	client := openClientToAgent(t, "public", pdus)
+	entries := make(map[string]*fdbEntry)
+	err := walkFdbTableInto(context.Background(), client, entries)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected 0 entries (PDU skipped), got %d", len(entries))
+	}
+}
+
+// walkFdbTableInto: PDU with column-only OID (no MAC instance suffix) →
+// SplitOIDComponent returns macKey=="" → entry silently skipped.
+func TestWalkFdbTableIntoMacKeyEmpty(t *testing.T) {
+	// ".1.3.6.1.2.1.17.4.3.1.3" has suffix "3" after the prefix;
+	// SplitOIDComponent("3") returns (3, "", true) → macKey=="" → skip.
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.17.4.3.1.3", Type: gsnmp.Integer, Value: 0},
+	}
+	client := openClientToAgent(t, "public", pdus)
+	entries := make(map[string]*fdbEntry)
+	err := walkFdbTableInto(context.Background(), client, entries)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected 0 entries (column-only OID skipped), got %d", len(entries))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// walkQBridgeFdbTable() coverage gaps
+// ---------------------------------------------------------------------------
+
+// walkQBridgeFdbTable: BulkWalk fails → returns error.
+func TestWalkQBridgeFdbTableBulkWalkError(t *testing.T) {
+	client := openDeadClient(t)
+	err := walkQBridgeFdbTable(cancelledCtx(), client, make(map[string]*fdbEntry))
+	if err == nil {
+		t.Fatal("expected error from walkQBridgeFdbTable with cancelled context, got nil")
+	}
+}
+
+// walkQBridgeFdbTable: PDU whose name equals the table OID root (without the
+// trailing ".") is returned by gosnmp in its GetRequest fallback path and has a
+// name that does NOT start with the expected ".1.3.6.1.2.1.17.7.1.2.2." prefix.
+// TrimOIDPrefix returns !ok → entry silently skipped.
+//
+// To trigger gosnmp's GetRequest fallback we include one PDU outside the
+// table subtree so that the first GetBulk response is out-of-range, causing
+// gosnmp to retry with GetRequest.  The GetRequest returns the exact table-OID
+// PDU (no trailing "."), which fails the prefix check.
+func TestWalkQBridgeFdbTableTrimPrefixSkip(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		// Exact table OID: returned by gosnmp's GetRequest fallback as a leaf.
+		{Name: ".1.3.6.1.2.1.17.7.1.2.2", Type: gsnmp.Integer, Value: 0},
+		// Out-of-range OID: causes gosnmp to treat the table as a leaf and
+		// retry with GetRequest on the first walk iteration.
+		{Name: ".1.3.6.1.2.1.17.7.1.2.9", Type: gsnmp.Integer, Value: 0},
+	}
+	client := openClientToAgent(t, "public", pdus)
+	entries := make(map[string]*fdbEntry)
+	err := walkQBridgeFdbTable(context.Background(), client, entries)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected 0 entries (prefix-skip PDU), got %d", len(entries))
+	}
+}
+
+// walkQBridgeFdbTable: PDU with column-only OID (no VLAN+MAC instance) →
+// SplitOIDComponent returns rest=="" → entry silently skipped.
+func TestWalkQBridgeFdbTableRestEmpty(t *testing.T) {
+	// Suffix "2" after the prefix → SplitOIDComponent("2") → (2,"",true) → rest=="" → skip.
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.17.7.1.2.2.2", Type: gsnmp.Integer, Value: 0},
+	}
+	client := openClientToAgent(t, "public", pdus)
+	entries := make(map[string]*fdbEntry)
+	err := walkQBridgeFdbTable(context.Background(), client, entries)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected 0 entries (rest-empty skip), got %d", len(entries))
+	}
+}
+
+// walkQBridgeFdbTable: PDU with column number other than colQBridgePort(2) or
+// colQBridgeStatus(3) → entry silently skipped.
+func TestWalkQBridgeFdbTableColumnSkip(t *testing.T) {
+	// Column 1 is not colQBridgePort (2) or colQBridgeStatus (3) → skip.
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.17.7.1.2.2.1.10.0.1.2.3.4.5", Type: gsnmp.Integer, Value: 1},
+	}
+	client := openClientToAgent(t, "public", pdus)
+	entries := make(map[string]*fdbEntry)
+	err := walkQBridgeFdbTable(context.Background(), client, entries)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected 0 entries (column skip), got %d", len(entries))
+	}
+}
+
+// walkQBridgeFdbTable: PDU instance with fewer than 7 components → parseQBridgeIndex
+// returns !ok → entry silently skipped.
+func TestWalkQBridgeFdbTableInvalidInstance(t *testing.T) {
+	// Suffix after the prefix: "2.10.0.1.2" — only 5 components, needs ≥7.
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.17.7.1.2.2.2.10.0.1.2", Type: gsnmp.Integer, Value: 1},
+	}
+	client := openClientToAgent(t, "public", pdus)
+	entries := make(map[string]*fdbEntry)
+	err := walkQBridgeFdbTable(context.Background(), client, entries)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected 0 entries (invalid instance skip), got %d", len(entries))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// discoverVlanIDs() coverage gaps
+// ---------------------------------------------------------------------------
+
+// discoverVlanIDs: BulkWalk fails → returns nil (not a panic).
+func TestDiscoverVlanIDsBulkWalkError(t *testing.T) {
+	client := openDeadClient(t)
+	ids := discoverVlanIDs(cancelledCtx(), client)
+	if ids != nil {
+		t.Errorf("expected nil on BulkWalk error, got %v", ids)
+	}
+}
+
+// discoverVlanIDs: PDU with the exact table OID (no trailing ".") is returned
+// via gosnmp's GetRequest fallback and fails TrimOIDPrefix → entry skipped.
+func TestDiscoverVlanIDsTrimPrefixSkip(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.17.7.1.4.2", Type: gsnmp.Integer, Value: 0},
+		{Name: ".1.3.6.1.2.1.17.7.1.4.9", Type: gsnmp.Integer, Value: 0},
+	}
+	client := openClientToAgent(t, "public", pdus)
+	ids := discoverVlanIDs(context.Background(), client)
+	if ids != nil {
+		t.Errorf("expected nil (PDU skipped, no valid VLANs), got %v", ids)
+	}
+}
+
+// discoverVlanIDs: PDU with column-only OID (no timeMark or vlanID) →
+// SplitOIDComponent returns rest=="" → entry skipped.
+func TestDiscoverVlanIDsRestEmpty(t *testing.T) {
+	// ".1.3.6.1.2.1.17.7.1.4.2.3" → suffix "3" → SplitOIDComponent → (3,"",true) → skip.
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.17.7.1.4.2.3", Type: gsnmp.Integer, Value: 0},
+	}
+	client := openClientToAgent(t, "public", pdus)
+	ids := discoverVlanIDs(context.Background(), client)
+	if ids != nil {
+		t.Errorf("expected nil (column-only OID skipped), got %v", ids)
+	}
+}
+
+// discoverVlanIDs: PDU with col.timeMark only (no vlanID suffix) →
+// second SplitOIDComponent returns vlanStr=="" → entry skipped.
+func TestDiscoverVlanIDsVlanStrEmpty(t *testing.T) {
+	// ".1.3.6.1.2.1.17.7.1.4.2.3.0" → suffix "3.0" →
+	// first split: (3,"0",true) → second split of "0": (0,"",true) → vlanStr="" → skip.
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.17.7.1.4.2.3.0", Type: gsnmp.Integer, Value: 0},
+	}
+	client := openClientToAgent(t, "public", pdus)
+	ids := discoverVlanIDs(context.Background(), client)
+	if ids != nil {
+		t.Errorf("expected nil (no-vlanID OID skipped), got %v", ids)
+	}
+}
+
+// discoverVlanIDs: VLAN ID out of range (0 and 5000) → entries skipped.
+func TestDiscoverVlanIDsOutOfRange(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		// vlanID = 0: below minimum (1)
+		{Name: ".1.3.6.1.2.1.17.7.1.4.2.3.0.0", Type: gsnmp.Integer, Value: 0},
+		// vlanID = 5000: above maximum (4094)
+		{Name: ".1.3.6.1.2.1.17.7.1.4.2.3.0.5000", Type: gsnmp.Integer, Value: 0},
+	}
+	client := openClientToAgent(t, "public", pdus)
+	ids := discoverVlanIDs(context.Background(), client)
+	if ids != nil {
+		t.Errorf("expected nil (all VLAN IDs out of range), got %v", ids)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// walkVlanCommunityFdbs() coverage gaps
+// ---------------------------------------------------------------------------
+
+// walkVlanCommunityFdbs: V3 session → early return (community-string indexing
+// is SNMPv2c-only).
+func TestWalkVlanCommunityFdbsV3Skip(t *testing.T) {
+	client := openDeadClient(t)
+	entries := make(map[string]*fdbEntry)
+	p := snmputil.Params{V3: true, Community: "public"}
+	// Should return without calling anything on client (which is dead).
+	walkVlanCommunityFdbs(context.Background(), p, client, entries)
+}
+
+// walkVlanCommunityFdbs: per-VLAN snmputil.Open fails (nil IP) → continue
+// without panicking or aborting.
+//
+// discoverVlanIDs is called with a real client (pointing at the agent), so it
+// discovers one VLAN. The per-VLAN Open then uses p.IP=nil, which resolves to
+// the invalid host "<nil>", causing Connect to fail and the iteration to be
+// skipped via continue.
+func TestWalkVlanCommunityFdbsOpenFails(t *testing.T) {
+	vlanTablePDUs := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.17.7.1.4.2.3.0.10", Type: gsnmp.Integer, Value: 10},
+	}
+	addr := snmptest.Start(t, "public", vlanTablePDUs)
+	ip, port := snmptest.ParseAddr(addr)
+
+	// Open a real client to the agent for discoverVlanIDs to use.
+	realClient, err := snmputil.Open(snmputil.Params{
+		IP:        ip,
+		Port:      port,
+		Community: "public",
+		Timeout:   3 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = realClient.Conn.Close() }()
+
+	// p.IP = nil means vp.IP is also nil; snmputil.Open(vp) will fail DNS lookup
+	// ("<nil>" is not a resolvable host), hitting the `continue` branch.
+	p := snmputil.Params{
+		IP:        net.IP(nil),
+		Port:      port,
+		Community: "public",
+		Timeout:   50 * time.Millisecond,
+	}
+	entries := make(map[string]*fdbEntry)
+	// Should not panic and should not add any entries.
+	walkVlanCommunityFdbs(context.Background(), p, realClient, entries)
+}
+
+// ---------------------------------------------------------------------------
+// walkBasePortTable() coverage gaps
+// ---------------------------------------------------------------------------
+
+// walkBasePortTable: BulkWalk fails → returns error.
+func TestWalkBasePortTableBulkWalkError(t *testing.T) {
+	client := openDeadClient(t)
+	_, err := walkBasePortTable(cancelledCtx(), client)
+	if err == nil {
+		t.Fatal("expected error from walkBasePortTable with cancelled context, got nil")
+	}
+}
+
+// walkBasePortTable: PDU under the ".2." sub-table of dot1dBasePortTable (not
+// ".1.") fails TrimOIDPrefix → entry silently skipped.
+func TestWalkBasePortTableTrimPrefixSkip(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.17.1.4.2.2.1", Type: gsnmp.Integer, Value: 3},
+	}
+	client := openClientToAgent(t, "public", pdus)
+	ports, err := walkBasePortTable(context.Background(), client)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ports) != 0 {
+		t.Errorf("expected 0 ports (prefix-skip PDU), got %d", len(ports))
+	}
+}
+
+// walkBasePortTable: PDU with a column number other than colBasePortIfIndex(2)
+// → col != colBasePortIfIndex → entry silently skipped.
+func TestWalkBasePortTableColSkip(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		// column 1, not column 2 (colBasePortIfIndex)
+		{Name: ".1.3.6.1.2.1.17.1.4.1.1.5", Type: gsnmp.Integer, Value: 7},
+	}
+	client := openClientToAgent(t, "public", pdus)
+	ports, err := walkBasePortTable(context.Background(), client)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ports) != 0 {
+		t.Errorf("expected 0 ports (col != colBasePortIfIndex), got %d", len(ports))
+	}
+}
+
+// walkBasePortTable: PDU OID ".1.3.6.1.2.1.17.1.4.1.2" — column 2 with no
+// port number suffix → portStr="" → strconv.Atoi("") fails → entry skipped.
+func TestWalkBasePortTablePortStrEmpty(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.17.1.4.1.2", Type: gsnmp.Integer, Value: 0},
+	}
+	client := openClientToAgent(t, "public", pdus)
+	ports, err := walkBasePortTable(context.Background(), client)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ports) != 0 {
+		t.Errorf("expected 0 ports (portStr empty), got %d", len(ports))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// walkStpPortStates() coverage gaps
+// ---------------------------------------------------------------------------
+
+// walkStpPortStates: BulkWalk fails → returns error.
+func TestWalkStpPortStatesBulkWalkError(t *testing.T) {
+	client := openDeadClient(t)
+	_, err := walkStpPortStates(cancelledCtx(), client)
+	if err == nil {
+		t.Fatal("expected error from walkStpPortStates with cancelled context, got nil")
+	}
+}
+
+// walkStpPortStates: PDU under the ".2." sub-table of dot1dStpPortTable fails
+// TrimOIDPrefix → entry silently skipped.
+func TestWalkStpPortStatesTrimPrefixSkip(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.17.2.15.2.3.1", Type: gsnmp.Integer, Value: 5},
+	}
+	client := openClientToAgent(t, "public", pdus)
+	states, err := walkStpPortStates(context.Background(), client)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(states) != 0 {
+		t.Errorf("expected 0 states (prefix-skip PDU), got %d", len(states))
+	}
+}
+
+// walkStpPortStates: PDU with column number other than colStpPortState(3)
+// → col != colStpPortState → entry silently skipped.
+func TestWalkStpPortStatesColSkip(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		// column 1, not column 3 (colStpPortState)
+		{Name: ".1.3.6.1.2.1.17.2.15.1.1.5", Type: gsnmp.Integer, Value: 5},
+	}
+	client := openClientToAgent(t, "public", pdus)
+	states, err := walkStpPortStates(context.Background(), client)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(states) != 0 {
+		t.Errorf("expected 0 states (col != colStpPortState), got %d", len(states))
+	}
+}
+
+// walkStpPortStates: PDU OID ".1.3.6.1.2.1.17.2.15.1.3" — column 3 with no
+// port number suffix → portStr="" → strconv.Atoi("") fails → entry skipped.
+func TestWalkStpPortStatesPortStrEmpty(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.17.2.15.1.3", Type: gsnmp.Integer, Value: 0},
+	}
+	client := openClientToAgent(t, "public", pdus)
+	states, err := walkStpPortStates(context.Background(), client)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(states) != 0 {
+		t.Errorf("expected 0 states (portStr empty), got %d", len(states))
 	}
 }
 

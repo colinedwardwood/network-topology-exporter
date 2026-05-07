@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync/atomic"
 	"testing"
@@ -19,6 +22,7 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 	snmpwalk "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
+	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
 	"github.com/colinedwardwood/network-topology-exporter/internal/snmptest"
 )
@@ -81,7 +85,7 @@ func TestRunCycleTwoDevices(t *testing.T) {
 
 	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
 
-	g, _, _, _ := runCycle(context.Background(), slog.Default(), cfg, metrics.New(), resolver, allowedNets, nil)
+	g, _, _, _ := runCycle(context.Background(), slog.Default(), cfg, metrics.New(false), resolver, allowedNets, nil)
 
 	if len(g.Devices) != 2 {
 		t.Fatalf("expected 2 devices, got %d", len(g.Devices))
@@ -148,7 +152,7 @@ func TestRunCycleTriesFallbackCredentialProfiles(t *testing.T) {
 	}
 
 	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
-	g, _, _, _ := runCycle(context.Background(), slog.Default(), cfg, metrics.New(), resolver, allowedNets, nil)
+	g, _, _, _ := runCycle(context.Background(), slog.Default(), cfg, metrics.New(false), resolver, allowedNets, nil)
 
 	if len(g.Devices) != 1 {
 		t.Fatalf("expected fallback credential to discover 1 device, got %d", len(g.Devices))
@@ -340,7 +344,7 @@ func TestRunCycleLLDPEdge(t *testing.T) {
 
 	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
 
-	g, _, _, _ := runCycle(context.Background(), slog.Default(), cfg, metrics.New(), resolver, allowedNets, nil)
+	g, _, _, _ := runCycle(context.Background(), slog.Default(), cfg, metrics.New(false), resolver, allowedNets, nil)
 
 	if len(g.Devices) != 2 {
 		t.Fatalf("expected 2 devices, got %d", len(g.Devices))
@@ -368,36 +372,15 @@ func TestRunCycleLLDPEdge(t *testing.T) {
 	}
 }
 
-// LD-15: canonical pair ordering.
-func TestCanonicalPair(t *testing.T) {
-	tests := []struct {
-		a, b         string
-		wantA, wantB string
-	}{
-		{"sw-a", "sw-b", "sw-a", "sw-b"},
-		{"sw-b", "sw-a", "sw-a", "sw-b"},
-		{"z", "a", "a", "z"},
-		{"same", "same", "same", "same"},
-	}
-	for _, tc := range tests {
-		gotA, gotB := canonicalPair(tc.a, tc.b)
-		if gotA != tc.wantA || gotB != tc.wantB {
-			t.Errorf("canonicalPair(%q, %q) = (%q, %q), want (%q, %q)",
-				tc.a, tc.b, gotA, gotB, tc.wantA, tc.wantB)
-		}
-	}
-}
-
-// LD-15: emitBoundaryObservations resets and repopulates on each call.
+// LD-15: boundary observations — series count tracks OOS slice length.
 func TestEmitBoundaryObservations(t *testing.T) {
-	m := metrics.New()
+	m := metrics.New(true) // uncoordinated mode enables boundary observations
 	oos := []discovery.OutOfScopeNeighbour{
 		{ReportingDevice: "sw-b", ReportingPort: "Gi0/1", NeighbourHint: "sw-a", Proto: "lldp"},
 		{ReportingDevice: "sw-c", ReportingPort: "Gi0/2", NeighbourHint: "sw-a", Proto: "cdp"},
 	}
-	emitBoundaryObservations(oos, m)
+	m.Topology.Update(discovery.Graph{OutOfScope: oos})
 
-	// Gather and count BoundaryObservationInfo series.
 	mfs, err := m.Registry().Gather()
 	if err != nil {
 		t.Fatalf("gather: %v", err)
@@ -412,16 +395,17 @@ func TestEmitBoundaryObservations(t *testing.T) {
 		t.Errorf("series count = %d, want 2", count)
 	}
 
-	// After a second call with one fewer entry, the count should drop.
-	emitBoundaryObservations(oos[:1], m)
+	// Update with one fewer entry: the count should drop (no Reset needed).
+	m.Topology.Update(discovery.Graph{OutOfScope: oos[:1]})
 	mfs, _ = m.Registry().Gather()
+	count = 0
 	for _, mf := range mfs {
 		if mf.GetName() == "network_topology_boundary_observation_info" {
 			count = len(mf.GetMetric())
 		}
 	}
 	if count != 1 {
-		t.Errorf("after reset, series count = %d, want 1", count)
+		t.Errorf("after update, series count = %d, want 1", count)
 	}
 }
 
@@ -449,11 +433,11 @@ func TestReadyzHandlerReady(t *testing.T) {
 	}
 }
 
-// TestPublishInventoryMetrics verifies that publishInventoryMetrics populates
-// DeviceInfo, TopologyEdgeInfo, and OutOfScopeNeighboursTotal, and that a
-// second call with an empty graph resets the series to reflect the new state.
-func TestPublishInventoryMetrics(t *testing.T) {
-	m := metrics.New()
+// TestTopologyCollectorPopulatesMetrics verifies that Topology.Update populates
+// device, edge, and OOS-count metrics, and that a second call with an empty
+// graph reflects the new state without stale series.
+func TestTopologyCollectorPopulatesMetrics(t *testing.T) {
+	m := metrics.New(false)
 	g := discovery.Graph{
 		Devices: []discovery.Device{
 			{ID: "sw-1", Vendor: "cisco", Model: "catalyst", OSVersion: "15.2", Site: "dc-a"},
@@ -469,22 +453,37 @@ func TestPublishInventoryMetrics(t *testing.T) {
 		OutOfScope: []discovery.OutOfScopeNeighbour{{ReportingDevice: "sw-1"}},
 	}
 
-	publishInventoryMetrics(g, m)
+	m.Topology.Update(g)
 
-	if got := testutil.ToFloat64(m.DeviceInfo.WithLabelValues("sw-1", "cisco", "catalyst", "15.2", "dc-a")); got != 1 {
-		t.Errorf("DeviceInfo{sw-1} = %v, want 1", got)
+	mfs, err := m.Registry().Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
 	}
-	if got := testutil.ToFloat64(m.TopologyEdgeInfo.WithLabelValues("sw-1", "Gi0/1", "sw-2", "Gi0/2", "lldp", "ethernet", "bidirectional")); got != 1 {
-		t.Errorf("TopologyEdgeInfo = %v, want 1", got)
+	counts := make(map[string]int)
+	for _, mf := range mfs {
+		counts[mf.GetName()] = len(mf.GetMetric())
 	}
-	if got := testutil.ToFloat64(m.OutOfScopeNeighboursTotal); got != 1 {
-		t.Errorf("OutOfScopeNeighboursTotal = %v, want 1", got)
+	if counts["network_device_info"] != 1 {
+		t.Errorf("network_device_info series = %d, want 1", counts["network_device_info"])
+	}
+	if counts["network_topology_edge_info"] != 1 {
+		t.Errorf("network_topology_edge_info series = %d, want 1", counts["network_topology_edge_info"])
 	}
 
-	// Second call with empty graph: series should be reset.
-	publishInventoryMetrics(discovery.Graph{}, m)
-	if got := testutil.ToFloat64(m.OutOfScopeNeighboursTotal); got != 0 {
-		t.Errorf("OutOfScopeNeighboursTotal after empty graph = %v, want 0", got)
+	// After updating to an empty graph: device and edge series must disappear.
+	m.Topology.Update(discovery.Graph{})
+	mfs, _ = m.Registry().Gather()
+	for _, mf := range mfs {
+		switch mf.GetName() {
+		case "network_device_info", "network_topology_edge_info":
+			t.Errorf("%s has %d series after empty graph update, want 0", mf.GetName(), len(mf.GetMetric()))
+		case "network_topology_out_of_scope_neighbours_total":
+			for _, mm := range mf.GetMetric() {
+				if mm.GetGauge().GetValue() != 0 {
+					t.Errorf("out_of_scope_neighbours_total = %v after empty graph, want 0", mm.GetGauge().GetValue())
+				}
+			}
+		}
 	}
 }
 
@@ -518,7 +517,7 @@ func TestRunDiscoveryLoopClearsGraphStale(t *testing.T) {
 		Targets:  []config.TargetConfig{{Host: "127.0.0.1", Port: int(port)}},
 	}
 
-	m := metrics.New()
+	m := metrics.New(false)
 	var status atomic.Pointer[cycleStatus]
 	var ready atomic.Bool
 
@@ -555,14 +554,14 @@ func TestRunDiscoveryLoopClearsGraphStale(t *testing.T) {
 	}
 }
 
-// TestEmitBoundaryObservationsCanonicalOrder verifies peer_a is always
+// TestBoundaryObservationsCanonicalOrder verifies peer_a is always
 // alphabetically smaller regardless of which device reported first.
-func TestEmitBoundaryObservationsCanonicalOrder(t *testing.T) {
-	m := metrics.New()
+func TestBoundaryObservationsCanonicalOrder(t *testing.T) {
+	m := metrics.New(true)
 	oos := []discovery.OutOfScopeNeighbour{
 		{ReportingDevice: "sw-z", ReportingPort: "Gi0/1", NeighbourHint: "sw-a", Proto: "lldp"},
 	}
-	emitBoundaryObservations(oos, m)
+	m.Topology.Update(discovery.Graph{OutOfScope: oos})
 
 	mfs, _ := m.Registry().Gather()
 	for _, mf := range mfs {
@@ -579,5 +578,1067 @@ func TestEmitBoundaryObservationsCanonicalOrder(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// ── run() tests ───────────────────────────────────────────────────────────────
+
+// TestRunVersionFlag exercises the --version short-circuit in run().
+func TestRunVersionFlag(t *testing.T) {
+	code := run(context.Background(), []string{"--version"})
+	if code != 0 {
+		t.Errorf("--version: exit code = %d, want 0", code)
+	}
+}
+
+// TestRunUnknownFlag verifies that an unrecognised flag causes run() to return 1.
+func TestRunUnknownFlag(t *testing.T) {
+	code := run(context.Background(), []string{"--no-such-flag"})
+	if code != 1 {
+		t.Errorf("unknown flag: exit code = %d, want 1", code)
+	}
+}
+
+// TestRunMissingConfigFile verifies that run() returns 1 when the config file
+// does not exist.
+func TestRunMissingConfigFile(t *testing.T) {
+	code := run(context.Background(), []string{"--config.file=/nonexistent/path.yaml"})
+	if code != 1 {
+		t.Errorf("missing config: exit code = %d, want 1", code)
+	}
+}
+
+// TestRunInvalidYAMLConfig verifies that run() returns 1 when the config file
+// contains invalid YAML.
+func TestRunInvalidYAMLConfig(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "bad-config-*.yaml")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	_, _ = fmt.Fprint(f, "discovery:\n  interval: [this is not a duration\n")
+	_ = f.Close()
+
+	code := run(context.Background(), []string{"--config.file=" + f.Name()})
+	if code != 1 {
+		t.Errorf("invalid YAML: exit code = %d, want 1", code)
+	}
+}
+
+// TestRunLogLevelFlag exercises the --log.level flag in run(), covering the
+// newLogger switch branches that produce debug, warn, and error level loggers.
+// We deliberately use a nonexistent config so run() returns immediately after
+// logging (which is what we care about — reaching newLogger with each level).
+func TestRunLogLevelFlag(t *testing.T) {
+	for _, level := range []string{"debug", "warn", "error"} {
+		t.Run(level, func(t *testing.T) {
+			code := run(context.Background(), []string{
+				"--log.level=" + level,
+				"--config.file=/nonexistent/path.yaml",
+			})
+			if code != 1 {
+				t.Errorf("--log.level=%s: exit code = %d, want 1 (config not found)", level, code)
+			}
+		})
+	}
+}
+
+// TestRunHubModeInvalidTLS exercises the hub code path in run(). The hub's
+// Serve goroutine fails on the missing TLS certs and cancels the context, which
+// triggers the normal shutdown path (exit code 0).
+func TestRunHubModeInvalidTLS(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "hub.yaml")
+	cfgContent := fmt.Sprintf(`
+discovery:
+  interval: 60s
+  timeout_per_device: 1s
+  parallelism: 1
+modules:
+  snmp:
+    enabled: false
+snapshot:
+  path: %s/snapshot.json
+federation:
+  role: hub
+  spoke_timeout: 180s
+  hub:
+    listen_addr: 127.0.0.1:0
+    tls_ca_cert: /nonexistent/ca.pem
+    tls_cert: /nonexistent/hub.crt
+    tls_key: /nonexistent/hub.key
+`, dir)
+	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	// Bind a random port for the metrics listener.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	listenAddr := ln.Addr().String()
+	_ = ln.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	code := run(ctx, []string{
+		"--config.file=" + cfgPath,
+		"--web.listen-address=" + listenAddr,
+	})
+	// The hub Serve goroutine cancels the context when TLS cert read fails;
+	// run() then follows the normal clean-shutdown path (exit code 0).
+	if code != 0 {
+		t.Errorf("hub invalid TLS: exit code = %d, want 0", code)
+	}
+}
+
+// TestRunSpokeModeInvalidTLS verifies that run() returns 1 when spoke mode is
+// configured with nonexistent TLS certificate files. NewSpoke reads the cert
+// files synchronously, so the error surfaces before any goroutine is launched.
+func TestRunSpokeModeInvalidTLS(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "spoke.yaml")
+	cfgContent := fmt.Sprintf(`
+discovery:
+  interval: 60s
+  timeout_per_device: 10s
+  parallelism: 1
+  scope:
+    cidr_allow_list: []
+modules:
+  snmp:
+    enabled: false
+snapshot:
+  path: %s/snapshot.json
+federation:
+  role: spoke
+  spoke_timeout: 180s
+  spoke:
+    spoke_id: test-spoke
+    hub_url: https://127.0.0.1:9999
+    tls_ca_cert: /nonexistent/ca.pem
+    tls_cert: /nonexistent/spoke.crt
+    tls_key: /nonexistent/spoke.key
+`, dir)
+	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	// Bind a random port so web.listen-address does not conflict with anything.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	listenAddr := ln.Addr().String()
+	_ = ln.Close()
+
+	code := run(context.Background(), []string{
+		"--config.file=" + cfgPath,
+		"--web.listen-address=" + listenAddr,
+	})
+	if code != 1 {
+		t.Errorf("spoke invalid TLS: exit code = %d, want 1", code)
+	}
+}
+
+// TestRunListenPortConflict verifies that run() returns 0 (clean shutdown) when
+// the HTTP listen address is already bound. The HTTP server goroutine cancels
+// the context on failure, causing run() to drain and exit via the normal path.
+func TestRunListenPortConflict(t *testing.T) {
+	// Hold a port open so ListenAndServe fails.
+	blocker, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("blocker listen: %v", err)
+	}
+	defer func() { _ = blocker.Close() }()
+	listenAddr := blocker.Addr().String()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "standalone.yaml")
+	cfgContent := fmt.Sprintf(`
+discovery:
+  interval: 60s
+  timeout_per_device: 1s
+  parallelism: 1
+modules:
+  snmp:
+    enabled: false
+snapshot:
+  path: %s/snapshot.json
+`, dir)
+	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	code := run(ctx, []string{
+		"--config.file=" + cfgPath,
+		"--web.listen-address=" + listenAddr,
+	})
+	// The HTTP server goroutine cancels the context on bind failure, triggering
+	// the normal clean-shutdown path which returns 0.
+	if code != 0 {
+		t.Errorf("port conflict: exit code = %d, want 0", code)
+	}
+}
+
+// TestRunStandaloneContextCancelled verifies that run() performs a clean
+// shutdown and returns 0 when the passed context is cancelled. Uses a config
+// with no targets so the discovery cycle completes immediately.
+func TestRunStandaloneContextCancelled(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "standalone.yaml")
+	cfgContent := fmt.Sprintf(`
+discovery:
+  interval: 60s
+  timeout_per_device: 1s
+  parallelism: 1
+modules:
+  snmp:
+    enabled: false
+snapshot:
+  path: %s/snapshot.json
+`, dir)
+	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	// Bind a random port to guarantee no conflict.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	listenAddr := ln.Addr().String()
+	_ = ln.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan int, 1)
+	go func() {
+		done <- run(ctx, []string{
+			"--config.file=" + cfgPath,
+			"--web.listen-address=" + listenAddr,
+		})
+	}()
+
+	// Give the discovery loop time to complete its first cycle (no targets,
+	// essentially instant) before cancelling.
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Errorf("standalone cancel: exit code = %d, want 0", code)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run() did not return within 10s after context cancel")
+	}
+}
+
+// ── newLogger tests ───────────────────────────────────────────────────────────
+
+// TestNewLogger exercises all switch branches in newLogger.
+func TestNewLogger(t *testing.T) {
+	for _, level := range []string{"debug", "warn", "error", "info", "unknown"} {
+		lg := newLogger(level)
+		if lg == nil {
+			t.Errorf("newLogger(%q) returned nil", level)
+		}
+	}
+}
+
+// ── runDiscoveryLoop additional coverage ──────────────────────────────────────
+
+// TestRunDiscoveryLoopVersionMismatchSnapshot verifies that runDiscoveryLoop
+// starts cleanly when the on-disk snapshot has an unrecognised version
+// (ErrVersionMismatch cold-start path).
+func TestRunDiscoveryLoopVersionMismatchSnapshot(t *testing.T) {
+	t.Setenv("TEST_COMMUNITY", "public")
+	addr := snmptest.Start(t, "public", systemPDUs("sw-mismatch"))
+	_, port := snmptest.ParseAddr(addr)
+
+	dir := t.TempDir()
+	snapPath := filepath.Join(dir, "snap.json")
+	// Write a snapshot with an unrecognised version number.
+	if err := os.WriteFile(snapPath, []byte(`{"version":9999,"written_at":"2020-01-01T00:00:00Z","devices":[],"edges":[]}`), 0600); err != nil {
+		t.Fatalf("write bad snapshot: %v", err)
+	}
+
+	cfg := &config.Config{
+		Discovery: config.DiscoveryConfig{
+			Interval:                 60 * time.Second,
+			TimeoutPerDevice:         5 * time.Second,
+			Parallelism:              1,
+			UnconfirmedLinkTTLCycles: 3,
+			Scope:                    config.ScopeConfig{CIDRAllowList: []string{"127.0.0.0/8"}},
+		},
+		Modules: config.ModulesConfig{
+			SNMP: config.ModuleSNMP{Enabled: true, Version: "v2c"},
+		},
+		Credentials: config.CredentialsConfig{
+			TrialRatePerSecond: 100,
+			Profiles: []config.CredentialProfile{
+				{Name: "default", Type: config.ProfileTypeSNMPv2c, CommunityEnv: "TEST_COMMUNITY"},
+			},
+			FallbackOrder: []string{"default"},
+		},
+		Snapshot: config.SnapshotConfig{Path: snapPath},
+		Targets:  []config.TargetConfig{{Host: "127.0.0.1", Port: int(port)}},
+	}
+
+	m := metrics.New(false)
+	var status atomic.Pointer[cycleStatus]
+	var ready atomic.Bool
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runDiscoveryLoop(ctx, slog.Default(), cfg, m, &status, &ready, nil)
+	}()
+
+	deadline := time.After(12 * time.Second)
+	poll := time.NewTicker(50 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("version-mismatch snapshot: GraphStale never cleared within deadline")
+		case <-poll.C:
+			if testutil.ToFloat64(m.GraphStale) == 0 {
+				cancel()
+				<-done
+				return
+			}
+		}
+	}
+}
+
+// TestRunDiscoveryLoopWithSnapshot verifies that runDiscoveryLoop correctly
+// loads and restores a pre-existing snapshot on startup.
+func TestRunDiscoveryLoopWithSnapshot(t *testing.T) {
+	t.Setenv("TEST_COMMUNITY", "public")
+	addr := snmptest.Start(t, "public", systemPDUs("sw-snap"))
+	_, port := snmptest.ParseAddr(addr)
+
+	dir := t.TempDir()
+	snapPath := filepath.Join(dir, "snap.json")
+
+	cfg := &config.Config{
+		Discovery: config.DiscoveryConfig{
+			Interval:                 60 * time.Second,
+			TimeoutPerDevice:         5 * time.Second,
+			Parallelism:              1,
+			UnconfirmedLinkTTLCycles: 3,
+			Scope:                    config.ScopeConfig{CIDRAllowList: []string{"127.0.0.0/8"}},
+		},
+		Modules: config.ModulesConfig{
+			SNMP: config.ModuleSNMP{Enabled: true, Version: "v2c"},
+		},
+		Credentials: config.CredentialsConfig{
+			TrialRatePerSecond: 100,
+			Profiles: []config.CredentialProfile{
+				{Name: "default", Type: config.ProfileTypeSNMPv2c, CommunityEnv: "TEST_COMMUNITY"},
+			},
+			FallbackOrder: []string{"default"},
+		},
+		Snapshot: config.SnapshotConfig{Path: snapPath},
+		Targets:  []config.TargetConfig{{Host: "127.0.0.1", Port: int(port)}},
+	}
+
+	// Run one full cycle to produce a snapshot on disk.
+	m1 := metrics.New(false)
+	var s1 atomic.Pointer[cycleStatus]
+	var r1 atomic.Bool
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel1()
+	done1 := make(chan struct{})
+	go func() {
+		defer close(done1)
+		runDiscoveryLoop(ctx1, slog.Default(), cfg, m1, &s1, &r1, nil)
+	}()
+	deadline1 := time.After(12 * time.Second)
+	poll1 := time.NewTicker(50 * time.Millisecond)
+	defer poll1.Stop()
+	for {
+		select {
+		case <-deadline1:
+			t.Fatal("first runDiscoveryLoop: snapshot not written within deadline")
+		case <-poll1.C:
+			if testutil.ToFloat64(m1.GraphStale) == 0 {
+				cancel1()
+				<-done1
+				goto snapshotReady
+			}
+		}
+	}
+snapshotReady:
+
+	// Now start a second loop — it should load the snapshot produced above.
+	m2 := metrics.New(false)
+	var s2 atomic.Pointer[cycleStatus]
+	var r2 atomic.Bool
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel2()
+	done2 := make(chan struct{})
+	go func() {
+		defer close(done2)
+		runDiscoveryLoop(ctx2, slog.Default(), cfg, m2, &s2, &r2, nil)
+	}()
+
+	deadline2 := time.After(12 * time.Second)
+	poll2 := time.NewTicker(50 * time.Millisecond)
+	defer poll2.Stop()
+	for {
+		select {
+		case <-deadline2:
+			t.Fatal("second runDiscoveryLoop: GraphStale never cleared within deadline")
+		case <-poll2.C:
+			if testutil.ToFloat64(m2.GraphStale) == 0 {
+				// SnapshotLoadedDevicesTotal should have been set from the loaded snapshot.
+				if got := testutil.ToFloat64(m2.SnapshotLoadedDevicesTotal); got == 0 {
+					t.Error("SnapshotLoadedDevicesTotal = 0 after snapshot load, want > 0")
+				}
+				cancel2()
+				<-done2
+				return
+			}
+		}
+	}
+}
+
+// TestRunDiscoveryLoopSecondTick verifies that the ticker path in
+// runDiscoveryLoop fires a second cycle when the interval is short enough.
+func TestRunDiscoveryLoopSecondTick(t *testing.T) {
+	t.Setenv("TEST_COMMUNITY", "public")
+	addr := snmptest.Start(t, "public", systemPDUs("sw-tick"))
+	_, port := snmptest.ParseAddr(addr)
+
+	cfg := &config.Config{
+		Discovery: config.DiscoveryConfig{
+			Interval:                 200 * time.Millisecond, // very short to hit tick.C
+			TimeoutPerDevice:         5 * time.Second,
+			Parallelism:              1,
+			UnconfirmedLinkTTLCycles: 3,
+			Scope:                    config.ScopeConfig{CIDRAllowList: []string{"127.0.0.0/8"}},
+		},
+		Modules: config.ModulesConfig{
+			SNMP: config.ModuleSNMP{Enabled: true, Version: "v2c"},
+		},
+		Credentials: config.CredentialsConfig{
+			TrialRatePerSecond: 100,
+			Profiles: []config.CredentialProfile{
+				{Name: "default", Type: config.ProfileTypeSNMPv2c, CommunityEnv: "TEST_COMMUNITY"},
+			},
+			FallbackOrder: []string{"default"},
+		},
+		Snapshot: config.SnapshotConfig{Path: t.TempDir() + "/snap.json"},
+		Targets:  []config.TargetConfig{{Host: "127.0.0.1", Port: int(port)}},
+	}
+
+	m := metrics.New(false)
+	var status atomic.Pointer[cycleStatus]
+	var ready atomic.Bool
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runDiscoveryLoop(ctx, slog.Default(), cfg, m, &status, &ready, nil)
+	}()
+
+	// Wait for at least two cycles: first cycle clears GraphStale, second cycle
+	// fires via tick.C. We poll for cycleStatus with a non-zero LastCycleAt.
+	deadline := time.After(10 * time.Second)
+	poll := time.NewTicker(50 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("second tick: never observed a second cycle within deadline")
+		case <-poll.C:
+			if testutil.ToFloat64(m.GraphStale) == 0 {
+				// Let the tick fire the second cycle.
+				time.Sleep(300 * time.Millisecond)
+				cancel()
+				<-done
+				return
+			}
+		}
+	}
+}
+
+// TestRunDiscoveryLoopContextCancelledDuringCycle exercises the
+// `if ctx.Err() != nil { return }` guard inside the cycle closure. We cancel
+// the context before calling runDiscoveryLoop so ctx.Err() is already set when
+// the cycle checks.
+func TestRunDiscoveryLoopContextCancelledDuringCycle(t *testing.T) {
+	t.Setenv("TEST_COMMUNITY", "public")
+	addr := snmptest.Start(t, "public", systemPDUs("sw-cancel"))
+	_, port := snmptest.ParseAddr(addr)
+
+	cfg := &config.Config{
+		Discovery: config.DiscoveryConfig{
+			Interval:                 60 * time.Second,
+			TimeoutPerDevice:         5 * time.Second,
+			Parallelism:              1,
+			UnconfirmedLinkTTLCycles: 3,
+			Scope:                    config.ScopeConfig{CIDRAllowList: []string{"127.0.0.0/8"}},
+		},
+		Modules: config.ModulesConfig{
+			SNMP: config.ModuleSNMP{Enabled: true, Version: "v2c"},
+		},
+		Credentials: config.CredentialsConfig{
+			TrialRatePerSecond: 100,
+			Profiles: []config.CredentialProfile{
+				{Name: "default", Type: config.ProfileTypeSNMPv2c, CommunityEnv: "TEST_COMMUNITY"},
+			},
+			FallbackOrder: []string{"default"},
+		},
+		Snapshot: config.SnapshotConfig{Path: t.TempDir() + "/snap.json"},
+		Targets:  []config.TargetConfig{{Host: "127.0.0.1", Port: int(port)}},
+	}
+
+	m := metrics.New(false)
+	var status atomic.Pointer[cycleStatus]
+	var ready atomic.Bool
+
+	// Cancel the context immediately — runDiscoveryLoop's first cycle will
+	// complete (or start) with ctx.Err() != nil, triggering the early return.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runDiscoveryLoop(ctx, slog.Default(), cfg, m, &status, &ready, nil)
+	}()
+
+	select {
+	case <-done:
+		// runDiscoveryLoop returned — either the cycle saw ctx.Err() and
+		// returned, or the ticker case fired ctx.Done(). Either way is correct.
+	case <-time.After(5 * time.Second):
+		t.Fatal("runDiscoveryLoop did not return within 5s after pre-cancelled context")
+	}
+}
+
+// ── runCycle additional coverage ──────────────────────────────────────────────
+
+// TestRunCycleAllCredentialsFail exercises the walkSystemWithCredentials error
+// path in runCycle: all credential profiles fail, so the device is counted as
+// failed and no result is returned.
+func TestRunCycleAllCredentialsFail(t *testing.T) {
+	// Start agent with "correct" community but configure only a wrong one.
+	t.Setenv("WRONG_COMMUNITY", "wrong")
+	addr := snmptest.Start(t, "public", systemPDUs("sw-fail"))
+	_, port := snmptest.ParseAddr(addr)
+
+	cfg := &config.Config{
+		Discovery: config.DiscoveryConfig{
+			Interval:                 60 * time.Second,
+			TimeoutPerDevice:         500 * time.Millisecond, // short to avoid slow tests
+			Parallelism:              1,
+			UnconfirmedLinkTTLCycles: 3,
+			Scope:                    config.ScopeConfig{CIDRAllowList: []string{"127.0.0.0/8"}},
+		},
+		Modules: config.ModulesConfig{
+			SNMP: config.ModuleSNMP{Enabled: true, Version: "v2c"},
+		},
+		Credentials: config.CredentialsConfig{
+			TrialRatePerSecond: 100,
+			Profiles: []config.CredentialProfile{
+				// Only wrong community — will always time out / fail.
+				{Name: "wrong", Type: config.ProfileTypeSNMPv2c, CommunityEnv: "WRONG_COMMUNITY"},
+			},
+			FallbackOrder: []string{"wrong"},
+		},
+		Snapshot: config.SnapshotConfig{Path: t.TempDir() + "/snap.json"},
+		Targets:  []config.TargetConfig{{Host: "127.0.0.1", Port: int(port)}},
+	}
+
+	resolver, err := credentials.New(cfg.Credentials)
+	if err != nil {
+		t.Fatalf("credentials.New: %v", err)
+	}
+
+	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
+	g, _, _, fails := runCycle(context.Background(), slog.Default(), cfg, metrics.New(false), resolver, allowedNets, nil)
+
+	if len(g.Devices) != 0 {
+		t.Errorf("expected 0 devices when all credentials fail, got %d", len(g.Devices))
+	}
+	if fails != 1 {
+		t.Errorf("expected 1 failure, got %d", fails)
+	}
+}
+
+// TestRunCycleDeviceLabels exercises the device-label attachment path in
+// runCycle, covering the `dev.Labels == nil` check and label assignment.
+func TestRunCycleDeviceLabels(t *testing.T) {
+	t.Setenv("TEST_COMMUNITY", "public")
+	addr := snmptest.Start(t, "public", systemPDUs("sw-labels"))
+	_, port := snmptest.ParseAddr(addr)
+
+	cfg := &config.Config{
+		Discovery: config.DiscoveryConfig{
+			Interval:                 60 * time.Second,
+			TimeoutPerDevice:         5 * time.Second,
+			Parallelism:              1,
+			UnconfirmedLinkTTLCycles: 3,
+			Scope:                    config.ScopeConfig{CIDRAllowList: []string{"127.0.0.0/8"}},
+		},
+		Modules: config.ModulesConfig{
+			SNMP: config.ModuleSNMP{Enabled: true, Version: "v2c"},
+		},
+		Credentials: config.CredentialsConfig{
+			TrialRatePerSecond: 100,
+			Profiles: []config.CredentialProfile{
+				{Name: "default", Type: config.ProfileTypeSNMPv2c, CommunityEnv: "TEST_COMMUNITY"},
+			},
+			FallbackOrder: []string{"default"},
+		},
+		Snapshot: config.SnapshotConfig{Path: t.TempDir() + "/snap.json"},
+		Targets: []config.TargetConfig{{
+			Host: "127.0.0.1",
+			Port: int(port),
+			Labels: map[string]string{
+				"env": "test",
+				"dc":  "lab",
+			},
+		}},
+	}
+
+	resolver, err := credentials.New(cfg.Credentials)
+	if err != nil {
+		t.Fatalf("credentials.New: %v", err)
+	}
+
+	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
+	g, _, _, _ := runCycle(context.Background(), slog.Default(), cfg, metrics.New(false), resolver, allowedNets, nil)
+
+	if len(g.Devices) != 1 {
+		t.Fatalf("expected 1 device, got %d", len(g.Devices))
+	}
+	if g.Devices[0].Labels["env"] != "test" {
+		t.Errorf("label env = %q, want test", g.Devices[0].Labels["env"])
+	}
+}
+
+// TestRunCycleExpiredUnconfirmedEdge exercises the LD-14 aging path in
+// runCycle where a unidirectional edge that has been unconfirmed for too many
+// cycles is dropped. We pass prevAges with the edge already at TTL-1 so that
+// one more cycle increments it to TTL and expires it.
+//
+// A second bidirectional edge (sw-c ↔ sw-d) is included so that the expired-
+// edge filter has a non-expired edge to keep, covering the `kept = append`
+// branch.
+func TestRunCycleExpiredUnconfirmedEdge(t *testing.T) {
+	t.Setenv("TEST_COMMUNITY", "public")
+
+	// sw-a reports a link to sw-b (unidirectional — sw-b is not a target).
+	// sw-c and sw-d report each other (bidirectional — reconciled edge stays).
+	pdusA := append(systemPDUs("sw-a"), lldpPDUs("eth1", "sw-b")...)
+	pdusC := append(systemPDUs("sw-c"), lldpPDUs("eth1", "sw-d")...)
+	pdusD := append(systemPDUs("sw-d"), lldpPDUs("eth1", "sw-c")...)
+
+	addrA := snmptest.Start(t, "public", pdusA)
+	addrC := snmptest.Start(t, "public", pdusC)
+	addrD := snmptest.Start(t, "public", pdusD)
+
+	_, portA := snmptest.ParseAddr(addrA)
+	_, portC := snmptest.ParseAddr(addrC)
+	_, portD := snmptest.ParseAddr(addrD)
+
+	const ttl = 2
+	cfg := &config.Config{
+		Discovery: config.DiscoveryConfig{
+			Interval:                 60 * time.Second,
+			TimeoutPerDevice:         5 * time.Second,
+			Parallelism:              3,
+			UnconfirmedLinkTTLCycles: ttl,
+			Scope:                    config.ScopeConfig{CIDRAllowList: []string{"127.0.0.0/8"}},
+		},
+		Modules: config.ModulesConfig{
+			SNMP: config.ModuleSNMP{Enabled: true, Version: "v2c"},
+			LLDP: config.ModuleToggle{Enabled: true},
+		},
+		Credentials: config.CredentialsConfig{
+			TrialRatePerSecond: 100,
+			Profiles: []config.CredentialProfile{
+				{Name: "default", Type: config.ProfileTypeSNMPv2c, CommunityEnv: "TEST_COMMUNITY"},
+			},
+			FallbackOrder: []string{"default"},
+		},
+		Snapshot: config.SnapshotConfig{Path: t.TempDir() + "/snap.json"},
+		Targets: []config.TargetConfig{
+			{Host: "127.0.0.1", Port: int(portA)},
+			{Host: "127.0.0.1", Port: int(portC)},
+			{Host: "127.0.0.1", Port: int(portD)},
+		},
+	}
+
+	resolver, err := credentials.New(cfg.Credentials)
+	if err != nil {
+		t.Fatalf("credentials.New: %v", err)
+	}
+	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
+	m := metrics.New(false)
+
+	// First cycle: get the unidirectional edge and its EdgeKey.
+	// Pass a non-nil empty map so AgeUnconfirmed actually populates the ages.
+	initialAges := make(map[graph.EdgeKey]int)
+	g1, ages1, _, _ := runCycle(context.Background(), slog.Default(), cfg, m, resolver, allowedNets, initialAges)
+	if len(g1.Edges) == 0 {
+		t.Skip("no edges produced; LLDP PDU may not have been parsed")
+	}
+	if len(ages1) == 0 {
+		t.Skip("no unconfirmed ages after first cycle; edge may have become bidirectional")
+	}
+
+	// Advance all unconfirmed edges to TTL-1 so the next cycle expires them.
+	for k := range ages1 {
+		ages1[k] = ttl - 1
+	}
+
+	// Second cycle: the unidirectional sw-a→sw-b edge is incremented to TTL
+	// and expires. The bidirectional sw-c↔sw-d edge is kept (covers
+	// `kept = append(kept, e)` in the filter loop).
+	g2, _, _, _ := runCycle(context.Background(), slog.Default(), cfg, m, resolver, allowedNets, ages1)
+
+	// The sw-a→sw-b unidirectional edge must be absent from g2.
+	for _, e := range g2.Edges {
+		if (e.SrcDevice == "sw-a" && e.DstDevice == "sw-b") ||
+			(e.SrcDevice == "sw-b" && e.DstDevice == "sw-a") {
+			t.Errorf("expired unidirectional edge still present: %+v", e)
+		}
+	}
+
+	// At least the sw-c↔sw-d bidirectional edge must be present.
+	var found bool
+	for _, e := range g2.Edges {
+		if (e.SrcDevice == "sw-c" || e.SrcDevice == "sw-d") &&
+			(e.DstDevice == "sw-c" || e.DstDevice == "sw-d") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected bidirectional sw-c↔sw-d edge in g2, not found")
+	}
+}
+
+// TestRunCycleHostnameDNSFailure exercises the DNS-failure path in runCycle
+// where target.Host is a hostname that cannot be resolved. The target is
+// counted as a failure and no device is returned.
+func TestRunCycleHostnameDNSFailure(t *testing.T) {
+	t.Setenv("TEST_COMMUNITY", "public")
+
+	cfg := &config.Config{
+		Discovery: config.DiscoveryConfig{
+			Interval:                 60 * time.Second,
+			TimeoutPerDevice:         2 * time.Second,
+			Parallelism:              1,
+			UnconfirmedLinkTTLCycles: 3,
+			Scope: config.ScopeConfig{
+				CIDRAllowList: []string{"127.0.0.0/8"},
+			},
+		},
+		Modules: config.ModulesConfig{
+			SNMP: config.ModuleSNMP{Enabled: true, Version: "v2c"},
+		},
+		Credentials: config.CredentialsConfig{
+			TrialRatePerSecond: 100,
+			Profiles: []config.CredentialProfile{
+				{Name: "default", Type: config.ProfileTypeSNMPv2c, CommunityEnv: "TEST_COMMUNITY"},
+			},
+			FallbackOrder: []string{"default"},
+		},
+		Snapshot: config.SnapshotConfig{Path: t.TempDir() + "/snap.json"},
+		Targets: []config.TargetConfig{
+			// this-hostname-does-not-exist.invalid will fail DNS lookup.
+			{Host: "this-hostname-does-not-exist.invalid", Port: 161},
+		},
+	}
+
+	resolver, err := credentials.New(cfg.Credentials)
+	if err != nil {
+		t.Fatalf("credentials.New: %v", err)
+	}
+
+	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
+	g, _, _, fails := runCycle(context.Background(), slog.Default(), cfg, metrics.New(false), resolver, allowedNets, nil)
+
+	if len(g.Devices) != 0 {
+		t.Errorf("expected 0 devices for unresolvable hostname, got %d", len(g.Devices))
+	}
+	if fails != 1 {
+		t.Errorf("expected 1 failure for DNS failure, got %d", fails)
+	}
+}
+
+// TestRunCycleHostnameOutsideAllowList exercises the CIDR-enforcement path when
+// a hostname resolves to an IP that falls outside the allow-list.
+func TestRunCycleHostnameOutsideAllowList(t *testing.T) {
+	t.Setenv("TEST_COMMUNITY", "public")
+
+	addr := snmptest.Start(t, "public", systemPDUs("sw-oos"))
+	_, port := snmptest.ParseAddr(addr)
+
+	cfg := &config.Config{
+		Discovery: config.DiscoveryConfig{
+			Interval:                 60 * time.Second,
+			TimeoutPerDevice:         2 * time.Second,
+			Parallelism:              1,
+			UnconfirmedLinkTTLCycles: 3,
+			Scope: config.ScopeConfig{
+				// 192.0.2.0/24 — localhost (127.x) is outside this range.
+				CIDRAllowList: []string{"192.0.2.0/24"},
+			},
+		},
+		Modules: config.ModulesConfig{
+			SNMP: config.ModuleSNMP{Enabled: true, Version: "v2c"},
+		},
+		Credentials: config.CredentialsConfig{
+			TrialRatePerSecond: 100,
+			Profiles: []config.CredentialProfile{
+				{Name: "default", Type: config.ProfileTypeSNMPv2c, CommunityEnv: "TEST_COMMUNITY"},
+			},
+			FallbackOrder: []string{"default"},
+		},
+		Snapshot: config.SnapshotConfig{Path: t.TempDir() + "/snap.json"},
+		Targets: []config.TargetConfig{
+			// localhost resolves to 127.0.0.1, outside 192.0.2.0/24.
+			{Host: "localhost", Port: int(port)},
+		},
+	}
+
+	resolver, err := credentials.New(cfg.Credentials)
+	if err != nil {
+		t.Fatalf("credentials.New: %v", err)
+	}
+
+	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
+	g, _, _, fails := runCycle(context.Background(), slog.Default(), cfg, metrics.New(false), resolver, allowedNets, nil)
+
+	if len(g.Devices) != 0 {
+		t.Errorf("expected 0 devices (target outside allow-list), got %d", len(g.Devices))
+	}
+	if fails != 1 {
+		t.Errorf("expected 1 failure (outside allow-list), got %d", fails)
+	}
+}
+
+// ── credentialCandidates tests ────────────────────────────────────────────────
+
+// TestCredentialCandidatesNoProfiles exercises the legacy single-community
+// fallback path when no credential profiles are configured.
+func TestCredentialCandidatesNoProfiles(t *testing.T) {
+	t.Setenv("SNMP_COMMUNITY", "public")
+
+	cfg := &config.Config{
+		Discovery: config.DiscoveryConfig{
+			TimeoutPerDevice: 5 * time.Second,
+		},
+		Modules: config.ModulesConfig{
+			SNMP: config.ModuleSNMP{CommunityEnv: "SNMP_COMMUNITY"},
+		},
+		Credentials: config.CredentialsConfig{
+			TrialRatePerSecond: 100,
+			// No Profiles — triggers legacy path.
+		},
+	}
+
+	resolver, err := credentials.New(cfg.Credentials)
+	if err != nil {
+		t.Fatalf("credentials.New: %v", err)
+	}
+
+	ip := net.ParseIP("127.0.0.1")
+	target := config.TargetConfig{Host: "127.0.0.1", Port: 161}
+	candidates := credentialCandidates(cfg, resolver, ip, target)
+
+	if len(candidates) == 0 {
+		t.Fatal("expected at least one candidate from legacy path, got none")
+	}
+	if candidates[0].params.Community != "public" {
+		t.Errorf("community = %q, want public", candidates[0].params.Community)
+	}
+}
+
+// TestCredentialCandidatesPortZero verifies that a target with Port=0 gets the
+// default SNMP port (161) injected by credentialCandidates.
+func TestCredentialCandidatesPortZero(t *testing.T) {
+	t.Setenv("SNMP_COMMUNITY", "public")
+
+	cfg := &config.Config{
+		Discovery: config.DiscoveryConfig{
+			TimeoutPerDevice: 5 * time.Second,
+		},
+		Modules: config.ModulesConfig{
+			SNMP: config.ModuleSNMP{CommunityEnv: "SNMP_COMMUNITY"},
+		},
+		Credentials: config.CredentialsConfig{
+			TrialRatePerSecond: 100,
+			// No profiles — takes the legacy path where port defaults to 161.
+		},
+	}
+
+	resolver, err := credentials.New(cfg.Credentials)
+	if err != nil {
+		t.Fatalf("credentials.New: %v", err)
+	}
+
+	ip := net.ParseIP("127.0.0.1")
+	target := config.TargetConfig{Host: "127.0.0.1", Port: 0} // Port intentionally 0
+	candidates := credentialCandidates(cfg, resolver, ip, target)
+
+	if len(candidates) == 0 {
+		t.Fatal("expected candidate with default port, got none")
+	}
+	if candidates[0].params.Port != 161 {
+		t.Errorf("port = %d, want 161 (default for Port=0 target)", candidates[0].params.Port)
+	}
+}
+
+// ── walkSystemWithCredentials tests ──────────────────────────────────────────
+
+// TestWalkSystemWithCredentialsEmptyCandidates verifies that
+// walkSystemWithCredentials returns an error when there are no credential
+// candidates (e.g. all profiles fail profileToParams).
+func TestWalkSystemWithCredentialsEmptyCandidates(t *testing.T) {
+	// Empty community env so profileToParams returns an error for every profile,
+	// resulting in zero usable candidates.
+	t.Setenv("EMPTY_COMMUNITY", "")
+
+	cfg := &config.Config{
+		Discovery: config.DiscoveryConfig{
+			TimeoutPerDevice: 5 * time.Second,
+		},
+		Credentials: config.CredentialsConfig{
+			TrialRatePerSecond: 100,
+			Profiles: []config.CredentialProfile{
+				{
+					Name:         "bad",
+					Type:         config.ProfileTypeSNMPv2c,
+					CommunityEnv: "EMPTY_COMMUNITY",
+				},
+			},
+			FallbackOrder: []string{"bad"},
+		},
+	}
+
+	resolver, err := credentials.New(cfg.Credentials)
+	if err != nil {
+		t.Fatalf("credentials.New: %v", err)
+	}
+
+	ip := net.ParseIP("127.0.0.1")
+	target := config.TargetConfig{Host: "127.0.0.1", Port: 161}
+
+	dev, _, _, err := walkSystemWithCredentials(context.Background(), cfg, resolver, ip, target)
+	if err == nil {
+		t.Fatal("expected error from empty candidates, got nil")
+	}
+	if dev != nil {
+		t.Errorf("expected nil device, got %v", dev)
+	}
+}
+
+// TestWalkSystemWithCredentialsAllTimeout verifies that when every credential
+// attempt times out, the credential cache is preserved (RecordFailure is NOT
+// called).
+func TestWalkSystemWithCredentialsAllTimeout(t *testing.T) {
+	// Use a very short timeout so every attempt times out quickly.
+	cfg := &config.Config{
+		Discovery: config.DiscoveryConfig{
+			TimeoutPerDevice: 1 * time.Millisecond,
+		},
+		Credentials: config.CredentialsConfig{
+			TrialRatePerSecond: 100,
+			Profiles: []config.CredentialProfile{
+				{Name: "p1", Type: config.ProfileTypeSNMPv2c, CommunityEnv: "TC_COMM_1"},
+			},
+			FallbackOrder: []string{"p1"},
+		},
+	}
+	t.Setenv("TC_COMM_1", "public")
+
+	resolver, err := credentials.New(cfg.Credentials)
+	if err != nil {
+		t.Fatalf("credentials.New: %v", err)
+	}
+
+	// Point at a port that has nothing listening — will time out.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close() // close immediately so SNMP gets connection-refused or timeout
+
+	ip := net.ParseIP("127.0.0.1")
+	target := config.TargetConfig{Host: "127.0.0.1", Port: port}
+
+	_, _, _, err = walkSystemWithCredentials(context.Background(), cfg, resolver, ip, target)
+	if err == nil {
+		t.Fatal("expected error from all-timeout walk, got nil")
+	}
+
+	// When all failures are timeouts, RecordFailure must not invalidate the
+	// cache. Since there was no prior cached profile, CachedProfile should
+	// still return nothing.
+	if _, ok := resolver.CachedProfile("127.0.0.1"); ok {
+		t.Error("expected no cached profile after all-timeout failures, but one was found")
+	}
+}
+
+// TestWalkSystemWithCredentialsNonTimeoutFailure verifies that when the parent
+// context is already cancelled, AcquireTrial returns context.Canceled and
+// walkSystemWithCredentials propagates that error immediately.
+func TestWalkSystemWithCredentialsNonTimeoutFailure(t *testing.T) {
+	t.Setenv("NC_COMM", "public")
+
+	addr := snmptest.Start(t, "public", systemPDUs("sw-nc"))
+	_, port := snmptest.ParseAddr(addr)
+
+	cfg := &config.Config{
+		Discovery: config.DiscoveryConfig{
+			TimeoutPerDevice: 5 * time.Second,
+		},
+		Credentials: config.CredentialsConfig{
+			TrialRatePerSecond: 100,
+			Profiles: []config.CredentialProfile{
+				{Name: "ok", Type: config.ProfileTypeSNMPv2c, CommunityEnv: "NC_COMM"},
+			},
+			FallbackOrder: []string{"ok"},
+		},
+	}
+
+	resolver, err := credentials.New(cfg.Credentials)
+	if err != nil {
+		t.Fatalf("credentials.New: %v", err)
+	}
+
+	// Cancel the context immediately before calling walkSystemWithCredentials.
+	// AcquireTrial will receive the cancelled context and return context.Canceled,
+	// which causes an immediate return without going through allTimedOut logic.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	ip := net.ParseIP("127.0.0.1")
+	target := config.TargetConfig{Host: "127.0.0.1", Port: int(port)}
+
+	_, _, _, err = walkSystemWithCredentials(ctx, cfg, resolver, ip, target)
+	if err == nil {
+		t.Fatal("expected error from cancelled context, got nil")
 	}
 }

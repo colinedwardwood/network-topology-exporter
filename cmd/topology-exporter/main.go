@@ -83,17 +83,24 @@ func newHealthzHandler(status *atomic.Pointer[cycleStatus]) http.HandlerFunc {
 }
 
 func main() {
+	os.Exit(run(context.Background(), os.Args[1:]))
+}
+
+func run(ctx context.Context, args []string) int {
+	fs := flag.NewFlagSet("topology-exporter", flag.ContinueOnError)
 	var (
-		configPath = flag.String("config.file", "/etc/topology-exporter/config.yaml", "Path to the YAML configuration file.")
-		listenAddr = flag.String("web.listen-address", ":9100", "Address on which to expose /metrics and /healthz.")
-		logLevel   = flag.String("log.level", "info", "Log level: debug | info | warn | error.")
-		showVer    = flag.Bool("version", false, "Print version and exit.")
+		configPath = fs.String("config.file", "/etc/topology-exporter/config.yaml", "Path to the YAML configuration file.")
+		listenAddr = fs.String("web.listen-address", ":9100", "Address on which to expose /metrics and /healthz.")
+		logLevel   = fs.String("log.level", "info", "Log level: debug | info | warn | error.")
+		showVer    = fs.Bool("version", false, "Print version and exit.")
 	)
-	flag.Parse()
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
 
 	if *showVer {
 		fmt.Printf("topology-exporter %s (%s, built %s)\n", version.Version, version.Commit, version.BuildDate)
-		return
+		return 0
 	}
 
 	logger := newLogger(*logLevel)
@@ -108,7 +115,7 @@ func main() {
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		logger.Error("loading config failed", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	logger.Info("config loaded",
 		"discovery_interval", cfg.Discovery.Interval,
@@ -116,15 +123,18 @@ func main() {
 		"target_count", len(cfg.Targets),
 	)
 
-	m := metrics.New()
+	m := metrics.New(cfg.Federation.Role == "uncoordinated")
 
 	var status atomic.Pointer[cycleStatus]
 	var ready atomic.Bool // set to true after the first live cycle or spoke push
 
+	// isReadyFn is the readiness check for /readyz. Default: process-local flag.
+	// Hub mode replaces this with hub.IsReady before registering the mux handler.
+	isReadyFn := ready.Load
+
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(m.Registry(), promhttp.HandlerOpts{Registry: m.Registry()}))
 	mux.HandleFunc("/healthz", newHealthzHandler(&status))
-	mux.HandleFunc("/readyz", newReadyzHandler(ready.Load))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -139,7 +149,7 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	var workerDone sync.WaitGroup
@@ -171,7 +181,7 @@ func main() {
 		}
 
 		// In hub mode, readiness is driven by the first live spoke push.
-		mux.HandleFunc("/readyz", newReadyzHandler(hub.IsReady))
+		isReadyFn = hub.IsReady
 
 		workerDone.Add(1)
 		go func() {
@@ -190,8 +200,7 @@ func main() {
 			spoke, err = federation.NewSpoke(cfg.Federation, logger, m)
 			if err != nil {
 				logger.Error("building federation spoke", "error", err)
-				cancel()
-				os.Exit(1) //nolint:gocritic
+				return 1
 			}
 		}
 		workerDone.Add(1)
@@ -200,6 +209,8 @@ func main() {
 			runDiscoveryLoop(ctx, logger, cfg, m, &status, &ready, spoke)
 		}()
 	}
+
+	mux.HandleFunc("/readyz", newReadyzHandler(isReadyFn))
 
 	go func() {
 		logger.Info("http server listening", "addr", *listenAddr)
@@ -225,6 +236,7 @@ func main() {
 		logger.Warn("discovery drain timed out, forcing exit")
 	}
 	logger.Info("clean shutdown complete")
+	return 0
 }
 
 // runDiscoveryLoop is the main discovery scheduler. It loads the LD-13
@@ -263,7 +275,7 @@ func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Conf
 			"edges", len(snap.Edges),
 		)
 		m.SnapshotLoadedDevicesTotal.Set(float64(len(snap.Devices)))
-		publishInventoryMetrics(prevGraph, m)
+		m.Topology.Update(prevGraph)
 	}
 
 	// LD-12: credential resolver.
@@ -310,9 +322,7 @@ func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Conf
 		}
 		prevGraph = newGraph
 		ages = newAges
-		if len(changes) > 0 || len(conflicts) > 0 {
-			publishInventoryMetrics(newGraph, m)
-		}
+		m.Topology.Update(newGraph)
 		m.GraphStale.Set(0)
 		if ready != nil {
 			ready.Store(true)
@@ -344,12 +354,6 @@ func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Conf
 				logger.Warn("snapshot write timed out (NFS stall?); discovery continues", "timeout", snapshotWriteTimeout)
 			}
 		}(f)
-
-		// LD-15: uncoordinated mode — emit canonical-pair boundary observations
-		// so a Mimir recording rule can stitch cross-boundary edges.
-		if cfg.Federation.Role == "uncoordinated" {
-			emitBoundaryObservations(newGraph.OutOfScope, m)
-		}
 
 		// LD-16/LD-17: spoke mode — push pre-reconciled graph to hub.
 		if spoke != nil {
@@ -684,59 +688,12 @@ func profileToParams(ip net.IP, port uint16, timeout time.Duration, p config.Cre
 	return params, nil
 }
 
-// publishInventoryMetrics replaces the Prometheus gauge sets for the current
-// graph. Reset() followed by re-population removes stale device/edge series.
-// There is a brief window between Reset and re-population where a concurrent
-// scrape sees empty gauges; this is a known trade-off of the Reset pattern.
-func publishInventoryMetrics(g discovery.Graph, m *metrics.Metrics) {
-	m.DeviceInfo.Reset()
-	m.DeviceUptimeSeconds.Reset()
-	for _, d := range g.Devices {
-		m.DeviceInfo.WithLabelValues(d.ID, d.Vendor, d.Model, d.OSVersion, d.Site).Set(1)
-		m.DeviceUptimeSeconds.WithLabelValues(d.ID).Set(d.Uptime.Seconds())
-	}
-
-	m.TopologyEdgeInfo.Reset()
-	for _, e := range g.Edges {
-		m.TopologyEdgeInfo.WithLabelValues(
-			e.SrcDevice, e.SrcPort,
-			e.DstDevice, e.DstPort,
-			e.DiscoveryProto,
-			e.LinkKind,
-			string(e.Direction),
-		).Set(1)
-	}
-
-	m.OutOfScopeNeighboursTotal.Set(float64(len(g.OutOfScope)))
-}
-
 type moduleWalkFn func(context.Context, snmpwalk.Params, string, []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error)
 
 type module struct {
 	proto   string
 	enabled bool
 	walk    moduleWalkFn
-}
-
-// emitBoundaryObservations resets and repopulates BoundaryObservationInfo for
-// the current cycle. Each out-of-scope neighbour becomes one series; peer_a is
-// always the alphabetically-smaller endpoint so a simple count == 2 recording
-// rule detects confirmed cross-boundary edges (LD-15).
-func emitBoundaryObservations(oos []discovery.OutOfScopeNeighbour, m *metrics.Metrics) {
-	m.BoundaryObservationInfo.Reset()
-	for _, n := range oos {
-		peerA, peerB := canonicalPair(n.ReportingDevice, n.NeighbourHint)
-		m.BoundaryObservationInfo.WithLabelValues(
-			peerA, peerB, n.ReportingDevice, n.ReportingPort, n.Proto,
-		).Set(1)
-	}
-}
-
-func canonicalPair(a, b string) (string, string) {
-	if a <= b {
-		return a, b
-	}
-	return b, a
 }
 
 func newLogger(level string) *slog.Logger {

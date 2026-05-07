@@ -15,6 +15,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -163,7 +164,7 @@ func TestHubSpokeEndToEnd(t *testing.T) {
 		},
 	}
 
-	m := metrics.New()
+	m := metrics.New(false)
 	hub := federation.NewHub(hubCfg, m, slog.Default(), "")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -218,8 +219,13 @@ func TestHubSpokeEndToEnd(t *testing.T) {
 	}
 
 	// The hub should have published device and edge metrics from the pushed payload.
-	if got := testutil.ToFloat64(m.DeviceInfo.WithLabelValues("sw-e2e", "cisco", "catalyst", "17.x", "dc-test")); got != 1 {
-		t.Errorf("DeviceInfo{sw-e2e} = %v, want 1", got)
+	const wantDevice = `
+# HELP network_device_info One series per discovered device. Value is always 1; inventory data is in the labels.
+# TYPE network_device_info gauge
+network_device_info{device_id="sw-e2e",model="catalyst",os_version="17.x",site="dc-test",vendor="cisco"} 1
+`
+	if err := testutil.GatherAndCompare(m.Registry(), strings.NewReader(wantDevice), "network_device_info"); err != nil {
+		t.Errorf("DeviceInfo mismatch: %v", err)
 	}
 	if got := testutil.ToFloat64(m.FederationSpokeUp.WithLabelValues(spokeID)); got != 1 {
 		t.Errorf("FederationSpokeUp{%s} = %v, want 1", spokeID, got)

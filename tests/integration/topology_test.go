@@ -8,6 +8,7 @@ package integration
 import (
 	"context"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -233,24 +234,17 @@ func TestMetricsEmittedAfterReconcile(t *testing.T) {
 
 	reconEdges, _ := graph.Reconcile(append(edgesA, edgesB...))
 
-	m := metrics.New()
-	m.TopologyEdgeInfo.Reset()
-	for _, e := range reconEdges {
-		m.TopologyEdgeInfo.WithLabelValues(
-			e.SrcDevice, e.SrcPort,
-			e.DstDevice, e.DstPort,
-			e.DiscoveryProto,
-			e.LinkKind,
-			string(e.Direction),
-		).Set(1)
-	}
+	m := metrics.New(false)
+	m.Topology.Update(discovery.Graph{Edges: reconEdges})
 
-	// Verify the edge_info gauge has exactly 1 series with the expected labels.
+	// Verify the edge_info collector emits the expected series.
 	// Reconcile preserves original port encoding from the winning observation.
-	got := testutil.ToFloat64(m.TopologyEdgeInfo.WithLabelValues(
-		"sw-a", "GigabitEthernet0/1", "sw-b", "GigabitEthernet0/2", "lldp", "ethernet", "bidirectional",
-	))
-	if got != 1 {
-		t.Errorf("TopologyEdgeInfo{sw-a,Gi0/1,sw-b,Gi0/2,lldp,ethernet,bidirectional} = %v, want 1", got)
+	const want = `
+# HELP network_topology_edge_info One series per discovered topology edge. Value is always 1.
+# TYPE network_topology_edge_info gauge
+network_topology_edge_info{direction="bidirectional",discovery_proto="lldp",dst_device="sw-b",dst_port="GigabitEthernet0/2",link_type="ethernet",src_device="sw-a",src_port="GigabitEthernet0/1"} 1
+`
+	if err := testutil.GatherAndCompare(m.Registry(), strings.NewReader(want), "network_topology_edge_info"); err != nil {
+		t.Errorf("edge_info mismatch: %v", err)
 	}
 }

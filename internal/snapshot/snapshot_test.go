@@ -2,6 +2,7 @@ package snapshot
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,82 @@ import (
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 )
+
+// errInjected is a sentinel used by injection helpers to distinguish injected
+// failures from real OS errors in assertions.
+var errInjected = errors.New("injected failure")
+
+// restoreOSFns returns a function that restores all injectable OS-call vars to
+// their current values. Call it with defer at the top of any test that
+// overrides these vars.
+func restoreOSFns() func() {
+	origReadFile := readFileFn
+	origMarshal := marshalFn
+	origMkdirAll := mkdirAllFn
+	origCreateTemp := createTempFn
+	origRename := renameFn
+	origOpenFile := openFileFn
+	return func() {
+		readFileFn = origReadFile
+		marshalFn = origMarshal
+		mkdirAllFn = origMkdirAll
+		createTempFn = origCreateTemp
+		renameFn = origRename
+		openFileFn = origOpenFile
+	}
+}
+
+// fakeTmpFile wraps a real *os.File but lets individual operations be
+// overridden by the test. Fields left nil delegate to the real file.
+type fakeTmpFile struct {
+	real    *os.File
+	writeFn func([]byte) (int, error)
+	syncFn  func() error
+	closeFn func() error
+}
+
+func (f *fakeTmpFile) Name() string { return f.real.Name() }
+func (f *fakeTmpFile) Write(b []byte) (int, error) {
+	if f.writeFn != nil {
+		return f.writeFn(b)
+	}
+	return f.real.Write(b)
+}
+func (f *fakeTmpFile) Sync() error {
+	if f.syncFn != nil {
+		return f.syncFn()
+	}
+	return f.real.Sync()
+}
+func (f *fakeTmpFile) Close() error {
+	if f.closeFn != nil {
+		return f.closeFn()
+	}
+	return f.real.Close()
+}
+
+// fakeQuarantineFile is a quarantineFile implementation whose operations can
+// be overridden to inject errors. The real file underneath is only used to
+// satisfy the interface; it is always closed regardless of injected errors.
+type fakeQuarantineFile struct {
+	real    *os.File
+	writeFn func([]byte) (int, error)
+	closeFn func() error
+}
+
+func (f *fakeQuarantineFile) Write(b []byte) (int, error) {
+	if f.writeFn != nil {
+		return f.writeFn(b)
+	}
+	return f.real.Write(b)
+}
+func (f *fakeQuarantineFile) Close() error {
+	_ = f.real.Close() // always close the real file to avoid leaks
+	if f.closeFn != nil {
+		return f.closeFn()
+	}
+	return nil
+}
 
 // LD-13: a missing snapshot is "first run", not an error. Operators don't
 // need to pre-create the file.
@@ -264,5 +341,292 @@ func TestWriteIsAtomic(t *testing.T) {
 		if filepath.Ext(e.Name()) == ".tmp" {
 			t.Errorf("temp file %q should have been renamed away", e.Name())
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Load error-path tests
+// ---------------------------------------------------------------------------
+
+// TestLoadReadError covers the branch where os.ReadFile returns a non-ErrNotExist
+// error (e.g. permission denied). Load must propagate the error.
+func TestLoadReadError(t *testing.T) {
+	defer restoreOSFns()()
+	readFileFn = func(string) ([]byte, error) { return nil, errInjected }
+
+	_, err := Load("/any/path.json")
+	if err == nil {
+		t.Fatal("expected error from injected readFileFn, got nil")
+	}
+	if !errors.Is(err, errInjected) {
+		t.Errorf("error = %v, want to wrap errInjected", err)
+	}
+}
+
+// TestLoadQuarantinesVersionMismatch confirms that when Load encounters a
+// version mismatch it quarantines the file (original path removed, .bad
+// created) and returns ErrVersionMismatch.
+func TestLoadQuarantinesVersionMismatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snap.json")
+	if err := os.WriteFile(path, []byte(`{"version":99}`), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	_, err := Load(path)
+	if !errors.Is(err, ErrVersionMismatch) {
+		t.Fatalf("error = %v, want ErrVersionMismatch", err)
+	}
+
+	// Original must be gone.
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Error("original file should have been quarantined (removed)")
+	}
+	// Quarantine file must exist.
+	if _, statErr := os.Stat(path + ".bad"); statErr != nil {
+		t.Errorf(".bad file should exist after version mismatch: %v", statErr)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// quarantine error-path tests
+// ---------------------------------------------------------------------------
+
+// TestQuarantineRollsSuffixOnConflict verifies that when the .bad path already
+// exists quarantine advances to the next available suffix (.bad.1, .bad.2, …).
+func TestQuarantineRollsSuffixOnConflict(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snap.json")
+
+	// Pre-create .bad so the first suffix is taken.
+	if err := os.WriteFile(path+".bad", []byte("existing"), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`{"version":99}`), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	_, err := Load(path)
+	if !errors.Is(err, ErrVersionMismatch) {
+		t.Fatalf("error = %v, want ErrVersionMismatch", err)
+	}
+
+	// .bad must still have the old content.
+	b, _ := os.ReadFile(path + ".bad") //nolint:gosec
+	if string(b) != "existing" {
+		t.Errorf(".bad content = %q, want %q", string(b), "existing")
+	}
+	// A new suffix must have been created.
+	if _, statErr := os.Stat(path + ".bad.1"); statErr != nil {
+		t.Errorf(".bad.1 should exist after suffix roll: %v", statErr)
+	}
+}
+
+// TestQuarantineOpenError exercises the branch where os.OpenFile fails for a
+// reason other than ErrExist (e.g. permission denied). quarantine returns the
+// error; Load surfaces it silently (the result is discarded with _).
+func TestQuarantineOpenError(t *testing.T) {
+	defer restoreOSFns()()
+	openFileFn = func(string, int, fs.FileMode) (quarantineFile, error) {
+		return nil, errInjected
+	}
+
+	// quarantine is called inside Load for a version mismatch; the returned
+	// error is ignored by Load, but the function still returns ErrVersionMismatch.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snap.json")
+	if err := os.WriteFile(path, []byte(`{"version":99}`), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	_, err := Load(path)
+	if !errors.Is(err, ErrVersionMismatch) {
+		t.Fatalf("error = %v, want ErrVersionMismatch", err)
+	}
+}
+
+// TestQuarantineWriteError exercises the branch where writing to the .bad file
+// fails. quarantine returns the write error.
+func TestQuarantineWriteError(t *testing.T) {
+	defer restoreOSFns()()
+	openFileFn = func(name string, flag int, perm fs.FileMode) (quarantineFile, error) {
+		f, err := os.OpenFile(name, flag, perm) //nolint:gosec
+		if err != nil {
+			return nil, err
+		}
+		return &fakeQuarantineFile{
+			real:    f,
+			writeFn: func([]byte) (int, error) { return 0, errInjected },
+		}, nil
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snap.json")
+	if err := os.WriteFile(path, []byte(`{"version":99}`), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	// Load ignores the quarantine error; we just verify it doesn't panic and
+	// returns ErrVersionMismatch.
+	_, err := Load(path)
+	if !errors.Is(err, ErrVersionMismatch) {
+		t.Fatalf("error = %v, want ErrVersionMismatch", err)
+	}
+}
+
+// TestQuarantineCloseError exercises the branch where closing the .bad file
+// fails. quarantine returns the close error and removes the partial file.
+func TestQuarantineCloseError(t *testing.T) {
+	defer restoreOSFns()()
+	openFileFn = func(name string, flag int, perm fs.FileMode) (quarantineFile, error) {
+		f, err := os.OpenFile(name, flag, perm) //nolint:gosec
+		if err != nil {
+			return nil, err
+		}
+		return &fakeQuarantineFile{
+			real:    f,
+			closeFn: func() error { return errInjected },
+		}, nil
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snap.json")
+	if err := os.WriteFile(path, []byte(`{"version":99}`), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	_, err := Load(path)
+	if !errors.Is(err, ErrVersionMismatch) {
+		t.Fatalf("error = %v, want ErrVersionMismatch", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Write error-path tests
+// ---------------------------------------------------------------------------
+
+// TestWriteMarshalError injects a marshal failure so the json.Marshal branch
+// in Write is exercised.
+func TestWriteMarshalError(t *testing.T) {
+	defer restoreOSFns()()
+	marshalFn = func(any) ([]byte, error) { return nil, errInjected }
+
+	err := Write(filepath.Join(t.TempDir(), "snap.json"), File{})
+	if err == nil {
+		t.Fatal("expected error from injected marshalFn, got nil")
+	}
+	if !errors.Is(err, errInjected) {
+		t.Errorf("error = %v, want to wrap errInjected", err)
+	}
+}
+
+// TestWriteMkdirAllError injects an os.MkdirAll failure.
+func TestWriteMkdirAllError(t *testing.T) {
+	defer restoreOSFns()()
+	mkdirAllFn = func(string, fs.FileMode) error { return errInjected }
+
+	err := Write(filepath.Join(t.TempDir(), "snap.json"), File{})
+	if err == nil {
+		t.Fatal("expected error from injected mkdirAllFn, got nil")
+	}
+	if !errors.Is(err, errInjected) {
+		t.Errorf("error = %v, want to wrap errInjected", err)
+	}
+}
+
+// TestWriteCreateTempError injects an os.CreateTemp failure.
+func TestWriteCreateTempError(t *testing.T) {
+	defer restoreOSFns()()
+	createTempFn = func(string, string) (tmpFile, error) { return nil, errInjected }
+
+	err := Write(filepath.Join(t.TempDir(), "snap.json"), File{})
+	if err == nil {
+		t.Fatal("expected error from injected createTempFn, got nil")
+	}
+	if !errors.Is(err, errInjected) {
+		t.Errorf("error = %v, want to wrap errInjected", err)
+	}
+}
+
+// TestWriteTempWriteError injects a failure on the Write call to the temp file.
+func TestWriteTempWriteError(t *testing.T) {
+	defer restoreOSFns()()
+	dir := t.TempDir()
+	createTempFn = func(d, pat string) (tmpFile, error) {
+		f, err := os.CreateTemp(d, pat)
+		if err != nil {
+			return nil, err
+		}
+		return &fakeTmpFile{
+			real:    f,
+			writeFn: func([]byte) (int, error) { return 0, errInjected },
+		}, nil
+	}
+
+	err := Write(filepath.Join(dir, "snap.json"), File{})
+	if err == nil {
+		t.Fatal("expected error from injected write, got nil")
+	}
+	if !errors.Is(err, errInjected) {
+		t.Errorf("error = %v, want to wrap errInjected", err)
+	}
+}
+
+// TestWriteSyncError injects a failure on the Sync call to the temp file.
+func TestWriteSyncError(t *testing.T) {
+	defer restoreOSFns()()
+	dir := t.TempDir()
+	createTempFn = func(d, pat string) (tmpFile, error) {
+		f, err := os.CreateTemp(d, pat)
+		if err != nil {
+			return nil, err
+		}
+		return &fakeTmpFile{
+			real:   f,
+			syncFn: func() error { return errInjected },
+		}, nil
+	}
+
+	err := Write(filepath.Join(dir, "snap.json"), File{})
+	if err == nil {
+		t.Fatal("expected error from injected sync, got nil")
+	}
+	if !errors.Is(err, errInjected) {
+		t.Errorf("error = %v, want to wrap errInjected", err)
+	}
+}
+
+// TestWriteCloseError injects a failure on the Close call to the temp file.
+func TestWriteCloseError(t *testing.T) {
+	defer restoreOSFns()()
+	dir := t.TempDir()
+	createTempFn = func(d, pat string) (tmpFile, error) {
+		f, err := os.CreateTemp(d, pat)
+		if err != nil {
+			return nil, err
+		}
+		return &fakeTmpFile{
+			real:    f,
+			closeFn: func() error { return errInjected },
+		}, nil
+	}
+
+	err := Write(filepath.Join(dir, "snap.json"), File{})
+	if err == nil {
+		t.Fatal("expected error from injected close, got nil")
+	}
+	if !errors.Is(err, errInjected) {
+		t.Errorf("error = %v, want to wrap errInjected", err)
+	}
+}
+
+// TestWriteRenameError injects an os.Rename failure.
+func TestWriteRenameError(t *testing.T) {
+	defer restoreOSFns()()
+	renameFn = func(string, string) error { return errInjected }
+
+	err := Write(filepath.Join(t.TempDir(), "snap.json"), File{})
+	if err == nil {
+		t.Fatal("expected error from injected renameFn, got nil")
+	}
+	if !errors.Is(err, errInjected) {
+		t.Errorf("error = %v, want to wrap errInjected", err)
 	}
 }
