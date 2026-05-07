@@ -1813,3 +1813,26 @@ func TestWalkSystemWithCredentialsNonTimeoutFailure(t *testing.T) {
 		t.Fatal("expected error from cancelled context, got nil")
 	}
 }
+
+func TestResolveEdgeDstDevices(t *testing.T) {
+	ipToID := map[string]string{
+		"10.0.0.1": "core-sw-01",
+		"10.0.0.2": "core-sw-02",
+	}
+
+	edges := []discovery.Edge{
+		{SrcDevice: "core-sw-01", DstDevice: "10.0.0.2", DiscoveryProto: "bgp"},
+		{SrcDevice: "core-sw-02", DstDevice: "10.0.0.1", DiscoveryProto: "ospf"},
+		{SrcDevice: "core-sw-01", DstDevice: "core-sw-03", DiscoveryProto: "lldp"}, // already sysName — unchanged
+		{SrcDevice: "core-sw-01", DstDevice: "10.0.1.99", DiscoveryProto: "isis"},  // not in inventory — unchanged
+	}
+
+	resolveEdgeDstDevices(edges, ipToID)
+
+	want := []string{"core-sw-02", "core-sw-01", "core-sw-03", "10.0.1.99"}
+	for i, e := range edges {
+		if e.DstDevice != want[i] {
+			t.Errorf("edge[%d] DstDevice = %q, want %q", i, e.DstDevice, want[i])
+		}
+	}
+}
