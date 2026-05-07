@@ -206,7 +206,7 @@ func run(ctx context.Context, args []string) int {
 		workerDone.Add(1)
 		go func() {
 			defer workerDone.Done()
-			runDiscoveryLoop(ctx, logger, cfg, m, &status, &ready, spoke)
+			runDiscoveryLoop(ctx, cancel, logger, cfg, m, &status, &ready, spoke)
 		}()
 	}
 
@@ -246,7 +246,7 @@ func run(ctx context.Context, args []string) int {
 // against the previous cycle, emits change events, updates metrics, and
 // writes a new snapshot. When spoke is non-nil (federation.role: spoke),
 // it also pushes the pre-reconciled graph to the hub after each cycle.
-func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Config, m *metrics.Metrics, status *atomic.Pointer[cycleStatus], ready *atomic.Bool, spoke *federation.Spoke) {
+func runDiscoveryLoop(ctx context.Context, cancelFn context.CancelFunc, logger *slog.Logger, cfg *config.Config, m *metrics.Metrics, status *atomic.Pointer[cycleStatus], ready *atomic.Bool, spoke *federation.Spoke) {
 	evLogger := events.New(logger)
 
 	// LD-13: load snapshot, serve stale-but-valid metrics until first live cycle.
@@ -282,7 +282,8 @@ func runDiscoveryLoop(ctx context.Context, logger *slog.Logger, cfg *config.Conf
 	resolver, err := credentials.New(cfg.Credentials)
 	if err != nil {
 		logger.Error("building credential resolver", "error", err)
-		os.Exit(1)
+		cancelFn()
+		return
 	}
 	if snap != nil {
 		resolver.LoadCache(snap.CredentialCache)

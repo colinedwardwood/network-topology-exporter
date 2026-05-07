@@ -527,7 +527,7 @@ func TestRunDiscoveryLoopClearsGraphStale(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runDiscoveryLoop(ctx, slog.Default(), cfg, m, &status, &ready, nil)
+		runDiscoveryLoop(ctx, func() {}, slog.Default(), cfg, m, &status, &ready, nil)
 	}()
 
 	// Poll until GraphStale is cleared — set to 0 after the first successful cycle.
@@ -900,7 +900,7 @@ func TestRunDiscoveryLoopVersionMismatchSnapshot(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runDiscoveryLoop(ctx, slog.Default(), cfg, m, &status, &ready, nil)
+		runDiscoveryLoop(ctx, func() {}, slog.Default(), cfg, m, &status, &ready, nil)
 	}()
 
 	deadline := time.After(12 * time.Second)
@@ -961,7 +961,7 @@ func TestRunDiscoveryLoopWithSnapshot(t *testing.T) {
 	done1 := make(chan struct{})
 	go func() {
 		defer close(done1)
-		runDiscoveryLoop(ctx1, slog.Default(), cfg, m1, &s1, &r1, nil)
+		runDiscoveryLoop(ctx1, cancel1, slog.Default(), cfg, m1, &s1, &r1, nil)
 	}()
 	deadline1 := time.After(12 * time.Second)
 	poll1 := time.NewTicker(50 * time.Millisecond)
@@ -989,7 +989,7 @@ snapshotReady:
 	done2 := make(chan struct{})
 	go func() {
 		defer close(done2)
-		runDiscoveryLoop(ctx2, slog.Default(), cfg, m2, &s2, &r2, nil)
+		runDiscoveryLoop(ctx2, cancel2, slog.Default(), cfg, m2, &s2, &r2, nil)
 	}()
 
 	deadline2 := time.After(12 * time.Second)
@@ -1052,7 +1052,7 @@ func TestRunDiscoveryLoopSecondTick(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runDiscoveryLoop(ctx, slog.Default(), cfg, m, &status, &ready, nil)
+		runDiscoveryLoop(ctx, func() {}, slog.Default(), cfg, m, &status, &ready, nil)
 	}()
 
 	// Wait for at least two cycles: first cycle clears GraphStale, second cycle
@@ -1119,7 +1119,7 @@ func TestRunDiscoveryLoopContextCancelledDuringCycle(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runDiscoveryLoop(ctx, slog.Default(), cfg, m, &status, &ready, nil)
+		runDiscoveryLoop(ctx, func() {}, slog.Default(), cfg, m, &status, &ready, nil)
 	}()
 
 	select {
@@ -1128,6 +1128,56 @@ func TestRunDiscoveryLoopContextCancelledDuringCycle(t *testing.T) {
 		// returned, or the ticker case fired ctx.Done(). Either way is correct.
 	case <-time.After(5 * time.Second):
 		t.Fatal("runDiscoveryLoop did not return within 5s after pre-cancelled context")
+	}
+}
+
+// TestRunDiscoveryLoopCredResolverError verifies that runDiscoveryLoop calls its
+// cancelFn and returns (rather than calling os.Exit) when credentials.New fails.
+// The config is constructed directly — bypassing config.Load — to inject an
+// invalid CIDR that config validation would normally reject.
+func TestRunDiscoveryLoopCredResolverError(t *testing.T) {
+	cfg := &config.Config{
+		Discovery: config.DiscoveryConfig{
+			Interval:         60 * time.Second,
+			TimeoutPerDevice: 1 * time.Second,
+			Parallelism:      1,
+		},
+		Credentials: config.CredentialsConfig{
+			Assignments: []config.CredentialAssignment{
+				{CIDR: "not-a-cidr", Profiles: []string{"p"}},
+			},
+		},
+		Snapshot: config.SnapshotConfig{Path: t.TempDir() + "/snap.json"},
+	}
+
+	m := metrics.New(false)
+	var status atomic.Pointer[cycleStatus]
+	var ready atomic.Bool
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cancelCalled := make(chan struct{})
+	cancelFn := func() {
+		close(cancelCalled)
+		cancel()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runDiscoveryLoop(ctx, cancelFn, slog.Default(), cfg, m, &status, &ready, nil)
+	}()
+
+	select {
+	case <-cancelCalled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancelFn was not called within 3s")
+	}
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("runDiscoveryLoop did not return after cancelFn was called")
 	}
 }
 
