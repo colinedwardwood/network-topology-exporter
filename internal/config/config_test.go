@@ -1310,3 +1310,116 @@ federation:
 		t.Errorf("error %q should mention https", err.Error())
 	}
 }
+
+// ── listen TLS validation tests ───────────────────────────────────────────────
+
+// TestListenAddrDefault verifies that the listen address defaults to ":9100".
+func TestListenAddrDefault(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("targets: []\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if c.Listen.Addr != ":9100" {
+		t.Errorf("Listen.Addr default = %q, want :9100", c.Listen.Addr)
+	}
+}
+
+// TestListenTLSCertWithoutKey verifies that setting tls_cert_file without
+// tls_key_file causes Load to return an error.
+func TestListenTLSCertWithoutKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+listen:
+  tls_cert_file: /some/cert.pem
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error when tls_cert_file set without tls_key_file, got nil")
+	}
+}
+
+// TestListenTLSKeyWithoutCert verifies that setting tls_key_file without
+// tls_cert_file causes Load to return an error.
+func TestListenTLSKeyWithoutCert(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+listen:
+  tls_key_file: /some/key.pem
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error when tls_key_file set without tls_cert_file, got nil")
+	}
+}
+
+// TestListenTLSBothSetButMissing verifies that providing non-existent TLS
+// file paths causes Load to return an error.
+func TestListenTLSBothSetButMissing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+listen:
+  tls_cert_file: /nonexistent/cert.pem
+  tls_key_file: /nonexistent/key.pem
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for non-existent TLS files, got nil")
+	}
+}
+
+// TestListenTLSBothSetAndExist verifies that providing existing (dummy) TLS
+// files passes validation.
+func TestListenTLSBothSetAndExist(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "cert.pem")
+	keyPath := filepath.Join(dir, "key.pem")
+	if err := os.WriteFile(certPath, []byte("dummy cert"), 0o600); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+	if err := os.WriteFile(keyPath, []byte("dummy key"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	cfgPath := filepath.Join(dir, "config.yaml")
+	body := "listen:\n  tls_cert_file: " + certPath + "\n  tls_key_file: " + keyPath + "\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	c, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("expected valid config with existing TLS files, got: %v", err)
+	}
+	if c.Listen.TLSCertFile != certPath {
+		t.Errorf("TLSCertFile = %q, want %q", c.Listen.TLSCertFile, certPath)
+	}
+}
+
+// TestListenTLSNeitherSet verifies that omitting both TLS fields is valid
+// (plain HTTP mode).
+func TestListenTLSNeitherSet(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("targets: []\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("expected plain-HTTP config to be valid, got: %v", err)
+	}
+}
