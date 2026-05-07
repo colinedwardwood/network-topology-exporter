@@ -25,6 +25,8 @@ const (
 	oidMplsTunnelAdminStatus = "1.3.6.1.2.1.10.166.3.2.2.1.13"
 	mplsTunnelOperUp         = 1
 	metaKeyAdminStatus       = "mpls_te.admin_status"
+	requiredMinValidRows     = 0
+	requiredMaxInvalidRatio  = 0.50
 	// precedenceRank 8: lowest priority in the graph merge ladder.
 	// Ladder: LLDP=2, CDP=3, FDB=4, IS-IS=5, OSPF=6, BGP=7, MPLS-TE=8.
 	// Higher rank = lower precedence in graph merge.
@@ -45,25 +47,36 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	if err != nil {
 		return nil, nil, fmt.Errorf("mpls_te tunnel table %s: %w", p.IP, err)
 	}
-	if operStats.DecodeFailures > 0 || operStats.TrimFailures > 0 {
-		return nil, nil, fmt.Errorf("mpls_te strict decode failed for oper status (decode=%d trim=%d)", operStats.DecodeFailures, operStats.TrimFailures)
+	if _, hardFailReason := snmputil.EvaluateRequiredTablePolicy(operStats, snmputil.RequiredTablePolicy{
+		MinValidRows:    requiredMinValidRows,
+		MaxInvalidRatio: requiredMaxInvalidRatio,
+	}); hardFailReason != "" {
+		return nil, nil, &discovery.PolicyError{
+			Module: "mpls_te",
+			Reason: hardFailReason,
+			Err:    fmt.Errorf("operStatus stats: valid=%d total=%d invalid=%d ratio=%.3f", operStats.ValidRows, operStats.TotalRows, operStats.InvalidRows, operStats.InvalidRatio),
+		}
 	}
 
 	adminStatuses, adminStats, adminErr := snmputil.WalkToIntMapStrict(ctx, client, "mpls_te", oidMplsTunnelAdminStatus)
-	degradedReason := ""
+	degradedReasons := make([]string, 0, 2)
+	if operStats.InvalidRows > 0 {
+		degradedReasons = append(degradedReasons, discovery.DegradedReasonRequiredTablePartialDecode)
+	}
 	if adminErr != nil {
 		slog.Debug("mpls_te: admin status walk failed; admin_status will be unknown", "device", p.IP, "err", adminErr)
 		adminStatuses = nil
-		degradedReason = "missing_admin_status_walk"
-	} else if adminStats.DecodeFailures > 0 || adminStats.TrimFailures > 0 {
+		degradedReasons = append(degradedReasons, discovery.DegradedReasonMissingAdminStatusWalk)
+	} else if adminStats.InvalidRows > 0 {
 		slog.Debug(
 			"mpls_te: admin status decode anomalies; admin_status may be unknown",
 			"device", p.IP,
 			"decode_failures", adminStats.DecodeFailures,
 			"trim_failures", adminStats.TrimFailures,
 		)
-		degradedReason = "invalid_admin_status_decode"
+		degradedReasons = append(degradedReasons, discovery.DegradedReasonInvalidAdminStatusDecode)
 	}
+	degradedReason := joinReasons(degradedReasons)
 
 	now := time.Now()
 	var edges []discovery.Edge
@@ -108,6 +121,22 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 		})
 	}
 	return edges, oos, nil
+}
+
+func joinReasons(reasons []string) string {
+	if len(reasons) == 0 {
+		return ""
+	}
+	seen := make(map[string]bool)
+	ordered := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		if reason == "" || seen[reason] {
+			continue
+		}
+		seen[reason] = true
+		ordered = append(ordered, reason)
+	}
+	return strings.Join(ordered, ",")
 }
 
 // mplsAdminStatusString converts a mplsTunnelAdminStatus integer value to a

@@ -30,6 +30,7 @@
 package discovery
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -38,7 +39,28 @@ const (
 	MetadataKeyDegraded = "network.topology.degraded"
 	// MetadataKeyDegradedReason carries the degraded-mode reason code.
 	MetadataKeyDegradedReason = "network.topology.degraded_reason"
+
+	DegradedReasonRequiredTablePartialDecode = "required_table_partial_decode"
+	DegradedReasonMissingSrcPortMapping      = "missing_srcport_mapping"
+	DegradedReasonMissingAdminStatusWalk     = "missing_admin_status_walk"
+	DegradedReasonInvalidAdminStatusDecode   = "invalid_admin_status_decode"
 )
+
+// PolicyError marks a module-level policy failure with a machine-readable reason.
+type PolicyError struct {
+	Module string
+	Reason string
+	Err    error
+}
+
+func (e *PolicyError) Error() string {
+	if e.Err == nil {
+		return fmt.Sprintf("%s policy failure: %s", e.Module, e.Reason)
+	}
+	return fmt.Sprintf("%s policy failure: %s: %v", e.Module, e.Reason, e.Err)
+}
+
+func (e *PolicyError) Unwrap() error { return e.Err }
 
 // Device is the inventory record for one network node.
 type Device struct {

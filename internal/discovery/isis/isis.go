@@ -22,9 +22,11 @@ import (
 )
 
 const (
-	oidISISAdjState    = "1.3.6.1.2.1.138.1.6.1.1.2"
-	oidISISAdjIPAddr   = "1.3.6.1.2.1.138.1.6.2.1.2"
-	oidISISCircIfIndex = "1.3.6.1.2.1.138.1.4.1.1.3"
+	oidISISAdjState         = "1.3.6.1.2.1.138.1.6.1.1.2"
+	oidISISAdjIPAddr        = "1.3.6.1.2.1.138.1.6.2.1.2"
+	oidISISCircIfIndex      = "1.3.6.1.2.1.138.1.4.1.1.3"
+	requiredMinValidRows    = 0
+	requiredMaxInvalidRatio = 0.50
 	// precedenceRank 5: IS-IS ranked above OSPF (6) because it is more commonly
 	// the primary IGP on service-provider networks and carries richer TE data.
 	// Ladder: LLDP=2, CDP=3, FDB=4, IS-IS=5, OSPF=6, BGP=7, MPLS-TE=8.
@@ -42,53 +44,69 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	}
 	defer func() { _ = client.Conn.Close() }()
 
-	states, err := walkAdjStates(ctx, client)
+	states, stateStats, err := walkAdjStates(ctx, client)
 	if err != nil {
 		return nil, nil, fmt.Errorf("isis adjState %s: %w", p.IP, err)
 	}
 
 	var circIfNames map[string]string
-	var degradedReason string
+	var degradedReasons []string
+	if stateStats.InvalidRows > 0 {
+		degradedReasons = append(degradedReasons, discovery.DegradedReasonRequiredTablePartialDecode)
+	}
 	if len(states) > 0 {
-		circIfNames, err = walkCircuitIfNames(ctx, client)
+		var srcPortDegradedReason string
+		circIfNames, srcPortDegradedReason, err = walkCircuitIfNames(ctx, client)
 		if err != nil {
 			slog.Debug("isis: circuit ifName walk failed; SrcPort will be empty", "device", p.IP, "err", err)
-			degradedReason = "missing_srcport_mapping"
+			degradedReasons = append(degradedReasons, discovery.DegradedReasonMissingSrcPortMapping)
+		} else if srcPortDegradedReason != "" {
+			degradedReasons = append(degradedReasons, srcPortDegradedReason)
 		}
 	}
 
-	edges, oos, err := walkAdjIPAddrs(ctx, client, localDevice, states, circIfNames, degradedReason, allowedNets)
+	edges, oos, err := walkAdjIPAddrs(ctx, client, localDevice, states, circIfNames, joinReasons(degradedReasons), allowedNets)
 	if err != nil {
 		return nil, nil, fmt.Errorf("isis adjIPAddr %s: %w", p.IP, err)
 	}
 	return edges, oos, nil
 }
 
-func walkAdjStates(ctx context.Context, client *gsnmp.GoSNMP) (map[string]int, error) {
+func walkAdjStates(ctx context.Context, client *gsnmp.GoSNMP) (map[string]int, snmputil.IntMapDecodeStats, error) {
 	states, stats, err := snmputil.WalkToIntMapStrict(ctx, client, "isis", oidISISAdjState)
 	if err != nil {
-		return nil, err
+		return nil, stats, err
 	}
-	if stats.DecodeFailures > 0 || stats.TrimFailures > 0 {
-		return nil, fmt.Errorf("strict decode failed for isis adjacency state (decode=%d trim=%d)", stats.DecodeFailures, stats.TrimFailures)
+	degraded, hardFailReason := snmputil.EvaluateRequiredTablePolicy(stats, snmputil.RequiredTablePolicy{
+		MinValidRows:    requiredMinValidRows,
+		MaxInvalidRatio: requiredMaxInvalidRatio,
+	})
+	_ = degraded
+	if hardFailReason != "" {
+		return nil, stats, &discovery.PolicyError{
+			Module: "isis",
+			Reason: hardFailReason,
+			Err:    fmt.Errorf("adjState stats: valid=%d total=%d invalid=%d ratio=%.3f", stats.ValidRows, stats.TotalRows, stats.InvalidRows, stats.InvalidRatio),
+		}
 	}
-	return states, nil
+	return states, stats, nil
 }
 
 // walkCircuitIfNames returns a map from "{sysInst}.{circIdx}" to the interface
 // name string, built by joining isisISCircIfIndex (circuit → ifIndex) with
 // ifDescr (ifIndex → interface name).
-func walkCircuitIfNames(ctx context.Context, client *gsnmp.GoSNMP) (map[string]string, error) {
+func walkCircuitIfNames(ctx context.Context, client *gsnmp.GoSNMP) (map[string]string, string, error) {
 	circIfIndex, stats, err := snmputil.WalkToIntMapStrict(ctx, client, "isis", oidISISCircIfIndex)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	if stats.DecodeFailures > 0 || stats.TrimFailures > 0 {
-		return nil, fmt.Errorf("strict decode failed for isis circuit ifIndex map (decode=%d trim=%d)", stats.DecodeFailures, stats.TrimFailures)
+	degradedReason := ""
+	if stats.InvalidRows > 0 {
+		degradedReason = discovery.DegradedReasonMissingSrcPortMapping
 	}
 	ifNames, err := snmputil.WalkIfDescr(ctx, client)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	result := make(map[string]string, len(circIfIndex))
 	for key, ifIdx := range circIfIndex {
@@ -96,7 +114,7 @@ func walkCircuitIfNames(ctx context.Context, client *gsnmp.GoSNMP) (map[string]s
 			result[key] = name
 		}
 	}
-	return result, nil
+	return result, degradedReason, nil
 }
 
 func walkAdjIPAddrs(ctx context.Context, client *gsnmp.GoSNMP, localDevice string, states map[string]int, circIfNames map[string]string, degradedReason string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
@@ -138,7 +156,7 @@ func walkAdjIPAddrs(ctx context.Context, client *gsnmp.GoSNMP, localDevice strin
 		ifName := circIfNames[circKey]
 		edgeDegradedReason := degradedReason
 		if edgeDegradedReason == "" && circKey != "" && ifName == "" {
-			edgeDegradedReason = "missing_srcport_mapping"
+			edgeDegradedReason = discovery.DegradedReasonMissingSrcPortMapping
 		}
 		if len(allowedNets) > 0 && !snmputil.IPInNets(ip, allowedNets) {
 			oos = append(oos, discovery.OutOfScopeNeighbour{
@@ -173,4 +191,20 @@ func isisMetadata(degradedReason string) map[string]string {
 		discovery.MetadataKeyDegraded:       "true",
 		discovery.MetadataKeyDegradedReason: degradedReason,
 	}
+}
+
+func joinReasons(reasons []string) string {
+	if len(reasons) == 0 {
+		return ""
+	}
+	seen := make(map[string]bool)
+	ordered := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		if reason == "" || seen[reason] {
+			continue
+		}
+		seen[reason] = true
+		ordered = append(ordered, reason)
+	}
+	return strings.Join(ordered, ",")
 }

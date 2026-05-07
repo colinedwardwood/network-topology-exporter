@@ -127,10 +127,6 @@ func run(ctx context.Context, args []string) int {
 
 	m := metrics.New(cfg.Federation.Role == "uncoordinated")
 	m.SnapshotLastWrittenUnix.SetToCurrentTime()
-	snmpwalk.SetDecodeIssueObserver(func(issue snmpwalk.DecodeIssue) {
-		m.DiscoveryDecodeIssues.WithLabelValues(issue.Module, issue.OID, issue.Reason).Add(float64(issue.Count))
-	})
-	defer snmpwalk.SetDecodeIssueObserver(nil)
 
 	var status atomic.Pointer[cycleStatus]
 	var ready atomic.Bool // set to true after the first live cycle or spoke push
@@ -564,7 +560,7 @@ func runCycle(
 			dev, params, profileName, err := walkSystemWithCredentials(ctx, cfg, resolver, ip, target)
 			if err != nil {
 				logger.Debug("snmp walk failed", "target", target.Host, "error", err)
-				m.DiscoveryHardFailTotal.WithLabelValues("system", "system_group").Inc()
+				m.DiscoveryHardFailTotal.WithLabelValues("system", "system_group_walk_error").Inc()
 				m.CredentialTrialsTotal.WithLabelValues("failed").Inc()
 				if errors.Is(err, context.DeadlineExceeded) {
 					m.SNMPWalksTotal.WithLabelValues("timeout").Inc()
@@ -579,6 +575,10 @@ func runCycle(
 
 			devCtx, cancel := context.WithTimeout(ctx, cfg.Discovery.TimeoutPerDevice)
 			defer cancel()
+			devCtx = snmpwalk.ContextWithDecodeIssueReporter(devCtx, func(issue snmpwalk.DecodeIssue) {
+				m.DiscoveryDecodeIssues.WithLabelValues(issue.Module, issue.OID, issue.Reason).Add(float64(issue.Count))
+				m.DiscoveryQuarantinedRowsTotal.WithLabelValues(issue.Module, issue.OID, issue.Reason).Add(float64(issue.Count))
+			})
 
 			resolver.RecordSuccess(ip.String(), profileName)
 			m.CredentialTrialsTotal.WithLabelValues("ok").Inc()
@@ -617,7 +617,12 @@ func runCycle(
 				m.DiscoveryModuleDuration.WithLabelValues(mod.proto).Observe(time.Since(modStart).Seconds())
 				if err != nil {
 					logger.Debug(mod.proto+" walk failed", "target", target.Host, "error", err)
-					m.DiscoveryHardFailTotal.WithLabelValues(mod.proto, "module_walk").Inc()
+					reason := "module_walk_error"
+					var policyErr *discovery.PolicyError
+					if errors.As(err, &policyErr) && policyErr.Reason != "" {
+						reason = policyErr.Reason
+					}
+					m.DiscoveryHardFailTotal.WithLabelValues(mod.proto, reason).Inc()
 					if errors.Is(err, context.DeadlineExceeded) {
 						m.SNMPWalksTotal.WithLabelValues("timeout").Inc()
 					} else {
