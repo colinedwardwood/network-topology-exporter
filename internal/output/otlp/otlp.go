@@ -287,7 +287,7 @@ func (e *Exporter) post(ctx context.Context, path string, payload any) error {
 		return fmt.Errorf("otlp: post %s: %w", path, err)
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
-	resp.Body.Close() //nolint:errcheck
+	_ = resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("otlp: post %s: server returned %d", path, resp.StatusCode)
 	}
