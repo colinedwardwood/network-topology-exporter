@@ -2,9 +2,11 @@ package snmp
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 
 	g "github.com/gosnmp/gosnmp"
 )
@@ -17,24 +19,108 @@ const (
 	OIDIfDescr = "1.3.6.1.2.1.2.2.1.2"
 )
 
+// DecodeIssue describes a decode anomaly observed while parsing SNMP table PDUs.
+// It is emitted through SetDecodeIssueObserver for metrics/logging aggregation.
+type DecodeIssue struct {
+	Module string
+	OID    string
+	Reason string
+	Count  int
+}
+
+// IntMapDecodeStats reports anomalies from WalkToIntMapStrict.
+type IntMapDecodeStats struct {
+	DecodeFailures int
+	TrimFailures   int
+	Samples        []string
+}
+
+var (
+	decodeIssueObserverMu sync.RWMutex
+	decodeIssueObserver   func(DecodeIssue)
+)
+
+// SetDecodeIssueObserver installs a process-wide callback for decode anomalies.
+// Passing nil clears the observer.
+func SetDecodeIssueObserver(fn func(DecodeIssue)) {
+	decodeIssueObserverMu.Lock()
+	defer decodeIssueObserverMu.Unlock()
+	decodeIssueObserver = fn
+}
+
+func reportDecodeIssue(issue DecodeIssue) {
+	decodeIssueObserverMu.RLock()
+	fn := decodeIssueObserver
+	decodeIssueObserverMu.RUnlock()
+	if fn != nil {
+		fn(issue)
+	}
+}
+
+func appendDecodeSample(samples []string, sample string) []string {
+	const maxSamples = 5
+	if len(samples) >= maxSamples {
+		return samples
+	}
+	return append(samples, sample)
+}
+
+// WalkToIntMapStrict walks oid and returns a map from OID suffix to integer
+// value plus decode stats. Non-integer PDU values are counted as decode
+// failures and excluded from the result map.
+func WalkToIntMapStrict(ctx context.Context, client *g.GoSNMP, module, oid string) (map[string]int, IntMapDecodeStats, error) {
+	pdus, err := BulkWalk(ctx, client, oid)
+	if err != nil {
+		return nil, IntMapDecodeStats{}, err
+	}
+	prefix := "." + oid + "."
+	result := make(map[string]int, len(pdus))
+	stats := IntMapDecodeStats{}
+	for _, pdu := range pdus {
+		key, ok := TrimOIDPrefix(pdu.Name, prefix)
+		if !ok {
+			stats.TrimFailures++
+			stats.Samples = appendDecodeSample(stats.Samples, "trim:"+pdu.Name)
+			continue
+		}
+		v, ok := PDUIntStrict(pdu)
+		if !ok {
+			stats.DecodeFailures++
+			stats.Samples = appendDecodeSample(stats.Samples, fmt.Sprintf("decode:%s:%T", key, pdu.Value))
+			continue
+		}
+		result[key] = v
+	}
+	if module != "" {
+		if stats.DecodeFailures > 0 {
+			reportDecodeIssue(DecodeIssue{
+				Module: module,
+				OID:    oid,
+				Reason: "invalid_type",
+				Count:  stats.DecodeFailures,
+			})
+		}
+		if stats.TrimFailures > 0 {
+			reportDecodeIssue(DecodeIssue{
+				Module: module,
+				OID:    oid,
+				Reason: "invalid_oid",
+				Count:  stats.TrimFailures,
+			})
+		}
+	}
+	return result, stats, nil
+}
+
 // WalkToIntMap walks oid and returns a map from OID suffix to integer value.
 // The suffix is the instance index portion of the OID (everything after the
 // column prefix). Returns nil on walk error.
 func WalkToIntMap(ctx context.Context, client *g.GoSNMP, oid string) (map[string]int, error) {
-	pdus, err := BulkWalk(ctx, client, oid)
+	m, _, err := WalkToIntMapStrict(ctx, client, "", oid)
 	if err != nil {
 		return nil, err
 	}
-	prefix := "." + oid + "."
-	result := make(map[string]int, len(pdus))
-	for _, pdu := range pdus {
-		key, ok := TrimOIDPrefix(pdu.Name, prefix)
-		if !ok {
-			continue
-		}
-		result[key] = PDUInt(pdu)
-	}
-	return result, nil
+	return m, nil
 }
 
 // WalkIfNames walks the IF-MIB ifXTable.ifName column (RFC 2863 §3.1.4) and
@@ -86,17 +172,31 @@ func PDUString(pdu g.SnmpPDU) string {
 // PDUInt extracts an integer value from a PDU. It handles int, int32, uint,
 // and uint32 value types, returning 0 for any other type.
 func PDUInt(pdu g.SnmpPDU) int {
+	v, ok := PDUIntStrict(pdu)
+	if !ok {
+		return 0
+	}
+	return v
+}
+
+// PDUIntStrict extracts an integer value from a PDU and reports whether
+// extraction succeeded.
+func PDUIntStrict(pdu g.SnmpPDU) (int, bool) {
 	switch v := pdu.Value.(type) {
 	case int:
-		return v
+		return v, true
 	case int32:
-		return int(v)
+		return int(v), true
 	case uint:
-		return int(v)
+		return int(v), true
 	case uint32:
-		return int(v)
+		return int(v), true
+	case int64:
+		return int(v), true
+	case uint64:
+		return int(v), true
 	}
-	return 0
+	return 0, false
 }
 
 // PDUBytes extracts a byte slice from a PDU. It handles []byte and string

@@ -78,6 +78,25 @@ observe network_topology_discovery_cycle_duration_seconds
 
 Change events appear on two surfaces. The counter (`network_topology_change_total`) is what alerts fire on. The log line carries the full before/after edge record so the operator can answer "which edge changed?" without joining metric series in their head.
 
+## Discovery contracts (hard-fail vs degraded)
+
+Discovery modules now classify SNMP inputs as **required** or **optional**:
+
+- **IS-IS**
+  - `isisISAdjState` is required. Decode anomalies are hard-fail.
+  - `isisISCircIfIndex`/`ifDescr` mapping for `SrcPort` is optional. Failures
+    degrade output (`network.topology.degraded=true`,
+    `network.topology.degraded_reason=missing_srcport_mapping`) but do not drop
+    otherwise valid adjacency edges.
+- **MPLS-TE**
+  - `mplsTunnelOperStatus` is required. Decode anomalies are hard-fail.
+  - `mplsTunnelAdminStatus` is optional metadata. Failures degrade output
+    (`network.topology.degraded=true`) while preserving tunnel edges with
+    `mpls_te.admin_status=unknown`.
+
+This split prevents silent topology corruption for required signals while
+preserving best-effort behavior for non-critical enrichments.
+
 ## Intentional non-features
 
 **ARP tables are not a topology source.** ARP tables (IP-MIB `ipNetToPhysicalTable`) record IP→MAC mappings on directly attached subnets. They encode L3 reachability, not physical adjacency. Two devices sharing a /24 both appear in each other's ARP tables even when connected through several intermediate switches. Bejerano et al. ("Physical Topology Discovery for Large Multisubnet Networks", IEEE INFOCOM 2003) and Pandey et al. ("IP Network Topology Discovery Using SNMP", ICOIN 2009) both use ARP data only as an IP→MAC resolution helper alongside the Bridge FDB — never as an independent edge source. If MAC→IP resolution is needed in a future FDB enhancement, ARP queries belong as an internal helper inside `internal/discovery/fdb`, not as a standalone module.

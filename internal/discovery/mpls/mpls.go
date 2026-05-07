@@ -41,6 +41,8 @@ const (
 	oidMplsTunnelAdminStatus = "1.3.6.1.2.1.10.166.3.2.2.1.13"
 	mplsTunnelOperUp         = 1
 	metaKeyAdminStatus       = "mpls_te.admin_status"
+	metaKeyDegraded          = "network.topology.degraded"
+	metaKeyDegradedWhy       = "network.topology.degraded_reason"
 	// precedenceRank 8: lowest priority in the graph merge ladder.
 	// Ladder: LLDP=2, CDP=3, FDB=4, IS-IS=5, OSPF=6, BGP=7, MPLS-TE=8.
 	// Higher rank = lower precedence in graph merge.
@@ -57,28 +59,36 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	}
 	defer func() { _ = client.Conn.Close() }()
 
-	pdus, err := snmputil.BulkWalk(ctx, client, oidMplsTunnelOperStatus)
+	operStatuses, operStats, err := snmputil.WalkToIntMapStrict(ctx, client, "mpls_te", oidMplsTunnelOperStatus)
 	if err != nil {
 		return nil, nil, fmt.Errorf("mpls_te tunnel table %s: %w", p.IP, err)
 	}
+	if operStats.DecodeFailures > 0 || operStats.TrimFailures > 0 {
+		return nil, nil, fmt.Errorf("mpls_te strict decode failed for oper status (decode=%d trim=%d)", operStats.DecodeFailures, operStats.TrimFailures)
+	}
 
-	adminStatuses, adminErr := snmputil.WalkToIntMap(ctx, client, oidMplsTunnelAdminStatus)
+	adminStatuses, adminStats, adminErr := snmputil.WalkToIntMapStrict(ctx, client, "mpls_te", oidMplsTunnelAdminStatus)
+	degradedReason := ""
 	if adminErr != nil {
 		slog.Debug("mpls_te: admin status walk failed; admin_status will be unknown", "device", p.IP, "err", adminErr)
 		adminStatuses = nil
+		degradedReason = "missing_admin_status_walk"
+	} else if adminStats.DecodeFailures > 0 || adminStats.TrimFailures > 0 {
+		slog.Debug(
+			"mpls_te: admin status decode anomalies; admin_status may be unknown",
+			"device", p.IP,
+			"decode_failures", adminStats.DecodeFailures,
+			"trim_failures", adminStats.TrimFailures,
+		)
+		degradedReason = "invalid_admin_status_decode"
 	}
 
-	const prefix = "." + oidMplsTunnelOperStatus + "."
 	now := time.Now()
 	var edges []discovery.Edge
 	var oos []discovery.OutOfScopeNeighbour
 
-	for _, pdu := range pdus {
-		suffix, ok := snmputil.TrimOIDPrefix(pdu.Name, prefix)
-		if !ok {
-			continue
-		}
-		if snmputil.PDUInt(pdu) != mplsTunnelOperUp {
+	for suffix, operStatus := range operStatuses {
+		if operStatus != mplsTunnelOperUp {
 			continue
 		}
 		tunnelIdx, egressIP, ok := parseTunnelSuffix(suffix)
@@ -93,7 +103,14 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 			})
 			continue
 		}
-		adminStatus := adminStatuses[suffix] // 0 if not found
+		adminStatus := adminStatuses[suffix] // 0 if absent or decode-filtered
+		metadata := map[string]string{
+			metaKeyAdminStatus: mplsAdminStatusString(adminStatus),
+		}
+		if degradedReason != "" {
+			metadata[metaKeyDegraded] = "true"
+			metadata[metaKeyDegradedWhy] = degradedReason
+		}
 		edges = append(edges, discovery.Edge{
 			SrcDevice:      localDevice,
 			SrcPort:        fmt.Sprintf("te-tunnel%d", tunnelIdx),
@@ -105,9 +122,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 			PrecedenceRank: precedenceRank,
 			LinkKind:       "mpls-te",
 			ObservedAt:     now,
-			Metadata: map[string]string{
-				metaKeyAdminStatus: mplsAdminStatusString(adminStatus),
-			},
+			Metadata:       metadata,
 		})
 	}
 	return edges, oos, nil

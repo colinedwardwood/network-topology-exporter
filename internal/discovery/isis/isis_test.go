@@ -312,6 +312,31 @@ func TestWalkSrcPortEmptyWhenCircuitMissing(t *testing.T) {
 	if edges[0].SrcPort != "" {
 		t.Errorf("SrcPort = %q, want empty string", edges[0].SrcPort)
 	}
+	if edges[0].Metadata == nil {
+		t.Fatal("Metadata is nil, want degraded metadata")
+	}
+	if edges[0].Metadata["network.topology.degraded"] != "true" {
+		t.Errorf("network.topology.degraded = %q, want true", edges[0].Metadata["network.topology.degraded"])
+	}
+	if edges[0].Metadata["network.topology.degraded_reason"] != "missing_srcport_mapping" {
+		t.Errorf("network.topology.degraded_reason = %q, want missing_srcport_mapping", edges[0].Metadata["network.topology.degraded_reason"])
+	}
+}
+
+// Walk: non-integer adjacency state PDU is a hard failure.
+func TestWalkAdjStateDecodeFailureIsHardFail(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: adjStateBase + adjKey, Type: gsnmp.OctetString, Value: []byte("bad")},
+		{Name: adjIPBase + adjKey + ".1.4.192.0.2.1", Type: gsnmp.OctetString, Value: []byte{192, 0, 2, 1}},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	_, _, err := Walk(context.Background(), p, "router-a", nil)
+	if err == nil {
+		t.Fatal("expected hard-fail error for adjacency decode failure, got nil")
+	}
 }
 
 // Walk: Open fails when the connection cannot be established.

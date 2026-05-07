@@ -48,6 +48,11 @@ import (
 // waits before declaring an NFS stall and continuing the discovery cycle.
 const snapshotWriteTimeout = 30 * time.Second
 
+const (
+	metaKeyDegraded    = "network.topology.degraded"
+	metaKeyDegradedWhy = "network.topology.degraded_reason"
+)
+
 type cycleStatus struct {
 	LastCycleAt  time.Time
 	DeviceErrors int64
@@ -127,6 +132,10 @@ func run(ctx context.Context, args []string) int {
 
 	m := metrics.New(cfg.Federation.Role == "uncoordinated")
 	m.SnapshotLastWrittenUnix.SetToCurrentTime()
+	snmpwalk.SetDecodeIssueObserver(func(issue snmpwalk.DecodeIssue) {
+		m.DiscoveryDecodeIssues.WithLabelValues(issue.Module, issue.OID, issue.Reason).Add(float64(issue.Count))
+	})
+	defer snmpwalk.SetDecodeIssueObserver(nil)
 
 	var status atomic.Pointer[cycleStatus]
 	var ready atomic.Bool // set to true after the first live cycle or spoke push
@@ -560,6 +569,7 @@ func runCycle(
 			dev, params, profileName, err := walkSystemWithCredentials(ctx, cfg, resolver, ip, target)
 			if err != nil {
 				logger.Debug("snmp walk failed", "target", target.Host, "error", err)
+				m.DiscoveryHardFailTotal.WithLabelValues("system", "system_group").Inc()
 				m.CredentialTrialsTotal.WithLabelValues("failed").Inc()
 				if errors.Is(err, context.DeadlineExceeded) {
 					m.SNMPWalksTotal.WithLabelValues("timeout").Inc()
@@ -612,6 +622,7 @@ func runCycle(
 				m.DiscoveryModuleDuration.WithLabelValues(mod.proto).Observe(time.Since(modStart).Seconds())
 				if err != nil {
 					logger.Debug(mod.proto+" walk failed", "target", target.Host, "error", err)
+					m.DiscoveryHardFailTotal.WithLabelValues(mod.proto, "module_walk").Inc()
 					if errors.Is(err, context.DeadlineExceeded) {
 						m.SNMPWalksTotal.WithLabelValues("timeout").Inc()
 					} else {
@@ -620,6 +631,9 @@ func runCycle(
 					continue
 				}
 				m.SNMPWalksTotal.WithLabelValues("ok").Inc()
+				for _, reason := range collectDegradedReasons(edges) {
+					m.DiscoveryDegradedTotal.WithLabelValues(mod.proto, reason).Inc()
+				}
 				allEdges = append(allEdges, edges...)
 				// Tag each OOS entry with the protocol that reported it so the
 				// boundary_observation_info metric and hub OOS matching have a
@@ -681,6 +695,25 @@ func runCycle(
 		Edges:      reconciledEdges,
 		OutOfScope: allOOS,
 	}, ages, conflicts, int(failCount)
+}
+
+func collectDegradedReasons(edges []discovery.Edge) []string {
+	unique := make(map[string]bool)
+	for _, e := range edges {
+		if e.Metadata == nil || e.Metadata[metaKeyDegraded] != "true" {
+			continue
+		}
+		reason := e.Metadata[metaKeyDegradedWhy]
+		if reason == "" {
+			reason = "unknown"
+		}
+		unique[reason] = true
+	}
+	reasons := make([]string, 0, len(unique))
+	for reason := range unique {
+		reasons = append(reasons, reason)
+	}
+	return reasons
 }
 
 // resolveEdgeDstDevices replaces IP-valued DstDevice fields with the
