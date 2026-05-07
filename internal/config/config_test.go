@@ -742,6 +742,286 @@ federation:
 	}
 }
 
+// TestScopeAllowsHostnameTarget verifies that a target with a hostname (not an IP)
+// passes scope validation even when there is a CIDR allow-list. Resolution is
+// deferred to poll time.
+func TestScopeAllowsHostnameTarget(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+discovery:
+  scope:
+    cidr_allow_list:
+      - 10.0.0.0/8
+targets:
+  - host: router.example.com
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("expected hostname target to pass scope validation, got: %v", err)
+	}
+}
+
+// TestNormalizePrivProtocolEmptyIsValid verifies that an SNMPv3 profile with
+// no priv_protocol (empty string) is valid and normalises to "".
+func TestNormalizePrivProtocolEmptyIsValid(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+credentials:
+  profiles:
+    - name: core-v3
+      type: snmp_v3
+      username_env: SNMP_V3_USER
+  fallback_order: [core-v3]
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("expected success for v3 profile without priv_protocol, got: %v", err)
+	}
+	if got := c.Credentials.Profiles[0].PrivProtocol; got != "" {
+		t.Errorf("PrivProtocol = %q, want empty", got)
+	}
+}
+
+// TestLoadReturnsErrorForMissingFile verifies that Load returns a non-nil error
+// when the specified path does not exist.
+func TestLoadReturnsErrorForMissingFile(t *testing.T) {
+	_, err := Load("/nonexistent/path/that/does/not/exist/config.yaml")
+	if err == nil {
+		t.Fatal("expected error for missing file, got nil")
+	}
+}
+
+// TestLoadReturnsErrorForInvalidYAML verifies that Load returns an error when
+// the file contains invalid YAML.
+func TestLoadReturnsErrorForInvalidYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("{{invalid yaml"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for invalid YAML, got nil")
+	}
+}
+
+// TestLoadReturnsErrorForInvalidConfig verifies that valid YAML that fails
+// validation (snmp version "v4") causes Load to return an error.
+func TestLoadReturnsErrorForInvalidConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+modules:
+  snmp:
+    enabled: true
+    version: v4
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for snmp.version=v4, got nil")
+	}
+}
+
+// TestNormalizeAuthProtocolMD5ReturnsError verifies that an SNMPv3 profile
+// using auth_protocol MD5 (cryptographically broken) causes Load to return an error.
+func TestNormalizeAuthProtocolMD5ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+credentials:
+  profiles:
+    - name: core-v3
+      type: snmp_v3
+      username_env: SNMP_V3_USER
+      auth_protocol: MD5
+  fallback_order: [core-v3]
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for auth_protocol MD5 (cryptographically broken)")
+	}
+}
+
+// TestNormalizeAuthProtocolUnknownReturnsError verifies that an unrecognized
+// auth protocol string causes Load to return an error.
+func TestNormalizeAuthProtocolUnknownReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+credentials:
+  profiles:
+    - name: core-v3
+      type: snmp_v3
+      username_env: SNMP_V3_USER
+      auth_protocol: BLOWFISH
+  fallback_order: [core-v3]
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unknown auth_protocol")
+	}
+}
+
+// TestNormalizePrivProtocolDESReturnsError verifies that an SNMPv3 profile
+// using priv_protocol DES (cryptographically broken) causes Load to return an error.
+func TestNormalizePrivProtocolDESReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+credentials:
+  profiles:
+    - name: core-v3
+      type: snmp_v3
+      username_env: SNMP_V3_USER
+      priv_protocol: DES
+  fallback_order: [core-v3]
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for priv_protocol DES (cryptographically broken)")
+	}
+}
+
+// TestNormalizePrivProtocolUnknownReturnsError verifies that an unrecognized
+// priv protocol string causes Load to return an error.
+func TestNormalizePrivProtocolUnknownReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+credentials:
+  profiles:
+    - name: core-v3
+      type: snmp_v3
+      username_env: SNMP_V3_USER
+      priv_protocol: 3DES
+  fallback_order: [core-v3]
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unknown priv_protocol")
+	}
+}
+
+// TestValidateFederationSpokeMissingHubURL verifies that a spoke role config
+// without hub_url causes Load to return an error.
+func TestValidateFederationSpokeMissingHubURL(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+federation:
+  role: spoke
+  spoke:
+    spoke_id: dc-a
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for spoke role missing hub_url")
+	}
+}
+
+// TestValidateFederationSpokeMissingTLS verifies that a spoke config with
+// hub_url set but missing tls fields causes Load to return an error.
+func TestValidateFederationSpokeMissingTLS(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+federation:
+  role: spoke
+  spoke:
+    spoke_id: dc-a
+    hub_url: https://hub:9101
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for spoke role missing TLS fields")
+	}
+}
+
+// TestValidateFederationHubMissingTLS verifies that a hub role config without
+// TLS fields causes Load to return an error.
+func TestValidateFederationHubMissingTLS(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+federation:
+  role: hub
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for hub role missing TLS fields")
+	}
+}
+
+// TestValidateFederationHubSpokeTimeoutTooSmall verifies that a hub config
+// with spoke_timeout shorter than 2×discovery.interval causes Load to return an error.
+func TestValidateFederationHubSpokeTimeoutTooSmall(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+discovery:
+  interval: 60s
+federation:
+  role: hub
+  spoke_timeout: 60s
+  hub:
+    tls_ca_cert: /ca.pem
+    tls_cert: /hub.crt
+    tls_key: /hub.key
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error: spoke_timeout < 2 × discovery.interval")
+	}
+}
+
+// TestValidateFederationUnknownRole verifies that an unrecognized federation
+// role causes Load to return an error.
+func TestValidateFederationUnknownRole(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("federation:\n  role: unknown_role\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unknown federation role")
+	}
+}
+
 func TestFederationKnownLinkOptionalLinkKind(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

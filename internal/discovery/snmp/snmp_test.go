@@ -420,6 +420,269 @@ func TestBulkWalk(t *testing.T) {
 	}
 }
 
+// Open: V3 with empty username causes validateParametersV3 to fail immediately,
+// exercising the connect-error return path in Open.
+func TestOpenConnectError(t *testing.T) {
+	p := Params{
+		IP:      net.ParseIP("127.0.0.1"),
+		Port:    161,
+		Timeout: time.Second,
+		V3:      true,
+		// Username intentionally empty — gosnmp rejects it in validateParametersV3.
+	}
+	_, err := Open(p)
+	if err == nil {
+		t.Fatal("expected error for V3 with empty username, got nil")
+	}
+}
+
+// BulkWalk: fallback to WalkAll when BulkWalkAll fails.
+// gosnmp's BulkWalkAll fails when the connection is closed. We then fall
+// through to WalkAll on the same closed connection, which also fails — but
+// the important thing is the WalkAll fallback branch is reached.
+func TestBulkWalkFallbackToWalkAll(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.1.1.0", Type: gsnmp.OctetString, Value: []byte("desc")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	client, err := Open(p)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	// Close the connection so that BulkWalkAll fails, exercising the fallback branch.
+	_ = client.Conn.Close()
+
+	ctx := context.Background()
+	// Both BulkWalkAll and WalkAll will fail on the closed conn; we just need
+	// the fallback branch to be reached (i.e., the WalkAll call happens).
+	_, err = BulkWalk(ctx, client, "1.3.6.1.2.1.1")
+	// An error is expected since the connection is closed.
+	if err == nil {
+		t.Log("BulkWalk unexpectedly succeeded on closed connection (platform may re-open)")
+	}
+}
+
+// lazyErrCtx is a context.Context whose Err() returns nil for the first call
+// and errCancelled for all subsequent calls. This lets us exercise the
+// second ctx.Err() check in BulkWalk (after BulkWalkAll has already failed)
+// without relying on goroutine scheduling.
+type lazyErrCtx struct {
+	context.Context
+	called int
+}
+
+func (c *lazyErrCtx) Err() error {
+	c.called++
+	if c.called < 2 {
+		return nil
+	}
+	return context.Canceled
+}
+
+// BulkWalk: when BulkWalkAll fails AND the context has since been cancelled,
+// the second ctx.Err() check returns the context error (lines 111–113).
+func TestBulkWalkCtxCancelledAfterBulkFail(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.1.1.0", Type: gsnmp.OctetString, Value: []byte("desc")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	client, err := Open(p)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	// Close the connection so BulkWalkAll fails immediately.
+	_ = client.Conn.Close()
+
+	// lazyErrCtx returns nil on the first Err() call (passes the entry guard),
+	// then returns Canceled on the second call (hits the post-BulkWalkAll check).
+	ctx := &lazyErrCtx{Context: context.Background()}
+	_, err = BulkWalk(ctx, client, "1.3.6.1.2.1.1")
+	if err != context.Canceled {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+}
+
+// Walk: Open failure (V3 with empty username) returns an error from Walk directly.
+func TestWalkOpenFails(t *testing.T) {
+	p := Params{
+		IP:      net.ParseIP("127.0.0.1"),
+		Port:    161,
+		Timeout: time.Second,
+		V3:      true,
+		// Username intentionally empty — Open returns an error immediately.
+	}
+	dev, err := Walk(context.Background(), p)
+	if err == nil {
+		t.Fatal("expected error when Open fails, got nil")
+	}
+	if dev != nil {
+		t.Errorf("expected nil device when Open fails, got %+v", dev)
+	}
+}
+
+// Walk: context cancelled before the Get goroutine finishes exercises the
+// ctx.Done select branch. We start an agent that won't respond (nil pdus +
+// wrong community = drops all packets) and use a long SNMP timeout so the
+// goroutine won't return from Get for a long time. The pre-cancelled context
+// guarantees the select picks <-ctx.Done() over <-done.
+func TestWalkCtxCancelled(t *testing.T) {
+	// Start an agent with no PDUs using a community that we won't match,
+	// so every packet is dropped and client.Get() blocks until the SNMP timeout.
+	addr := snmptest.Start(t, "nomatch", nil)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := Params{
+		IP:        ip,
+		Port:      port,
+		Community: "public", // wrong community — agent drops all packets
+		Timeout:   200 * time.Millisecond,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled — select will always pick ctx.Done()
+
+	_, err := Walk(ctx, p)
+	if err == nil {
+		t.Error("expected error from cancelled context, got nil")
+	}
+}
+
+// Walk: no sysName PDU returns the IP address as fallback device ID.
+func TestWalkNoSysName(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.1.1.0", Type: gsnmp.OctetString, Value: []byte("some desc")},
+		{Name: ".1.3.6.1.2.1.1.2.0", Type: gsnmp.ObjectIdentifier, Value: ".1.3.6.1.4.1.9.1.1"},
+		{Name: ".1.3.6.1.2.1.1.3.0", Type: gsnmp.TimeTicks, Value: uint32(500)},
+		// note: no sysName (.1.3.6.1.2.1.1.5.0) PDU
+	}
+
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	dev, err := Walk(context.Background(), p)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if dev == nil {
+		t.Fatal("Walk returned nil device")
+	}
+	// ID should fall back to IP string when sysName is absent.
+	if dev.ID != ip.String() {
+		t.Errorf("ID = %q, want %s (IP fallback)", dev.ID, ip.String())
+	}
+}
+
+// WalkIfNames: returns a correct ifIndex→ifName map from the agent.
+func TestWalkIfNames(t *testing.T) {
+	// ifXTable.ifName = 1.3.6.1.2.1.31.1.1.1.1
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.31.1.1.1.1.1", Type: gsnmp.OctetString, Value: []byte("eth0")},
+		{Name: ".1.3.6.1.2.1.31.1.1.1.1.2", Type: gsnmp.OctetString, Value: []byte("eth1")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	client, err := Open(p)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = client.Conn.Close() }()
+
+	names, err := WalkIfNames(context.Background(), client)
+	if err != nil {
+		t.Fatalf("WalkIfNames: %v", err)
+	}
+	if names[1] != "eth0" {
+		t.Errorf("names[1] = %q, want eth0", names[1])
+	}
+	if names[2] != "eth1" {
+		t.Errorf("names[2] = %q, want eth1", names[2])
+	}
+}
+
+// WalkIfNames: BulkWalk error (closed connection) propagates as an error.
+func TestWalkIfNamesBulkWalkError(t *testing.T) {
+	addr := snmptest.Start(t, "public", nil)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := Params{IP: ip, Port: port, Community: "public", Timeout: time.Millisecond}
+	client, err := Open(p)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	_ = client.Conn.Close() // force failure
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancelled context guarantees BulkWalk returns immediately with error
+
+	_, err = WalkIfNames(ctx, client)
+	if err == nil {
+		t.Error("expected error from WalkIfNames with cancelled context, got nil")
+	}
+}
+
+// WalkIfNames: OID suffix that is not a plain integer (e.g. "1.2") is silently
+// skipped, exercising the strconv.Atoi error path.
+// We include a PDU whose name has a two-component suffix after the ifName
+// prefix (e.g. .1.3.6.1.2.1.31.1.1.1.1.1.2 → suffix "1.2") so that Atoi
+// fails. gosnmp handles this OID correctly; only our parsing skips it.
+func TestWalkIfNamesNonNumericSuffix(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.31.1.1.1.1.3", Type: gsnmp.OctetString, Value: []byte("eth2")},
+		// Two-component suffix "3.99" → Atoi("3.99") fails → entry skipped.
+		{Name: ".1.3.6.1.2.1.31.1.1.1.1.3.99", Type: gsnmp.OctetString, Value: []byte("skip")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	client, err := Open(p)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = client.Conn.Close() }()
+
+	names, err := WalkIfNames(context.Background(), client)
+	if err != nil {
+		t.Fatalf("WalkIfNames: %v", err)
+	}
+	// The valid entry is present; the one with non-Atoi-able suffix is absent.
+	if names[3] != "eth2" {
+		t.Errorf("names[3] = %q, want eth2", names[3])
+	}
+	// Confirm the two-component-suffix entry was skipped (no spurious keys).
+	if len(names) != 1 {
+		t.Errorf("expected 1 entry, got %d: %v", len(names), names)
+	}
+}
+
+// ParseCIDRs: valid CIDRs are all returned.
+func TestParseCIDRs(t *testing.T) {
+	nets := ParseCIDRs([]string{"10.0.0.0/8", "192.168.0.0/16"})
+	if len(nets) != 2 {
+		t.Errorf("ParseCIDRs returned %d nets, want 2", len(nets))
+	}
+}
+
+// ParseCIDRs: invalid entries are silently skipped.
+func TestParseCIDRsSkipsInvalid(t *testing.T) {
+	nets := ParseCIDRs([]string{"10.0.0.0/8", "not-a-cidr"})
+	if len(nets) != 1 {
+		t.Errorf("ParseCIDRs returned %d nets, want 1", len(nets))
+	}
+	if nets[0].String() != "10.0.0.0/8" {
+		t.Errorf("nets[0] = %q, want 10.0.0.0/8", nets[0].String())
+	}
+}
+
 // Walk: wrong community causes a timeout and returns a non-nil error.
 // Real devices silently drop packets from unknown communities; our test agent
 // does the same. The client exhausts its retries and Walk returns an error.

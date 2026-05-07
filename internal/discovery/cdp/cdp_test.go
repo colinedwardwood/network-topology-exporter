@@ -3,6 +3,7 @@ package cdp
 import (
 	"context"
 	"net"
+	"sort"
 	"strconv"
 	"testing"
 	"time"
@@ -228,5 +229,198 @@ func buildCDPAgentPDUs() []gsnmp.SnmpPDU {
 		{Name: base + strconv.Itoa(colAddress) + "." + idx, Type: gsnmp.OctetString, Value: []byte{10, 0, 0, 2}},
 		{Name: base + strconv.Itoa(colDeviceID) + "." + idx, Type: gsnmp.OctetString, Value: []byte("remote-sw")},
 		{Name: base + strconv.Itoa(colDevicePort) + "." + idx, Type: gsnmp.OctetString, Value: []byte("GigabitEthernet0/2")},
+	}
+}
+
+// Walk: Open fails when the connection cannot be established.
+func TestWalkOpenFails(t *testing.T) {
+	// Nanosecond timeout forces Connect to fail immediately.
+	p := snmputil.Params{
+		IP:        net.ParseIP("127.0.0.1"),
+		Port:      161,
+		Community: "public",
+		Timeout:   time.Nanosecond,
+	}
+	_, _, err := Walk(context.Background(), p, "local-sw", nil)
+	if err == nil {
+		t.Fatal("expected error when Open fails, got nil")
+	}
+}
+
+// Walk: WalkIfNames fails when the context is already cancelled.
+func TestWalkWalkIfNamesFails(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.31.1.1.1.1.1", Type: gsnmp.OctetString, Value: []byte("eth0")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{
+		IP:        ip,
+		Port:      port,
+		Community: "public",
+		Timeout:   3 * time.Second,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel so WalkIfNames' BulkWalk fails immediately
+
+	_, _, err := Walk(ctx, p, "local-sw", nil)
+	if err == nil {
+		t.Fatal("expected error when WalkIfNames fails, got nil")
+	}
+}
+
+// startCDPSilentAgent starts an SNMP agent that serves ifName OIDs normally but
+// silently drops all requests for the CDP cache table OID subtree. This forces
+// the CDP-specific BulkWalk to time out, exercising the walkCacheTable error path.
+func startCDPSilentAgent(t *testing.T) string {
+	t.Helper()
+
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("startCDPSilentAgent: listen: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	ifNamePDUs := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.31.1.1.1.1.1", Type: gsnmp.OctetString, Value: []byte("eth0")},
+	}
+	sort.Slice(ifNamePDUs, func(i, j int) bool {
+		return ifNamePDUs[i].Name < ifNamePDUs[j].Name
+	})
+
+	decoder := &gsnmp.GoSNMP{Version: gsnmp.Version2c, Community: "public"}
+
+	go func() {
+		buf := make([]byte, 65535)
+		for {
+			n, src, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			pkt, err := decoder.SnmpDecodePacket(buf[:n])
+			if err != nil {
+				continue
+			}
+			if pkt.Community != "public" {
+				continue
+			}
+			// Drop CDP OID requests silently (prefix 1.3.6.1.4.1.9 = Cisco enterprise).
+			for _, v := range pkt.Variables {
+				if len(v.Name) >= 10 && v.Name[1:10] == "1.3.6.1.4" {
+					return // stop the goroutine; subsequent reads close via conn.Close
+				}
+			}
+			// Serve ifName responses.
+			resp := agentHandleBulk(ifNamePDUs, pkt)
+			if resp == nil {
+				continue
+			}
+			reply := &gsnmp.SnmpPacket{
+				Version:   gsnmp.Version2c,
+				Community: "public",
+				PDUType:   gsnmp.GetResponse,
+				RequestID: pkt.RequestID,
+				Variables: resp,
+			}
+			raw, err := reply.MarshalMsg()
+			if err != nil {
+				continue
+			}
+			_, _ = conn.WriteTo(raw, src)
+		}
+	}()
+
+	return conn.LocalAddr().String()
+}
+
+// agentHandleBulk responds to GetBulkRequest and GetNextRequest PDUs using the
+// given sorted PDU list. It mirrors the snmptest agent's handleBulk logic.
+func agentHandleBulk(pdus []gsnmp.SnmpPDU, pkt *gsnmp.SnmpPacket) []gsnmp.SnmpPDU {
+	if pkt.PDUType != gsnmp.GetBulkRequest && pkt.PDUType != gsnmp.GetNextRequest {
+		return nil
+	}
+	maxReps := int(pkt.MaxRepetitions)
+	if maxReps == 0 {
+		maxReps = 50
+	}
+	var resp []gsnmp.SnmpPDU
+	for _, v := range pkt.Variables {
+		cur := v.Name
+		for i := 0; i < maxReps; i++ {
+			found := false
+			for _, p := range pdus {
+				if p.Name > cur {
+					resp = append(resp, p)
+					cur = p.Name
+					found = true
+					break
+				}
+			}
+			if !found {
+				resp = append(resp, gsnmp.SnmpPDU{Name: cur, Type: gsnmp.EndOfMibView})
+				break
+			}
+		}
+	}
+	return resp
+}
+
+// Walk: walkCacheTable fails when the SNMP agent stops responding to CDP OID
+// requests; the error propagates through Walk's third error return.
+// This also covers walkCacheTable's internal BulkWalk-error return.
+func TestWalkCacheTableFails(t *testing.T) {
+	addr := startCDPSilentAgent(t)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{
+		IP:        ip,
+		Port:      port,
+		Community: "public",
+		Timeout:   50 * time.Millisecond, // short so the CDP walk times out quickly
+	}
+
+	_, _, err := Walk(context.Background(), p, "local-sw", nil)
+	if err == nil {
+		t.Fatal("expected error when walkCacheTable fails, got nil")
+	}
+}
+
+// walkCacheTable: PDUs with too-short or wrong-prefix OID suffixes are silently
+// skipped. Covers the three skip-continue paths inside the parse loop.
+func TestWalkCacheTableSkipsShortOIDs(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		// Continue A: within the CDP table BulkWalk root (.1.3.6.1.4.1.9.9.23.1.2.1)
+		// but the OID has ".2." not ".1." for the row-entry subtree — TrimOIDPrefix fails.
+		{Name: ".1.3.6.1.4.1.9.9.23.1.2.1.2.3.1.1", Type: gsnmp.Integer, Value: int(1)},
+		// Continue C: suffix = "3" (col only, no ifIndex component) —
+		// second SplitOIDComponent("")  returns !ok.
+		{Name: ".1.3.6.1.4.1.9.9.23.1.2.1.1.3", Type: gsnmp.Integer, Value: int(1)},
+		// Continue D: suffix = "3.1" (col + ifIndex, no neighIndex) —
+		// Atoi("") on the empty neighStr fails.
+		{Name: ".1.3.6.1.4.1.9.9.23.1.2.1.1.3.1", Type: gsnmp.Integer, Value: int(1)},
+		// Valid PDU to confirm normal processing still works.
+		{Name: ".1.3.6.1.4.1.9.9.23.1.2.1.1.6.1.1", Type: gsnmp.OctetString, Value: []byte("device-a")},
+	}
+
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	client, err := snmputil.Open(p)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = client.Conn.Close() }()
+
+	entries, err := walkCacheTable(context.Background(), client)
+	if err != nil {
+		t.Fatalf("walkCacheTable: %v", err)
+	}
+	// Only the valid PDU should produce an entry (col 6 = deviceID; no addr/port PDUs
+	// provided, so the entry exists but is incomplete).
+	if len(entries) != 1 {
+		t.Errorf("expected 1 entry, got %d", len(entries))
 	}
 }

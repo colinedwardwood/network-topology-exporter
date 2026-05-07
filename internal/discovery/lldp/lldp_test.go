@@ -343,3 +343,402 @@ func buildLLDPAgentPDUs() []gsnmp.SnmpPDU {
 		{Name: remBase + "9." + remSuffix, Type: gsnmp.OctetString, Value: []byte("spine-01")},
 	}
 }
+
+// ---------- Walk error path tests ----------
+
+// Walk: Open fails (V3 with empty username) → Walk returns error.
+func TestWalkOpenFails(t *testing.T) {
+	p := snmputil.Params{
+		IP:      net.ParseIP("127.0.0.1"),
+		Port:    161,
+		Timeout: time.Second,
+		V3:      true,
+		// Username intentionally empty
+	}
+	_, _, err := Walk(context.Background(), p, "local", nil)
+	if err == nil {
+		t.Fatal("expected error when Open fails, got nil")
+	}
+}
+
+// Walk: pre-cancelled context makes walkLocPorts BulkWalk return immediately,
+// exercising the "lldp locport" error return in Walk.
+func TestWalkLocPortsFails(t *testing.T) {
+	pdus := buildLLDPAgentPDUs()
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancelled
+
+	_, _, err := Walk(ctx, p, "local", nil)
+	if err == nil {
+		t.Fatal("expected error when walkLocPorts fails, got nil")
+	}
+}
+
+// lazyErrCtx returns nil from Err() for the first failAfter calls, then
+// returns context.Canceled. Used to fail BulkWalk on the Nth call while
+// letting earlier calls succeed.
+type lazyErrCtx struct {
+	context.Context
+	calls     int
+	failAfter int
+}
+
+func (c *lazyErrCtx) Err() error {
+	c.calls++
+	if c.calls > c.failAfter {
+		return context.Canceled
+	}
+	return nil
+}
+
+// Walk: walkLocPorts succeeds but walkRemEntries BulkWalk fails (ctx cancelled
+// after first BulkWalk call), exercising the "lldp remtable" error return.
+func TestWalkRemEntriesFails(t *testing.T) {
+	pdus := buildLLDPAgentPDUs()
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+
+	// failAfter=1: first ctx.Err() call (walkLocPorts BulkWalk entry) returns nil;
+	// second call (walkRemEntries BulkWalk entry) returns Canceled.
+	ctx := &lazyErrCtx{Context: context.Background(), failAfter: 1}
+
+	_, _, err := Walk(ctx, p, "local", nil)
+	if err == nil {
+		t.Fatal("expected error when walkRemEntries fails, got nil")
+	}
+}
+
+// ---------- walkLocPorts skip path tests ----------
+
+// walkLocPorts: PDU outside the strict locPortTable subtree
+// (prefix check fails) is silently skipped.
+// OID ".1.0.8802.1.1.2.1.3.7.2.1" starts with ".1.0.8802.1.1.2.1.3.7." (gosnmp
+// includes it) but NOT ".1.0.8802.1.1.2.1.3.7.1." (our prefix — skipped).
+func TestWalkLocPortsTrimOIDSkip(t *testing.T) {
+	locBase := ".1.0.8802.1.1.2.1.3.7.1."
+	pdus := []gsnmp.SnmpPDU{
+		{Name: locBase + "2.1", Type: gsnmp.Integer, Value: int(portSubtypeInterfaceName)},
+		{Name: locBase + "3.1", Type: gsnmp.OctetString, Value: []byte("Eth1")},
+		// Out-of-range PDU: passes gosnmp prefix ".1.0.8802.1.1.2.1.3.7." but
+		// fails our prefix ".1.0.8802.1.1.2.1.3.7.1." → triggers TrimOIDPrefix !ok.
+		{Name: ".1.0.8802.1.1.2.1.3.7.2.1", Type: gsnmp.OctetString, Value: []byte("skip")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	_, _, err := Walk(context.Background(), p, "local", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+}
+
+// walkLocPorts: PDU with a multi-component suffix (col.portNum.extra) causes
+// Atoi to fail on "portNum.extra" and the entry is silently skipped.
+func TestWalkLocPortsAtoiSkip(t *testing.T) {
+	locBase := ".1.0.8802.1.1.2.1.3.7.1."
+	remBase := ".1.0.8802.1.1.2.1.4.1.1."
+	timeMark := "0"
+	portNum := "1"
+	remIdx := "1"
+	remSuffix := timeMark + "." + portNum + "." + remIdx
+
+	pdus := []gsnmp.SnmpPDU{
+		{Name: locBase + "2.1", Type: gsnmp.Integer, Value: int(portSubtypeInterfaceName)},
+		{Name: locBase + "3.1", Type: gsnmp.OctetString, Value: []byte("Eth1")},
+		// col=4 (colLocPortDesc), portNum suffix="2.5" → Atoi("2.5") fails → skip.
+		{Name: locBase + "4.2.5", Type: gsnmp.OctetString, Value: []byte("skip-this")},
+		// Includes colLocPortDesc (col=4) for portNum=1 to cover that branch too.
+		{Name: locBase + "4.1", Type: gsnmp.OctetString, Value: []byte("Eth1-desc")},
+
+		// lldpRemTable entries for a complete Walk
+		{Name: remBase + "4." + remSuffix, Type: gsnmp.Integer, Value: int(chassisSubtypeMACAddress)},
+		{Name: remBase + "5." + remSuffix, Type: gsnmp.OctetString, Value: []byte{0, 1, 2, 3, 4, 5}},
+		{Name: remBase + "6." + remSuffix, Type: gsnmp.Integer, Value: int(portSubtypeInterfaceName)},
+		{Name: remBase + "7." + remSuffix, Type: gsnmp.OctetString, Value: []byte("Eth2")},
+		{Name: remBase + "9." + remSuffix, Type: gsnmp.OctetString, Value: []byte("spine-01")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	edges, _, err := Walk(context.Background(), p, "local", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	// Should still produce an edge from the valid entries.
+	if len(edges) == 0 {
+		t.Error("expected at least one edge, got none")
+	}
+}
+
+// ---------- walkRemEntries skip path tests ----------
+
+// walkRemEntries: PDU outside the strict remTable subtree
+// (prefix check fails) is silently skipped.
+func TestWalkRemEntriesTrimOIDSkip(t *testing.T) {
+	locBase := ".1.0.8802.1.1.2.1.3.7.1."
+	remBase := ".1.0.8802.1.1.2.1.4.1.1."
+	timeMark := "0"
+	portNum := "1"
+	remIdx := "1"
+	remSuffix := timeMark + "." + portNum + "." + remIdx
+
+	pdus := []gsnmp.SnmpPDU{
+		{Name: locBase + "2.1", Type: gsnmp.Integer, Value: int(portSubtypeInterfaceName)},
+		{Name: locBase + "3.1", Type: gsnmp.OctetString, Value: []byte("Eth1")},
+
+		{Name: remBase + "4." + remSuffix, Type: gsnmp.Integer, Value: int(chassisSubtypeMACAddress)},
+		{Name: remBase + "5." + remSuffix, Type: gsnmp.OctetString, Value: []byte{0, 1, 2, 3, 4, 5}},
+		{Name: remBase + "6." + remSuffix, Type: gsnmp.Integer, Value: int(portSubtypeInterfaceName)},
+		{Name: remBase + "7." + remSuffix, Type: gsnmp.OctetString, Value: []byte("Eth2")},
+		{Name: remBase + "9." + remSuffix, Type: gsnmp.OctetString, Value: []byte("spine-01")},
+		// Out-of-range: passes gosnmp prefix ".1.0.8802.1.1.2.1.4.1." but
+		// fails our prefix ".1.0.8802.1.1.2.1.4.1.1." → TrimOIDPrefix !ok.
+		{Name: ".1.0.8802.1.1.2.1.4.1.2.4.0.1.1", Type: gsnmp.OctetString, Value: []byte("skip")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	edges, _, err := Walk(context.Background(), p, "local", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) == 0 {
+		t.Error("expected at least one edge, got none")
+	}
+}
+
+// walkRemEntries: PDU with a multi-component remIndex (portNum.remIndex.extra)
+// causes Atoi to fail on "remIndex.extra" and the entry is silently skipped.
+func TestWalkRemEntriesAtoiSkip(t *testing.T) {
+	locBase := ".1.0.8802.1.1.2.1.3.7.1."
+	remBase := ".1.0.8802.1.1.2.1.4.1.1."
+	timeMark := "0"
+	portNum := "1"
+	remIdx := "1"
+	remSuffix := timeMark + "." + portNum + "." + remIdx
+
+	pdus := []gsnmp.SnmpPDU{
+		{Name: locBase + "2.1", Type: gsnmp.Integer, Value: int(portSubtypeInterfaceName)},
+		{Name: locBase + "3.1", Type: gsnmp.OctetString, Value: []byte("Eth1")},
+
+		// Valid entry
+		{Name: remBase + "4." + remSuffix, Type: gsnmp.Integer, Value: int(chassisSubtypeMACAddress)},
+		{Name: remBase + "5." + remSuffix, Type: gsnmp.OctetString, Value: []byte{0, 1, 2, 3, 4, 5}},
+		{Name: remBase + "6." + remSuffix, Type: gsnmp.Integer, Value: int(portSubtypeInterfaceName)},
+		{Name: remBase + "7." + remSuffix, Type: gsnmp.OctetString, Value: []byte("Eth2")},
+		{Name: remBase + "9." + remSuffix, Type: gsnmp.OctetString, Value: []byte("spine-01")},
+		// col=4, timeMark=0, portNum=1, remStr="2.5" → Atoi("2.5") fails → skip.
+		{Name: remBase + "4.0.1.2.5", Type: gsnmp.Integer, Value: int(chassisSubtypeMACAddress)},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	edges, _, err := Walk(context.Background(), p, "local", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) == 0 {
+		t.Error("expected at least one edge, got none")
+	}
+}
+
+// walkRemEntries: colRemPortDesc (col=8) is populated.
+func TestWalkRemEntriesPortDesc(t *testing.T) {
+	locBase := ".1.0.8802.1.1.2.1.3.7.1."
+	remBase := ".1.0.8802.1.1.2.1.4.1.1."
+	timeMark := "0"
+	portNum := "1"
+	remIdx := "1"
+	remSuffix := timeMark + "." + portNum + "." + remIdx
+
+	pdus := []gsnmp.SnmpPDU{
+		{Name: locBase + "2.1", Type: gsnmp.Integer, Value: int(portSubtypeInterfaceName)},
+		{Name: locBase + "3.1", Type: gsnmp.OctetString, Value: []byte("Eth1")},
+
+		{Name: remBase + "4." + remSuffix, Type: gsnmp.Integer, Value: int(chassisSubtypeMACAddress)},
+		{Name: remBase + "5." + remSuffix, Type: gsnmp.OctetString, Value: []byte{0, 1, 2, 3, 4, 5}},
+		{Name: remBase + "6." + remSuffix, Type: gsnmp.Integer, Value: int(portSubtypeLocal)},
+		// portID with all null bytes → decodePortID returns "" → falls back to portDesc
+		{Name: remBase + "7." + remSuffix, Type: gsnmp.OctetString, Value: []byte{0, 0}},
+		// col=8 (colRemPortDesc) — this branch is otherwise uncovered
+		{Name: remBase + "8." + remSuffix, Type: gsnmp.OctetString, Value: []byte("GigabitEthernet0/1")},
+		{Name: remBase + "9." + remSuffix, Type: gsnmp.OctetString, Value: []byte("spine-01")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	edges, _, err := Walk(context.Background(), p, "local", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) == 0 {
+		t.Errorf("expected an edge using portDesc fallback, got none")
+	}
+	if len(edges) > 0 && edges[0].DstPort != "GigabitEthernet0/1" {
+		t.Errorf("DstPort = %q, want GigabitEthernet0/1", edges[0].DstPort)
+	}
+}
+
+// ---------- buildEdges skip test ----------
+
+// buildEdges: entry where both portID decodes to "" and portDesc is ""
+// is skipped (empty remDevice or remPort check).
+func TestBuildEdgesSkipEmptyRemPort(t *testing.T) {
+	locPorts := map[int]locPort{
+		1: {idSubtype: portSubtypeInterfaceName, id: []byte("eth0")},
+	}
+	remEntries := map[remKey]*remEntry{
+		{1, 1}: {
+			chassisSubtype: chassisSubtypeMACAddress,
+			chassisID:      []byte{0, 1, 2, 3, 4, 5},
+			portSubtype:    portSubtypeLocal,
+			portID:         []byte{0, 0}, // null bytes → decodePortID = "" → portDesc = "" → skip
+			portDesc:       "",
+			sysName:        "peer",
+		},
+	}
+	edges, _, err := buildEdges("me", locPorts, remEntries, nil)
+	if err != nil {
+		t.Fatalf("buildEdges: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for empty remPort, got %d", len(edges))
+	}
+}
+
+// ---------- resolveLocalPort tests ----------
+
+// resolveLocalPort: portNum not found in locPorts map returns strconv.Itoa fallback.
+func TestResolveLocalPortFallback(t *testing.T) {
+	got := resolveLocalPort(42, map[int]locPort{})
+	if got != "42" {
+		t.Errorf("resolveLocalPort(42, {}) = %q, want 42", got)
+	}
+}
+
+// resolveLocalPort: decodePortID returns "" and desc is non-empty → desc is returned.
+func TestResolveLocalPortDescFallback(t *testing.T) {
+	lp := locPort{
+		idSubtype: portSubtypeLocal,
+		id:        []byte{0, 0}, // null bytes → decodePortID returns ""
+		desc:      "GigabitEthernet0/0",
+	}
+	got := resolveLocalPort(3, map[int]locPort{3: lp})
+	if got != "GigabitEthernet0/0" {
+		t.Errorf("resolveLocalPort with desc fallback = %q, want GigabitEthernet0/0", got)
+	}
+}
+
+// resolveLocalPort: decodePortID returns "" and desc is also "" → portNum string.
+func TestResolveLocalPortNumericFallback(t *testing.T) {
+	lp := locPort{
+		idSubtype: portSubtypeLocal,
+		id:        []byte{0, 0}, // null bytes → ""
+		desc:      "",
+	}
+	got := resolveLocalPort(7, map[int]locPort{7: lp})
+	if got != "7" {
+		t.Errorf("resolveLocalPort with numeric fallback = %q, want 7", got)
+	}
+}
+
+// ---------- resolveRemDevice tests ----------
+
+// resolveRemDevice: empty sysName falls back to decodeChassisID.
+func TestResolveRemDeviceFallback(t *testing.T) {
+	rem := &remEntry{
+		chassisSubtype: chassisSubtypeMACAddress,
+		chassisID:      []byte{0x00, 0x1a, 0x2b, 0x3c, 0x4d, 0x5e},
+		sysName:        "", // empty → use chassis ID
+	}
+	got := resolveRemDevice(rem)
+	if got != "00:1a:2b:3c:4d:5e" {
+		t.Errorf("resolveRemDevice fallback = %q, want 00:1a:2b:3c:4d:5e", got)
+	}
+}
+
+// ---------- decodePortID tests ----------
+
+// decodePortID: empty raw bytes returns "".
+func TestDecodePortIDEmpty(t *testing.T) {
+	got := decodePortID(portSubtypeInterfaceName, []byte{})
+	if got != "" {
+		t.Errorf("decodePortID empty = %q, want empty string", got)
+	}
+}
+
+// decodePortID: portSubtypeLocal subtype returns the string value.
+func TestDecodePortIDLocal(t *testing.T) {
+	got := decodePortID(portSubtypeLocal, []byte("lo"))
+	if got != "lo" {
+		t.Errorf("decodePortID local = %q, want lo", got)
+	}
+}
+
+// ---------- decodeChassisID tests ----------
+
+// decodeChassisID: empty raw bytes returns "".
+func TestDecodeChassisIDEmpty(t *testing.T) {
+	got := decodeChassisID(chassisSubtypeMACAddress, []byte{})
+	if got != "" {
+		t.Errorf("decodeChassisID empty = %q, want empty string", got)
+	}
+}
+
+// ---------- extractChassisIP tests ----------
+
+// extractChassisIP: networkAddress subtype with IPv6 (IANA family 2, 16 octets).
+func TestExtractChassisIPv6(t *testing.T) {
+	raw := make([]byte, 17)
+	raw[0] = 2 // IANA IPv6 family
+	copy(raw[1:], net.ParseIP("fe80::1").To16())
+	ip := extractChassisIP(chassisSubtypeNetworkAddress, raw)
+	if ip == nil {
+		t.Fatal("expected non-nil IPv6 address")
+	}
+	if ip.String() != "fe80::1" {
+		t.Errorf("got %v, want fe80::1", ip)
+	}
+}
+
+// extractChassisIP: networkAddress subtype but IPv4 raw length != 5 → nil.
+func TestExtractChassisIPv4WrongLength(t *testing.T) {
+	raw := []byte{1, 10, 0, 0} // IANA IPv4 family but only 3 IP octets (len=4, not 5)
+	ip := extractChassisIP(chassisSubtypeNetworkAddress, raw)
+	if ip != nil {
+		t.Errorf("expected nil for wrong-length IPv4, got %v", ip)
+	}
+}
+
+// extractChassisIP: networkAddress subtype but IPv6 raw length != 17 → nil.
+func TestExtractChassisIPv6WrongLength(t *testing.T) {
+	raw := []byte{2, 0xfe, 0x80, 0, 0} // IANA IPv6 family but only 4 IP octets (len=5, not 17)
+	ip := extractChassisIP(chassisSubtypeNetworkAddress, raw)
+	if ip != nil {
+		t.Errorf("expected nil for wrong-length IPv6, got %v", ip)
+	}
+}
+
+// ---------- fmtNetAddr tests ----------
+
+// fmtNetAddr: when extractChassisIP returns nil (wrong-length raw), falls back to hex.
+func TestFmtNetAddrHexFallback(t *testing.T) {
+	// raw[0]=1 (IPv4 family) but len=3 (not 5) → extractChassisIP returns nil → hex
+	raw := []byte{1, 192, 168}
+	got := fmtNetAddr(raw)
+	if got != "01c0a8" {
+		t.Errorf("fmtNetAddr hex fallback = %q, want 01c0a8", got)
+	}
+}

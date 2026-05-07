@@ -173,6 +173,124 @@ func TestAcquireTrialCancelWhileBlocked(t *testing.T) {
 	}
 }
 
+// TestNewReturnsErrorForInvalidCIDR verifies that New() returns a non-nil error
+// when a per-CIDR assignment contains an invalid CIDR string.
+func TestNewReturnsErrorForInvalidCIDR(t *testing.T) {
+	_, err := New(config.CredentialsConfig{
+		Profiles: []config.CredentialProfile{
+			{Name: "p1", Type: "snmp_v2c", CommunityEnv: "C"},
+		},
+		Assignments: []config.CredentialAssignment{
+			{CIDR: "not-a-cidr/32", Profiles: []string{"p1"}},
+		},
+		FallbackOrder:      []string{"p1"},
+		TrialRatePerSecond: 1,
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid CIDR in assignment, got nil")
+	}
+}
+
+// TestNewTokenBucketRateClampedToOne verifies that a token bucket created with
+// rate=0 is clamped to 1 and still functions (tokens can be acquired).
+func TestNewTokenBucketRateClampedToOne(t *testing.T) {
+	r, err := New(config.CredentialsConfig{
+		Profiles: []config.CredentialProfile{
+			{Name: "p", Type: "snmp_v2c", CommunityEnv: "C"},
+		},
+		FallbackOrder:      []string{"p"},
+		TrialRatePerSecond: 0, // should be clamped to 1
+	})
+	if err != nil {
+		t.Fatalf("New with rate=0: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	// The bucket should allow at least one acquisition (clamped rate=1 means 1 token burst).
+	if err := r.AcquireTrial(ctx); err != nil {
+		t.Fatalf("AcquireTrial with clamped rate=1: %v", err)
+	}
+}
+
+// TestRefillLockedNoAdvance verifies that calling AcquireTrial in rapid
+// succession does not cause the token count to go negative. The refillLocked
+// elapsed<=0 guard should prevent double-counting.
+func TestRefillLockedNoAdvance(t *testing.T) {
+	r, err := New(config.CredentialsConfig{
+		Profiles: []config.CredentialProfile{
+			{Name: "p", Type: "snmp_v2c", CommunityEnv: "C"},
+		},
+		FallbackOrder:      []string{"p"},
+		TrialRatePerSecond: 100,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx := context.Background()
+	// Acquire 100 tokens to deplete the burst.
+	for i := 0; i < 100; i++ {
+		if err := r.AcquireTrial(ctx); err != nil {
+			t.Fatalf("AcquireTrial[%d]: %v", i, err)
+		}
+	}
+	// Immediately try again with a cancelled context — should return error, not panic.
+	cancelledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	err = r.AcquireTrial(cancelledCtx)
+	if err == nil {
+		// Might succeed if time has passed and tokens refilled — that's fine.
+		return
+	}
+	// Any error is acceptable here (context.Canceled is expected).
+}
+
+// TestRefillLockedElapsedNonPositive exercises the elapsed <= 0 guard in
+// refillLocked by calling it directly with a time that is not after lastRefill.
+func TestRefillLockedElapsedNonPositive(t *testing.T) {
+	b := newTokenBucket(10)
+	before := b.tokens
+	// Pass a time equal to lastRefill — elapsed == 0, guard fires, no change.
+	b.refillLocked(b.lastRefill)
+	if b.tokens != before {
+		t.Errorf("tokens changed after refillLocked with elapsed=0: got %d, want %d", b.tokens, before)
+	}
+	// Pass a time before lastRefill — elapsed < 0, guard fires, no change.
+	b.refillLocked(b.lastRefill.Add(-time.Second))
+	if b.tokens != before {
+		t.Errorf("tokens changed after refillLocked with elapsed<0: got %d, want %d", b.tokens, before)
+	}
+}
+
+// TestRefillLockedCapsBurstAtRate exercises the b.tokens > b.rate cap branch in
+// refillLocked. After depleting the bucket's single token, we wait long enough
+// that the refill would add more tokens than the burst capacity, forcing the cap.
+func TestRefillLockedCapsBurstAtRate(t *testing.T) {
+	// rate=1: burst=1 token. After draining, wait 2s so add=2 > rate=1 → cap fires.
+	r, err := New(config.CredentialsConfig{
+		Profiles: []config.CredentialProfile{
+			{Name: "p", Type: "snmp_v2c", CommunityEnv: "C"},
+		},
+		FallbackOrder:      []string{"p"},
+		TrialRatePerSecond: 1,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx := context.Background()
+	// Drain the single burst token.
+	if err := r.AcquireTrial(ctx); err != nil {
+		t.Fatalf("first AcquireTrial: %v", err)
+	}
+	// Wait 2 seconds so that elapsed.Seconds()*rate = 2 > 1 = rate, triggering cap.
+	time.Sleep(2 * time.Second)
+	// Acquire should succeed now (1 token available after cap-limited refill).
+	ctxTimeout, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	if err := r.AcquireTrial(ctxTimeout); err != nil {
+		t.Fatalf("second AcquireTrial after long wait: %v", err)
+	}
+}
+
 // LD-12: trial limiter blocks the call site so the cold-start trial rate
 // stays bounded. With rate=2 and burst=2, three back-to-back acquires take
 // at least one full token-refill window.

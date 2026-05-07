@@ -3,14 +3,21 @@ package metrics
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 )
 
 func TestNewRegistersExpectedMetrics(t *testing.T) {
-	m := New()
+	m := New(false)
 
-	m.DeviceInfo.WithLabelValues("dev-1", "cisco", "C9300", "17.6.4", "lab").Set(1)
+	m.Topology.Update(discovery.Graph{
+		Devices: []discovery.Device{
+			{ID: "dev-1", Vendor: "cisco", Model: "C9300", OSVersion: "17.6.4", Site: "lab", Uptime: 0},
+		},
+	})
 
 	const want = `
 # HELP network_device_info One series per discovered device. Value is always 1; inventory data is in the labels.
@@ -22,8 +29,28 @@ network_device_info{device_id="dev-1",model="C9300",os_version="17.6.4",site="la
 	}
 }
 
+func TestTopologyCollectorUptimeUpdatesEveryCycle(t *testing.T) {
+	m := New(false)
+
+	m.Topology.Update(discovery.Graph{
+		Devices: []discovery.Device{{ID: "dev-1", Uptime: 10 * time.Second}},
+	})
+	m.Topology.Update(discovery.Graph{
+		Devices: []discovery.Device{{ID: "dev-1", Uptime: 25 * time.Second}},
+	})
+
+	const want = `
+# HELP network_device_uptime_seconds Per-device uptime from the SNMP SYSTEM group (sysUpTime).
+# TYPE network_device_uptime_seconds gauge
+network_device_uptime_seconds{device_id="dev-1"} 25
+`
+	if err := testutil.GatherAndCompare(m.Registry(), strings.NewReader(want), "network_device_uptime_seconds"); err != nil {
+		t.Fatalf("uptime not updated: %v", err)
+	}
+}
+
 func TestTopologyConflictTotalIsRegistered(t *testing.T) {
-	m := New()
+	m := New(false)
 
 	m.TopologyConflictTotal.WithLabelValues("port_name_mismatch").Inc()
 
@@ -38,7 +65,7 @@ network_topology_conflict_total{conflict_type="port_name_mismatch"} 1
 }
 
 func TestMetricNamespaceConsistency(t *testing.T) {
-	m := New()
+	m := New(false)
 	mfs, err := m.Registry().Gather()
 	if err != nil {
 		t.Fatalf("gather: %v", err)
@@ -57,7 +84,7 @@ func TestMetricNamespaceConsistency(t *testing.T) {
 }
 
 func TestRegistryExposesGoCollector(t *testing.T) {
-	m := New()
+	m := New(false)
 	mfs, err := m.Registry().Gather()
 	if err != nil {
 		t.Fatalf("gather: %v", err)

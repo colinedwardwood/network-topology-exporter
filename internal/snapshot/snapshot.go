@@ -13,11 +13,40 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+)
+
+// tmpFile is the subset of *os.File used by Write. Defined as an interface so
+// tests can inject failures for individual file operations.
+type tmpFile interface {
+	Name() string
+	Write(b []byte) (int, error)
+	Sync() error
+	Close() error
+}
+
+// quarantineFile is the subset of *os.File used by quarantine.
+type quarantineFile interface {
+	Write(b []byte) (int, error)
+	Close() error
+}
+
+// Package-level vars wrapping OS calls. Tests override these to inject errors;
+// production code always uses the real implementations.
+var (
+	readFileFn   = os.ReadFile
+	marshalFn    = json.Marshal
+	mkdirAllFn   = os.MkdirAll
+	createTempFn = func(dir, pattern string) (tmpFile, error) { return os.CreateTemp(dir, pattern) }
+	renameFn     = os.Rename
+	openFileFn   = func(name string, flag int, perm fs.FileMode) (quarantineFile, error) {
+		return os.OpenFile(name, flag, perm) //nolint:gosec
+	}
 )
 
 // CurrentVersion is the on-disk schema version. Bump when the persisted
@@ -48,7 +77,7 @@ var ErrVersionMismatch = errors.New("snapshot: unrecognised version")
 // not exist — first run is not an error. Returns ErrVersionMismatch wrapped
 // when the file exists but its version is unknown.
 func Load(path string) (*File, error) {
-	b, err := os.ReadFile(path) //nolint:gosec
+	b, err := readFileFn(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
@@ -73,7 +102,7 @@ func quarantine(path string, contents []byte) error {
 		if i > 0 {
 			dst = fmt.Sprintf("%s.bad.%d", path, i)
 		}
-		f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec
+		f, err := openFileFn(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if errors.Is(err, os.ErrExist) {
 			continue
 		}
@@ -105,15 +134,15 @@ func Write(path string, f File) error {
 	if f.WrittenAt.IsZero() {
 		f.WrittenAt = time.Now().UTC()
 	}
-	b, err := json.Marshal(f)
+	b, err := marshalFn(f)
 	if err != nil {
 		return fmt.Errorf("marshal snapshot: %w", err)
 	}
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := mkdirAllFn(dir, 0o700); err != nil {
 		return fmt.Errorf("ensure snapshot dir %q: %w", dir, err)
 	}
-	tmp, err := os.CreateTemp(dir, ".snapshot-*.json.tmp")
+	tmp, err := createTempFn(dir, ".snapshot-*.json.tmp")
 	if err != nil {
 		return fmt.Errorf("create temp snapshot: %w", err)
 	}
@@ -133,7 +162,7 @@ func Write(path string, f File) error {
 		cleanup()
 		return fmt.Errorf("close temp snapshot: %w", err)
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := renameFn(tmpName, path); err != nil {
 		cleanup()
 		return fmt.Errorf("rename temp snapshot to %q: %w", path, err)
 	}

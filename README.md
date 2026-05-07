@@ -14,7 +14,7 @@ The Prometheus / Grafana stack already covers storage, query, alerting, and visu
 
 ## Status
 
-**Pre-v1, in active development.** SNMP / LLDP / CDP / BGP / OSPF / FDB discovery, graph reconciliation, credential management, snapshot persistence, and multi-instance federation are all implemented.
+**Release candidate.** SNMP / LLDP / CDP / BGP / OSPF / FDB discovery, graph reconciliation, credential management, snapshot persistence, and multi-instance federation are all implemented and covered by unit, integration, and end-to-end tests.
 
 ## Quickstart
 

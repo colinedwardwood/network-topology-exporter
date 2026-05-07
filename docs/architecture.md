@@ -88,7 +88,7 @@ Change events appear on two surfaces. The counter (`network_topology_change_tota
 
 The discovery scheduler runs one cycle at a time. Inside a cycle, a bounded worker pool of `discovery.parallelism` goroutines (default 20) probes devices concurrently, each bounded by `discovery.timeout_per_device`. If a cycle overruns `discovery.interval`, the next cycle starts immediately — no queuing. `network_topology_discovery_cycle_duration_seconds` is the operator's signal that the interval needs to grow.
 
-The credential trial limiter is shared across the worker pool so the global trial rate stays at `credentials.trial_rate_per_second` regardless of pool size. The graph store and credential cache each use a single `sync.RWMutex`: writers (cycle finaliser, success recorders) hold the write lock briefly; readers (the metrics collector on every scrape) take an RLock for the duration of one scrape.
+The credential trial limiter is shared across the worker pool so the global trial rate stays at `credentials.trial_rate_per_second` regardless of pool size. `TopologyCollector` holds the current graph in an `atomic.Pointer[discovery.Graph]`: `Update()` stores a new immutable snapshot atomically and `Collect()` loads it, so concurrent scrapes read the same snapshot with no lock contention and no empty-window gap. The credential cache uses a `sync.RWMutex`: success recorders hold the write lock briefly; scrapes take an RLock.
 
 ## Federation
 

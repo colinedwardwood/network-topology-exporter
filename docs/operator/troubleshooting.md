@@ -268,3 +268,36 @@ jq '.edges | length' < /path/to/snapshot.json
 ```sh
 jq '.devices | length' < /path/to/snapshot.json
 ```
+
+---
+
+## 11. Topology metrics absent from /metrics entirely
+
+**Symptom:** `network_device_info`, `network_topology_edge_info`, and related metric families do not appear anywhere in the `/metrics` output — not even as gauge families with zero series.
+
+This is distinct from [No edges in /metrics](#1-no-edges-in-metrics), where the metric names are present but carry no label tuples. Here the names are missing entirely.
+
+**Cause 1: Startup snapshot window (cold start)**
+
+On startup the exporter loads the previous snapshot and begins serving it immediately, with `network_topology_graph_stale=1`. If no snapshot exists (cold start), the TopologyCollector holds an empty graph. In this state:
+
+- `network_topology_out_of_scope_neighbours_total` and other scalar gauges will appear with value `0`.
+- `network_device_info` and `network_topology_edge_info` will have no series at all, because they are label-tuple metrics that require at least one graph element to produce a time series.
+
+This is expected behaviour. Wait for the first discovery cycle to complete; once `network_topology_graph_stale` drops to `0`, the metric families will appear with populated label sets.
+
+```sh
+curl -s http://localhost:9100/metrics | grep network_topology_graph_stale
+```
+
+**Cause 2: Snapshot version mismatch**
+
+If the on-disk snapshot was written by an older version of the exporter, the snapshot is quarantined on startup: it is renamed to `.bad` and the exporter starts cold as described above.
+
+Check the startup logs for a line such as:
+
+```
+snapshot: version mismatch; quarantining  path=/var/lib/network-topology-exporter/snapshot.json
+```
+
+Once the first live discovery cycle completes, the exporter writes a fresh snapshot and metrics will appear normally. No operator action is required unless the quarantined `.bad` file needs to be removed for disk space reasons.

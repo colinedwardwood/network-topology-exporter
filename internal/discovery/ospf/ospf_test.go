@@ -185,3 +185,141 @@ func buildOspfAgentPDUs() []gsnmp.SnmpPDU {
 		{Name: base + "6." + idx, Type: gsnmp.Integer, Value: stateFull},
 	}
 }
+
+// Walk: Open fails when the connection cannot be established.
+func TestWalkOpenFails(t *testing.T) {
+	p := snmputil.Params{
+		IP:        net.ParseIP("127.0.0.1"),
+		Port:      161,
+		Community: "public",
+		Timeout:   time.Nanosecond,
+	}
+	_, _, err := Walk(context.Background(), p, "router-a", nil)
+	if err == nil {
+		t.Fatal("expected error when Open fails, got nil")
+	}
+}
+
+// Walk: walkOspfNbrTable fails when the context is already cancelled. This also
+// covers walkOspfNbrTable's internal BulkWalk-error return.
+func TestWalkOspfNbrTableFails(t *testing.T) {
+	pdus := buildOspfAgentPDUs()
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{
+		IP:        ip,
+		Port:      port,
+		Community: "public",
+		Timeout:   3 * time.Second,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, _, err := Walk(ctx, p, "router-a", nil)
+	if err == nil {
+		t.Fatal("expected error when walkOspfNbrTable fails, got nil")
+	}
+}
+
+// walkOspfNbrTable: PDUs with OIDs that fail parseNbrOID are silently skipped.
+// Also covers the len(b) != 4 path for ospfNbrIpAddr PDUs.
+func TestWalkOspfNbrTableSkipsOIDs(t *testing.T) {
+	const base = ".1.3.6.1.2.1.14.10.1."
+	const idx = "192.0.2.1.0"
+
+	pdus := []gsnmp.SnmpPDU{
+		// Valid PDU (covers normal path).
+		{Name: base + "6." + idx, Type: gsnmp.Integer, Value: stateFull},
+		// PDU within BulkWalk root (.1.3.6.1.2.1.14.10) but wrong prefix for
+		// parseNbrOID (.1.3.6.1.2.1.14.10.2. vs .1.3.6.1.2.1.14.10.1.) — triggers
+		// the !ok continue in walkOspfNbrTable.
+		{Name: ".1.3.6.1.2.1.14.10.2.1.192.0.2.1.0", Type: gsnmp.Integer, Value: int(8)},
+		// ospfNbrIpAddr PDU with a 2-byte value — len(b) != 4 so nbrIP stays nil.
+		{Name: base + "1." + idx, Type: gsnmp.OctetString, Value: []byte{192, 0}},
+	}
+
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	client, err := snmputil.Open(p)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = client.Conn.Close() }()
+
+	rows, err := walkOspfNbrTable(context.Background(), client)
+	if err != nil {
+		t.Fatalf("walkOspfNbrTable: %v", err)
+	}
+	// One row keyed by "192.0.2.1.0": state=full, nbrIP=nil (2-byte addr rejected).
+	if len(rows) != 1 {
+		t.Errorf("expected 1 row, got %d", len(rows))
+	}
+	for _, row := range rows {
+		if row.nbrIP != nil {
+			t.Errorf("expected nil nbrIP for truncated address, got %v", row.nbrIP)
+		}
+	}
+}
+
+// buildEdges: rows with nil nbrIP are silently skipped.
+func TestBuildEdgesNilNbrIP(t *testing.T) {
+	rows := map[string]*nbrRow{
+		"10.0.0.1.0": {nbrIP: nil, state: stateFull},
+	}
+	edges, oos := buildEdges("router-a", rows, nil)
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for nil nbrIP, got %d", len(edges))
+	}
+	if len(oos) != 0 {
+		t.Errorf("expected 0 out-of-scope for nil nbrIP, got %d", len(oos))
+	}
+}
+
+// parseNbrOID: OID without the expected prefix returns false.
+func TestParseNbrOIDNoPrefix(t *testing.T) {
+	const prefix = ".1.3.6.1.2.1.14.10.1."
+	_, _, ok := parseNbrOID(".1.3.6.1.2.1.99.0.0.1", prefix)
+	if ok {
+		t.Error("expected ok=false for OID with wrong prefix, got true")
+	}
+}
+
+// parseNbrOID: OID whose suffix after the prefix has no dot returns false.
+func TestParseNbrOIDNoDot(t *testing.T) {
+	const prefix = ".1.3.6.1.2.1.14.10.1."
+	// OID = prefix + "1" → rest = "1", no dot → dotIdx < 0 → false.
+	_, _, ok := parseNbrOID(prefix+"1", prefix)
+	if ok {
+		t.Error("expected ok=false for OID with no dot after column, got true")
+	}
+}
+
+// parseNbrOID: OID whose key part has the wrong number of dots returns false.
+func TestParseNbrOIDWrongDotCount(t *testing.T) {
+	const prefix = ".1.3.6.1.2.1.14.10.1."
+	// OID = prefix + "1.192.0.2.1" → key = "192.0.2.1" (3 dots, not 4) → false.
+	_, _, ok := parseNbrOID(prefix+"1.192.0.2.1", prefix)
+	if ok {
+		t.Error("expected ok=false for key with 3 dots (need 4), got true")
+	}
+}
+
+// parseNbrOID: valid OID returns the column and key correctly.
+func TestParseNbrOIDValid(t *testing.T) {
+	const prefix = ".1.3.6.1.2.1.14.10.1."
+	// OID = prefix + "6.192.0.2.1.0" → col="6", key="192.0.2.1.0" (4 dots) → true.
+	col, key, ok := parseNbrOID(prefix+"6.192.0.2.1.0", prefix)
+	if !ok {
+		t.Fatal("expected ok=true for valid OID, got false")
+	}
+	if col != "6" {
+		t.Errorf("col = %q, want 6", col)
+	}
+	if key != "192.0.2.1.0" {
+		t.Errorf("key = %q, want 192.0.2.1.0", key)
+	}
+}
