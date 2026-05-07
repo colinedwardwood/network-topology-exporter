@@ -507,6 +507,16 @@
           "description": "Maximum number of unavailable pods during a disruption."
         }
       }
+    },
+
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "NetworkPolicy that restricts ingress to the hub federation port.",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "spokeSelector": { "type": "object" }
+      }
     }
   }
 }

@@ -155,6 +155,12 @@ pdb:
   enabled: false
   maxUnavailable: 0
 
+networkPolicy:
+  enabled: false
+  # Labels that spoke pods must carry to be allowed ingress on the hub port.
+  # Example: topology-exporter/role: spoke
+  spokeSelector: {}
+
 nodeSelector: {}
 tolerations: []
 affinity: {}
