@@ -30,13 +30,16 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/bgp"
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/cdp"
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/fdb"
+	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/isis"
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/lldp"
+	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/mpls"
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/ospf"
 	snmpwalk "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
 	"github.com/colinedwardwood/network-topology-exporter/internal/events"
 	"github.com/colinedwardwood/network-topology-exporter/internal/federation"
 	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/colinedwardwood/network-topology-exporter/internal/output/otlp"
 	"github.com/colinedwardwood/network-topology-exporter/internal/snapshot"
 	"github.com/colinedwardwood/network-topology-exporter/internal/version"
 )
@@ -203,10 +206,19 @@ func run(ctx context.Context, args []string) int {
 				return 1
 			}
 		}
+
+		var otlpExp *otlp.Exporter
+		if cfg.Output.OTLP.Enabled {
+			otlpExp = otlp.New(otlp.Config{
+				Endpoint: cfg.Output.OTLP.Endpoint,
+				Timeout:  cfg.Output.OTLP.Timeout,
+			})
+		}
+
 		workerDone.Add(1)
 		go func() {
 			defer workerDone.Done()
-			runDiscoveryLoop(ctx, cancel, logger, cfg, m, &status, &ready, spoke)
+			runDiscoveryLoop(ctx, cancel, logger, cfg, m, &status, &ready, spoke, otlpExp)
 		}()
 	}
 
@@ -246,7 +258,7 @@ func run(ctx context.Context, args []string) int {
 // against the previous cycle, emits change events, updates metrics, and
 // writes a new snapshot. When spoke is non-nil (federation.role: spoke),
 // it also pushes the pre-reconciled graph to the hub after each cycle.
-func runDiscoveryLoop(ctx context.Context, cancelFn context.CancelFunc, logger *slog.Logger, cfg *config.Config, m *metrics.Metrics, status *atomic.Pointer[cycleStatus], ready *atomic.Bool, spoke *federation.Spoke) {
+func runDiscoveryLoop(ctx context.Context, cancelFn context.CancelFunc, logger *slog.Logger, cfg *config.Config, m *metrics.Metrics, status *atomic.Pointer[cycleStatus], ready *atomic.Bool, spoke *federation.Spoke, otlpExp *otlp.Exporter) {
 	evLogger := events.New(logger)
 
 	// LD-13: load snapshot, serve stale-but-valid metrics until first live cycle.
@@ -314,6 +326,15 @@ func runDiscoveryLoop(ctx context.Context, cancelFn context.CancelFunc, logger *
 				}
 				m.TopologyChangeTotal.WithLabelValues(string(c.Kind), proto).Inc()
 			}
+			if otlpExp != nil {
+				go func(ch []graph.EdgeChange) {
+					pushCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+					if err := otlpExp.PushChanges(pushCtx, ch); err != nil {
+						logger.Warn("otlp push changes failed", "error", err)
+					}
+				}(changes)
+			}
 		}
 		if len(conflicts) > 0 {
 			evLogger.EmitConflicts(ctx, conflicts)
@@ -324,6 +345,15 @@ func runDiscoveryLoop(ctx context.Context, cancelFn context.CancelFunc, logger *
 		prevGraph = newGraph
 		ages = newAges
 		m.Topology.Update(newGraph)
+		if otlpExp != nil {
+			go func(g discovery.Graph) {
+				pushCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if err := otlpExp.PushGraph(pushCtx, g); err != nil {
+					logger.Warn("otlp push failed", "error", err)
+				}
+			}(newGraph)
+		}
 		m.GraphStale.Set(0)
 		if ready != nil {
 			ready.Store(true)
@@ -484,6 +514,8 @@ func runCycle(
 				{"fdb", cfg.Modules.FDB.Enabled, fdb.Walk},
 				{"ospf", cfg.Modules.OSPF.Enabled, ospf.Walk},
 				{"bgp", cfg.Modules.BGP.Enabled, bgp.Walk},
+				{"isis", cfg.Modules.ISIS.Enabled, isis.Walk},
+				{"mpls_te", cfg.Modules.MPLSTE.Enabled, mpls.Walk},
 			}
 			for _, mod := range mods {
 				if !mod.enabled {

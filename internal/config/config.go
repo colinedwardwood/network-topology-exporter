@@ -22,7 +22,20 @@ type Config struct {
 	Credentials CredentialsConfig `yaml:"credentials"`
 	Snapshot    SnapshotConfig    `yaml:"snapshot"`
 	Federation  FederationConfig  `yaml:"federation"`
+	Output      OutputConfig      `yaml:"output"`
 	Targets     []TargetConfig    `yaml:"targets"`
+}
+
+// OutputConfig holds optional push-mode output paths.
+type OutputConfig struct {
+	OTLP OTLPOutputConfig `yaml:"otlp"`
+}
+
+// OTLPOutputConfig configures the OTLP/HTTP push output.
+type OTLPOutputConfig struct {
+	Enabled  bool          `yaml:"enabled"`
+	Endpoint string        `yaml:"endpoint"`
+	Timeout  time.Duration `yaml:"timeout"`
 }
 
 // FederationConfig is the LD-15–LD-20 multi-instance coordination config.
@@ -112,13 +125,15 @@ type ScopeConfig struct {
 // ModulesConfig toggles individual discovery modules. Each module's spec
 // citation lives in the corresponding internal/discovery/<name>/<name>.go header.
 type ModulesConfig struct {
-	SNMP ModuleSNMP   `yaml:"snmp"`
-	LLDP ModuleToggle `yaml:"lldp"`
-	CDP  ModuleToggle `yaml:"cdp"`
-	BGP  ModuleToggle `yaml:"bgp"`
-	OSPF ModuleToggle `yaml:"ospf"`
-	ARP  ModuleToggle `yaml:"arp"`
-	FDB  ModuleToggle `yaml:"fdb"`
+	SNMP   ModuleSNMP   `yaml:"snmp"`
+	LLDP   ModuleToggle `yaml:"lldp"`
+	CDP    ModuleToggle `yaml:"cdp"`
+	BGP    ModuleToggle `yaml:"bgp"`
+	OSPF   ModuleToggle `yaml:"ospf"`
+	ARP    ModuleToggle `yaml:"arp"`
+	FDB    ModuleToggle `yaml:"fdb"`
+	ISIS   ModuleToggle `yaml:"isis"`
+	MPLSTE ModuleToggle `yaml:"mpls_te"`
 }
 
 // ModuleToggle is the minimum module config: enabled / disabled.

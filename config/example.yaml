@@ -117,6 +117,13 @@ snapshot:
 #     tls_cert: /etc/topology-exporter/pki/spoke-dc-a.crt
 #     tls_key: /etc/topology-exporter/pki/spoke-dc-a.key
 
+# output: optional push-mode output paths (complement to /metrics pull)
+# output:
+#   otlp:
+#     enabled: false
+#     endpoint: "http://alloy:4318"
+#     timeout: 10s
+
 # ─── Per-device enrichment ─────────────────────────────────────────────────
 # Targets provide enrichment metadata (SNMP port, site label, custom labels)
 # for devices discovered within the CIDR allow-list. The CIDR drives what
