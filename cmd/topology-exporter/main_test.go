@@ -527,7 +527,14 @@ func TestRunDiscoveryLoopClearsGraphStale(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runDiscoveryLoop(ctx, func() {}, slog.Default(), cfg, m, &status, &ready, nil, nil)
+		runDiscoveryLoop(ctx, loopConfig{
+			cancel: func() {},
+			logger: slog.Default(),
+			cfg:    cfg,
+			m:      m,
+			status: &status,
+			ready:  &ready,
+		})
 	}()
 
 	// Poll until GraphStale is cleared — set to 0 after the first successful cycle.
@@ -900,7 +907,14 @@ func TestRunDiscoveryLoopVersionMismatchSnapshot(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runDiscoveryLoop(ctx, func() {}, slog.Default(), cfg, m, &status, &ready, nil, nil)
+		runDiscoveryLoop(ctx, loopConfig{
+			cancel: func() {},
+			logger: slog.Default(),
+			cfg:    cfg,
+			m:      m,
+			status: &status,
+			ready:  &ready,
+		})
 	}()
 
 	deadline := time.After(12 * time.Second)
@@ -961,7 +975,14 @@ func TestRunDiscoveryLoopWithSnapshot(t *testing.T) {
 	done1 := make(chan struct{})
 	go func() {
 		defer close(done1)
-		runDiscoveryLoop(ctx1, cancel1, slog.Default(), cfg, m1, &s1, &r1, nil, nil)
+		runDiscoveryLoop(ctx1, loopConfig{
+			cancel: cancel1,
+			logger: slog.Default(),
+			cfg:    cfg,
+			m:      m1,
+			status: &s1,
+			ready:  &r1,
+		})
 	}()
 	// Wait for the snapshot write to complete (SnapshotLastWrittenUnix > 0),
 	// not just GraphStale == 0. The write runs in a detached goroutine that may
@@ -992,7 +1013,14 @@ snapshotReady:
 	done2 := make(chan struct{})
 	go func() {
 		defer close(done2)
-		runDiscoveryLoop(ctx2, cancel2, slog.Default(), cfg, m2, &s2, &r2, nil, nil)
+		runDiscoveryLoop(ctx2, loopConfig{
+			cancel: cancel2,
+			logger: slog.Default(),
+			cfg:    cfg,
+			m:      m2,
+			status: &s2,
+			ready:  &r2,
+		})
 	}()
 
 	deadline2 := time.After(12 * time.Second)
@@ -1055,7 +1083,14 @@ func TestRunDiscoveryLoopSecondTick(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runDiscoveryLoop(ctx, func() {}, slog.Default(), cfg, m, &status, &ready, nil, nil)
+		runDiscoveryLoop(ctx, loopConfig{
+			cancel: func() {},
+			logger: slog.Default(),
+			cfg:    cfg,
+			m:      m,
+			status: &status,
+			ready:  &ready,
+		})
 	}()
 
 	// Wait for at least two cycles: first cycle clears GraphStale, second cycle
@@ -1122,7 +1157,14 @@ func TestRunDiscoveryLoopContextCancelledDuringCycle(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runDiscoveryLoop(ctx, func() {}, slog.Default(), cfg, m, &status, &ready, nil, nil)
+		runDiscoveryLoop(ctx, loopConfig{
+			cancel: func() {},
+			logger: slog.Default(),
+			cfg:    cfg,
+			m:      m,
+			status: &status,
+			ready:  &ready,
+		})
 	}()
 
 	select {
@@ -1169,7 +1211,14 @@ func TestRunDiscoveryLoopCredResolverError(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runDiscoveryLoop(ctx, cancelFn, slog.Default(), cfg, m, &status, &ready, nil, nil)
+		runDiscoveryLoop(ctx, loopConfig{
+			cancel: cancelFn,
+			logger: slog.Default(),
+			cfg:    cfg,
+			m:      m,
+			status: &status,
+			ready:  &ready,
+		})
 	}()
 
 	select {

@@ -1045,3 +1045,87 @@ federation:
 		t.Errorf("LinkKind = %q, want empty (default applied by hub at injection time)", c.Federation.KnownInterDomainLinks[0].LinkKind)
 	}
 }
+
+// TestValidateOTLPEndpoint verifies validateOTLPEndpoint rejects bad schemes and
+// empty endpoints, and accepts valid http/https URLs.
+func TestValidateOTLPEndpoint(t *testing.T) {
+	invalid := []string{
+		"",
+		"file:///var/run/otlp.sock",
+		"ftp://collector:21",
+		"://no-scheme",
+	}
+	for _, tc := range invalid {
+		if err := validateOTLPEndpoint(tc); err == nil {
+			t.Errorf("validateOTLPEndpoint(%q) = nil, want error", tc)
+		}
+	}
+
+	valid := []string{
+		"http://alloy:4318",
+		"https://collector:4318",
+		"http://127.0.0.1:4318",
+		"https://otelcol.example.com:4318/v1/traces",
+	}
+	for _, tc := range valid {
+		if err := validateOTLPEndpoint(tc); err != nil {
+			t.Errorf("validateOTLPEndpoint(%q) = %v, want nil", tc, err)
+		}
+	}
+}
+
+// TestOTLPHeartbeatCyclesDefault verifies that HeartbeatCycles defaults to 10
+// when not set in the config.
+func TestOTLPHeartbeatCyclesDefault(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("targets: []\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if c.Output.OTLP.HeartbeatCycles != 10 {
+		t.Errorf("HeartbeatCycles default = %d, want 10", c.Output.OTLP.HeartbeatCycles)
+	}
+}
+
+// TestOTLPValidationRejectsEnabledWithoutEndpoint verifies that enabling OTLP
+// without an endpoint causes Load to return an error.
+func TestOTLPValidationRejectsEnabledWithoutEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+output:
+  otlp:
+    enabled: true
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for OTLP enabled without endpoint, got nil")
+	}
+}
+
+// TestOTLPValidationRejectsBadScheme verifies that enabling OTLP with an
+// unsupported URL scheme causes Load to return an error.
+func TestOTLPValidationRejectsBadScheme(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+output:
+  otlp:
+    enabled: true
+    endpoint: ftp://collector:21
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for OTLP enabled with ftp:// endpoint, got nil")
+	}
+}

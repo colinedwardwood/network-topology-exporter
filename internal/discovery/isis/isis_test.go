@@ -189,6 +189,71 @@ func TestWalkEmpty(t *testing.T) {
 	}
 }
 
+// TestWalkAdjIPAddrsAdjKeyExtraction verifies the tail-count adjKey extraction
+// for two cases:
+//
+//  1. Normal: adjIdx=1, IP=10.0.0.1 → adjKey "0.1.1", edge produced.
+//  2. Ambiguous: adjIdx=4, IP=1.4.5.6 → the old LastIndex approach would
+//     match the wrong ".1.4." and produce adjKey "0.1.4.1" (missing in the
+//     state map → edge dropped). The new tail-count approach correctly
+//     produces adjKey "0.1.4" and emits the edge.
+func TestWalkAdjIPAddrsAdjKeyExtraction(t *testing.T) {
+	cases := []struct {
+		name      string
+		stateKey  string // key stored in the states map (state=up)
+		ipSuffix  string // OID suffix appended to adjIPBase
+		ipBytes   []byte // raw IPv4 bytes for the PDU value
+		wantEdge  bool
+		wantDstIP string
+	}{
+		{
+			name:      "normal adjIdx=1 IP=10.0.0.1",
+			stateKey:  "0.1.1",
+			ipSuffix:  "0.1.1.1.4.10.0.0.1",
+			ipBytes:   []byte{10, 0, 0, 1},
+			wantEdge:  true,
+			wantDstIP: "10.0.0.1",
+		},
+		{
+			name:      "ambiguous adjIdx=4 IP=1.4.5.6",
+			stateKey:  "0.1.4",
+			ipSuffix:  "0.1.4.1.4.1.4.5.6",
+			ipBytes:   []byte{1, 4, 5, 6},
+			wantEdge:  true,
+			wantDstIP: "1.4.5.6",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pdus := []gsnmp.SnmpPDU{
+				{Name: adjStateBase + tc.stateKey, Type: gsnmp.Integer, Value: isisAdjStateUp},
+				{Name: adjIPBase + tc.ipSuffix, Type: gsnmp.OctetString, Value: tc.ipBytes},
+			}
+			addr := snmptest.Start(t, "public", pdus)
+			ip, port := snmptest.ParseAddr(addr)
+
+			p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+			edges, _, err := Walk(context.Background(), p, "router-a", nil)
+			if err != nil {
+				t.Fatalf("Walk: %v", err)
+			}
+			if tc.wantEdge {
+				if len(edges) != 1 {
+					t.Fatalf("expected 1 edge, got %d", len(edges))
+				}
+				if edges[0].DstDevice != tc.wantDstIP {
+					t.Errorf("DstDevice = %q, want %s", edges[0].DstDevice, tc.wantDstIP)
+				}
+			} else {
+				if len(edges) != 0 {
+					t.Errorf("expected 0 edges, got %d", len(edges))
+				}
+			}
+		})
+	}
+}
+
 // Walk: Open fails when the connection cannot be established.
 func TestWalkOpenFails(t *testing.T) {
 	p := snmputil.Params{

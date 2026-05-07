@@ -32,7 +32,7 @@ All metrics use the `network_` prefix. No metric uses a raw IP address or free-f
 |--------|------|--------|-------|
 | `network_topology_discovery_devices_total` | gauge | `status` (success\|failed\|timeout) | Resets each cycle to reflect the most recent outcome. |
 | `network_topology_discovery_cycle_duration_seconds` | histogram | (none) | Buckets: 0.5s–256s (exponential, factor 2). Alert when p99 approaches `discovery.interval`. |
-| `network_topology_discovery_module_duration_seconds` | histogram | `module` | Per-module time within a cycle. Valid values: snmp, lldp, cdp, bgp, ospf, fdb. |
+| `network_topology_discovery_module_duration_seconds` | histogram | `module` | Per-module time within a cycle. Valid values: snmp, lldp, cdp, bgp, ospf, fdb, isis, mpls_te. |
 | `network_topology_snmp_walks_total` | counter | `status` (ok\|timeout\|error) | Aggregate across all devices. |
 | `network_topology_credential_trials_total` | counter | `status` (ok\|failed) | Under the LD-12 rate limiter. A sustained `failed` rate on a fresh deployment may indicate auth lockout. |
 
@@ -46,6 +46,12 @@ For a 500-device network with an average of 4 links per device and 2 protocols r
 - Total topology series: ~3000
 
 This is well within Prometheus defaults. If LLDP and CDP both report the same link, the reconciler collapses them to the highest-precedence source before metric emission — duplicate edges do not multiply series.
+
+## OTLP output
+
+| Metric | Type | Labels | Notes |
+|--------|------|--------|-------|
+| `network_topology_otlp_push_total` | counter | `status` (ok\|error) | Incremented after each OTLP push attempt (both `/v1/metrics` and `/v1/logs` share this counter). Only present when `output.otlp.enabled: true`. A sustained `error` rate indicates the receiver endpoint is unreachable or rejecting payloads; check `output.otlp.endpoint` and that `otlp.timeout` is less than half the scrape interval (see operations note). |
 
 ## Federation (LD-15–LD-20)
 

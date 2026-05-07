@@ -259,20 +259,19 @@ func TestWalkBgpPeerTableSkipsShortOIDs(t *testing.T) {
 	}
 }
 
-// pduIP: []byte branch with a 4-byte value returns the IPv4 address.
-// pduIP: []byte branch with a non-4-byte value returns nil.
-// pduIP: return nil is reached when the byte slice length is not 4.
+// snmputil.PDUIPv4: []byte branch with a 4-byte value returns the IPv4 address.
+// snmputil.PDUIPv4: []byte branch with a non-4-byte value returns nil.
 func TestPduIPBytesBranch(t *testing.T) {
 	// 4-byte []byte → valid IPv4.
 	pdu4 := gsnmp.SnmpPDU{Value: []byte{192, 168, 1, 1}}
-	ip := pduIP(pdu4)
+	ip := snmputil.PDUIPv4(pdu4)
 	if ip == nil || ip.String() != "192.168.1.1" {
 		t.Errorf("4-byte []byte: got %v, want 192.168.1.1", ip)
 	}
 
 	// 2-byte []byte → nil (len != 4 → falls to return nil).
 	pdu2 := gsnmp.SnmpPDU{Value: []byte{10, 0}}
-	if ip := pduIP(pdu2); ip != nil {
+	if ip := snmputil.PDUIPv4(pdu2); ip != nil {
 		t.Errorf("2-byte []byte: got %v, want nil", ip)
 	}
 }

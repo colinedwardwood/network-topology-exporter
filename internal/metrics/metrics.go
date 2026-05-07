@@ -41,6 +41,7 @@ type Metrics struct {
 	DiscoveryModuleDuration *prometheus.HistogramVec
 	SNMPWalksTotal          *prometheus.CounterVec
 	CredentialTrialsTotal   *prometheus.CounterVec
+	OTLPPushTotal           *prometheus.CounterVec
 
 	// LD-16/LD-18: hub-mode spoke-liveness signals. Only populated when
 	// federation.role is hub; registered always so the metric is present
@@ -110,6 +111,10 @@ func New(emitBoundaryObs bool) *Metrics {
 			Name: "network_topology_credential_trials_total",
 			Help: "Credential trial attempts under the LD-12 rate limiter.",
 		}, []string{"status"}), // ok | failed
+		OTLPPushTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "network_topology_otlp_push_total",
+			Help: "OTLP push attempts by outcome. Alert on error rate > 0.",
+		}, []string{"status"}), // ok | error
 		FederationSpokeUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "network_topology_federation_spoke_up",
 			Help: "LD-18 hub mode: 1 while a spoke is active (pushed within federation.spoke_timeout), 0 after eviction.",
@@ -140,6 +145,7 @@ func New(emitBoundaryObs bool) *Metrics {
 		m.DiscoveryModuleDuration,
 		m.SNMPWalksTotal,
 		m.CredentialTrialsTotal,
+		m.OTLPPushTotal,
 		m.FederationSpokeUp,
 		m.FederationSpokeLastPushUnix,
 		m.FederationSpokePushFailuresTotal,

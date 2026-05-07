@@ -118,29 +118,12 @@ func walkBgpPeerTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*bg
 		case colBgpPeerState:
 			peer.state = snmputil.PDUInt(pdu)
 		case colBgpPeerRemoteAddr:
-			peer.remoteIP = pduIP(pdu)
+			peer.remoteIP = snmputil.PDUIPv4(pdu)
 		case colBgpPeerRemoteAs:
 			peer.remoteAS = snmputil.PDUInt(pdu)
 		}
 	}
 	return peers, nil
-}
-
-// pduIP extracts an IPv4 address from an SNMP PDU. gosnmp decodes IpAddress
-// type OIDs as a dotted-decimal string; some test harnesses encode them as raw
-// 4-byte slices. Both representations are handled.
-func pduIP(pdu gsnmp.SnmpPDU) net.IP {
-	switch v := pdu.Value.(type) {
-	case string:
-		if ip := net.ParseIP(v); ip != nil {
-			return ip.To4()
-		}
-	case []byte:
-		if len(v) == 4 {
-			return net.IP(append([]byte(nil), v...))
-		}
-	}
-	return nil
 }
 
 func buildEdges(localDevice string, peers map[string]*bgpPeer, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour) {

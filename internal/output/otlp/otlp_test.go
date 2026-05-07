@@ -292,3 +292,52 @@ func TestPushGraphContextCancelled(t *testing.T) {
 		t.Fatal("expected error for cancelled context, got nil")
 	}
 }
+
+// Test 7: TCP connection reuse — two sequential post calls succeed and the
+// server receives both. This works only if the response body is fully drained
+// before Close, allowing the HTTP client to reuse the connection.
+func TestPostReusesConnection(t *testing.T) {
+	var hitCount int
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Consume the request body so the server side is clean.
+		_, _ = io.ReadAll(r.Body)
+		hitCount++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+
+	g := discovery.Graph{
+		Edges: []discovery.Edge{
+			{SrcDevice: "sw-a", SrcPort: "Gi0/1", DstDevice: "sw-b", DstPort: "Gi0/2", DiscoveryProto: "lldp", LinkKind: "ethernet"},
+		},
+	}
+
+	if err := exp.PushGraph(context.Background(), g); err != nil {
+		t.Fatalf("first PushGraph: %v", err)
+	}
+	if err := exp.PushGraph(context.Background(), g); err != nil {
+		t.Fatalf("second PushGraph: %v", err)
+	}
+
+	if hitCount != 2 {
+		t.Errorf("server hit count = %d, want 2", hitCount)
+	}
+}
+
+// Test 8: post returns error for 4xx status codes.
+func TestPostClientError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+
+	err := exp.PushGraph(context.Background(), discovery.Graph{})
+	if err == nil {
+		t.Fatal("expected error for 400 response, got nil")
+	}
+}

@@ -62,6 +62,35 @@ func TestPDUBytes(t *testing.T) {
 	}
 }
 
+// PDUIPv4: handles dotted-decimal string, raw 4-byte slice, and invalid inputs.
+func TestPDUIPv4(t *testing.T) {
+	cases := []struct {
+		name string
+		val  any
+		want string // empty string means nil expected
+	}{
+		{"string dotted decimal", "192.0.2.1", "192.0.2.1"},
+		{"raw 4-byte slice", []byte{10, 0, 0, 1}, "10.0.0.1"},
+		{"invalid string", "not-an-ip", ""},
+		{"3-byte slice", []byte{1, 2, 3}, ""},
+		{"integer", 42, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := PDUIPv4(gsnmp.SnmpPDU{Value: c.val})
+			if c.want == "" {
+				if got != nil {
+					t.Errorf("PDUIPv4(%v) = %v, want nil", c.val, got)
+				}
+			} else {
+				if got == nil || got.String() != c.want {
+					t.Errorf("PDUIPv4(%v) = %v, want %s", c.val, got, c.want)
+				}
+			}
+		})
+	}
+}
+
 // SplitOIDComponent: normal case with a dot.
 func TestSplitOIDComponent(t *testing.T) {
 	col, rest, ok := SplitOIDComponent("6.1.2")

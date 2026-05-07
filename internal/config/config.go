@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -33,9 +34,10 @@ type OutputConfig struct {
 
 // OTLPOutputConfig configures the OTLP/HTTP push output.
 type OTLPOutputConfig struct {
-	Enabled  bool          `yaml:"enabled"`
-	Endpoint string        `yaml:"endpoint"`
-	Timeout  time.Duration `yaml:"timeout"`
+	Enabled         bool          `yaml:"enabled"`
+	Endpoint        string        `yaml:"endpoint"`
+	Timeout         time.Duration `yaml:"timeout"`
+	HeartbeatCycles int           `yaml:"heartbeat_cycles"`
 }
 
 // FederationConfig is the LD-15–LD-20 multi-instance coordination config.
@@ -264,6 +266,9 @@ func (c *Config) applyDefaults() {
 	if c.Federation.Hub.ListenAddr == "" {
 		c.Federation.Hub.ListenAddr = ":9101"
 	}
+	if c.Output.OTLP.HeartbeatCycles == 0 {
+		c.Output.OTLP.HeartbeatCycles = 10
+	}
 }
 
 func (c *Config) validate() error {
@@ -297,6 +302,28 @@ func (c *Config) validate() error {
 	}
 	if err := c.validateFederation(); err != nil {
 		return err
+	}
+	if c.Output.OTLP.Enabled {
+		if err := validateOTLPEndpoint(c.Output.OTLP.Endpoint); err != nil {
+			return fmt.Errorf("output.otlp.endpoint: %w", err)
+		}
+	}
+	return nil
+}
+
+func validateOTLPEndpoint(endpoint string) error {
+	if endpoint == "" {
+		return errors.New("endpoint is required when otlp is enabled")
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("scheme must be http or https, got %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return errors.New("host is required")
 	}
 	return nil
 }
