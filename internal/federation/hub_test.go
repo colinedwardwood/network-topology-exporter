@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -1302,6 +1303,56 @@ func TestBuildCombinedGraphProtoFallbackToRemote(t *testing.T) {
 	}
 	if g.Edges[0].DiscoveryProto != "cdp" {
 		t.Errorf("discovery_proto = %q, want cdp (remote proto fallback)", g.Edges[0].DiscoveryProto)
+	}
+}
+
+// TestHubOOSAmbiguousFQDNNormalisationWarns verifies that when two spokes report
+// OOS observations involving devices that share a bare hostname but differ by
+// domain suffix (e.g. "core-sw-01.dc1" and "core-sw-01.dc2"), the hub logs a
+// warning about the ambiguous normalisation.
+func TestHubOOSAmbiguousFQDNNormalisationWarns(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	m := metrics.New(false)
+	h := NewHub(
+		config.FederationConfig{SpokeTimeout: 5 * time.Minute},
+		m,
+		logger,
+		"",
+	)
+
+	h.mu.Lock()
+	// spoke dc-1 sees core-sw-01.dc1 as a neighbour.
+	h.spokes["dc-1"] = spokeEntry{
+		payload: SpokePayload{
+			SpokeID: "dc-1",
+			OutOfScope: []discovery.OutOfScopeNeighbour{
+				{ReportingDevice: "edge-sw-01", ReportingPort: "Gi0/1", NeighbourHint: "core-sw-01.dc1", Proto: "lldp"},
+			},
+		},
+		lastSeen: time.Now(),
+	}
+	// spoke dc-2 sees core-sw-01.dc2 as a neighbour — different physical device,
+	// same bare hostname after normalisation.
+	h.spokes["dc-2"] = spokeEntry{
+		payload: SpokePayload{
+			SpokeID: "dc-2",
+			OutOfScope: []discovery.OutOfScopeNeighbour{
+				{ReportingDevice: "edge-sw-02", ReportingPort: "Gi0/1", NeighbourHint: "core-sw-01.dc2", Proto: "lldp"},
+			},
+		},
+		lastSeen: time.Now(),
+	}
+	h.combinedGraphLocked()
+	h.mu.Unlock()
+
+	logged := buf.String()
+	if !strings.Contains(logged, "ambiguous device name normalisation") {
+		t.Errorf("expected ambiguous normalisation warning in log output, got:\n%s", logged)
+	}
+	if !strings.Contains(logged, "core-sw-01") {
+		t.Errorf("expected canonical name 'core-sw-01' in log output, got:\n%s", logged)
 	}
 }
 
