@@ -1,5 +1,66 @@
 # Changelog
 
+## v1.2.0 — 2026-05-07
+
+### Security
+
+- **D1** — Spoke `hub_url` now requires `https://`; `http://` is rejected at config load, enforcing the mTLS transport expectation.
+- **D2** — Spoke push endpoint built with `net/url.ResolveReference` instead of string concatenation; handles trailing slashes and path prefixes correctly.
+
+### Reliability
+
+- **D3** — OTLP push goroutines bounded by a semaphore (`maxOTLPPushConcurrency = 4`); excess pushes are dropped and counted in `network_topology_otlp_push_total{status="dropped"}`.
+- **D5** — OTLP push goroutines are now tracked in a dedicated `WaitGroup`; shutdown drains all in-flight pushes before the process exits.
+- **D7** — OTLP HTTP push retries on 429 and 503 with exponential backoff (3 attempts, 100 ms base); `Retry-After` header honoured on 429.
+- **D9** — Public metrics server gains `ReadTimeout: 30s` and `WriteTimeout: 60s`, preventing goroutine leaks from slow scrapers.
+- **D10** — `BulkWalk` context cancellation is now effective mid-walk; a goroutine + `SetDeadline` interrupt ends stalled SNMP walks promptly on parent context cancellation.
+
+### Correctness
+
+- **D8** — New `fdb.max_vlans` config (default 100, max 4096) caps the per-device VLAN community walk; prevents timeout exhaustion on large campus IOS switches. A warning is logged when the ceiling is reached.
+- **D11** — BGP/OSPF/IS-IS peer IP `DstDevice` values are resolved to canonical sysName before reconciliation using the per-cycle device inventory; cross-protocol edge deduplication with LLDP now works correctly.
+- **D16** — `os_version` Prometheus label is normalised to the first `M.N[.P]` version token extracted from `sysDescr`, reducing TSDB label churn across OS patch upgrades.
+- **D17** — Hub logs a warning when two spokes report different FQDNs that normalise to the same bare hostname, surfacing false-merge risk.
+- **D18** — IS-IS `precedenceRank = 5`, OSPF `precedenceRank = 6` (previously both 5); tie-breaking is now deterministic and documented.
+- **D21** — `enterprisePrefixes` vendor map replaced with an ordered slice; vendor lookup is now deterministic.
+
+### Observability
+
+- **D12** — OTLP resource now includes `service.version` and `service.instance.id` alongside `service.name`.
+- **D19** — `network_topology_snapshot_last_written_unix` initialised to `time.Now()` at startup; prevents the `GraphStale` alert from firing on fresh pods.
+- **D20** — Prometheus metric renamed: `network_topology_discovery_devices_total` → `network_topology_discovery_devices` (was a GaugeVec, not a counter; `_total` suffix was incorrect).
+
+### Configuration
+
+- **D15** — `retries` (default 1) and `context_name` added to `CredentialProfile`; enables tuning for lossy management networks and Cisco VRF-aware SNMP access.
+
+### Helm / Deployment
+
+- **D6** — `readinessProbe` now targets `/readyz` (was `/healthz`); pods are only marked ready after the first discovery cycle completes.
+- **D13** — `podSecurityContext` includes `seccompProfile: RuntimeDefault`, satisfying Kubernetes `Restricted` Pod Security Standards.
+- **D14** — Optional `PodDisruptionBudget` template added (`pdb.enabled: false` by default).
+
+---
+
+## v1.1.0 — 2026-05-07
+
+### Discovery protocols
+
+- **IS-IS** — adjacency-state walk via IS-IS MIB (RFC 4444); only `up(3)` adjacencies emitted.
+- **MPLS-TE** — tunnel topology via MPLS-TE-MIB (RFC 3812); only operationally `up(1)` tunnels emitted; `SrcPort` encodes tunnel index as `te-tunnel{idx}`.
+
+### Fixes
+
+- IS-IS adjKey extraction rewritten with tail-count split; eliminates false key collision when `adjIdx == 4` and the peer IP begins with `1.4.x.x`.
+- MPLS-TE `precedenceRank` corrected from 4 to 7 (was inadvertently overriding OSPF rank 5).
+- OTLP HTTP response body drained before `Close()` to enable TCP connection reuse.
+- `BulkWalk` and OTLP push goroutines now use the discovery loop context rather than `context.Background()`, preventing goroutine leaks on shutdown.
+- Spoke `hub_url` validates `https://` scheme at config load (D1).
+- Spoke push URL constructed safely via `net/url` (D2).
+- OTLP push concurrency bounded by semaphore (D3).
+
+---
+
 ## v1.0.0 — unreleased
 
 ### Features
