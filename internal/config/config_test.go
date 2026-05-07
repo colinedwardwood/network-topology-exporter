@@ -1046,9 +1046,9 @@ federation:
 	}
 }
 
-// TestValidateOTLPEndpoint verifies validateOTLPEndpoint rejects bad schemes and
+// TestValidateHTTPEndpoint verifies validateHTTPEndpoint rejects bad schemes and
 // empty endpoints, and accepts valid http/https URLs.
-func TestValidateOTLPEndpoint(t *testing.T) {
+func TestValidateHTTPEndpoint(t *testing.T) {
 	invalid := []string{
 		"",
 		"file:///var/run/otlp.sock",
@@ -1056,8 +1056,8 @@ func TestValidateOTLPEndpoint(t *testing.T) {
 		"://no-scheme",
 	}
 	for _, tc := range invalid {
-		if err := validateOTLPEndpoint(tc); err == nil {
-			t.Errorf("validateOTLPEndpoint(%q) = nil, want error", tc)
+		if err := validateHTTPEndpoint(tc); err == nil {
+			t.Errorf("validateHTTPEndpoint(%q) = nil, want error", tc)
 		}
 	}
 
@@ -1068,8 +1068,8 @@ func TestValidateOTLPEndpoint(t *testing.T) {
 		"https://otelcol.example.com:4318/v1/traces",
 	}
 	for _, tc := range valid {
-		if err := validateOTLPEndpoint(tc); err != nil {
-			t.Errorf("validateOTLPEndpoint(%q) = %v, want nil", tc, err)
+		if err := validateHTTPEndpoint(tc); err != nil {
+			t.Errorf("validateHTTPEndpoint(%q) = %v, want nil", tc, err)
 		}
 	}
 }

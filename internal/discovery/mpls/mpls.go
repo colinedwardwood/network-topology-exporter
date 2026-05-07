@@ -105,7 +105,6 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 // integer and the egress LSR IPv4 address. Returns ok=false for any malformed
 // suffix, including a non-integer tunnel index.
 func parseTunnelSuffix(suffix string) (tunnelIdx int, egressIP net.IP, ok bool) {
-	// Strip a leading dot if present so Split gives consistent results.
 	suffix = strings.TrimPrefix(suffix, ".")
 	parts := strings.Split(suffix, ".")
 	if len(parts) != 10 {

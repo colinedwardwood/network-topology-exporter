@@ -304,16 +304,16 @@ func (c *Config) validate() error {
 		return err
 	}
 	if c.Output.OTLP.Enabled {
-		if err := validateOTLPEndpoint(c.Output.OTLP.Endpoint); err != nil {
+		if err := validateHTTPEndpoint(c.Output.OTLP.Endpoint); err != nil {
 			return fmt.Errorf("output.otlp.endpoint: %w", err)
 		}
 	}
 	return nil
 }
 
-func validateOTLPEndpoint(endpoint string) error {
+func validateHTTPEndpoint(endpoint string) error {
 	if endpoint == "" {
-		return errors.New("endpoint is required when otlp is enabled")
+		return errors.New("endpoint is required")
 	}
 	u, err := url.Parse(endpoint)
 	if err != nil {
@@ -474,8 +474,8 @@ func (c *Config) validateFederation() error {
 		if c.Federation.Spoke.SpokeID == "" {
 			return errors.New("federation.spoke.spoke_id is required for spoke role")
 		}
-		if c.Federation.Spoke.HubURL == "" {
-			return errors.New("federation.spoke.hub_url is required for spoke role")
+		if err := validateHTTPEndpoint(c.Federation.Spoke.HubURL); err != nil {
+			return fmt.Errorf("federation.spoke.hub_url: %w", err)
 		}
 		if c.Federation.Spoke.TLSCACert == "" || c.Federation.Spoke.TLSCert == "" || c.Federation.Spoke.TLSKey == "" {
 			return errors.New("federation.spoke.tls_ca_cert, tls_cert, and tls_key are all required for spoke role (LD-20)")
