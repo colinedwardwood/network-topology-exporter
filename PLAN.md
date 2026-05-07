@@ -12,24 +12,6 @@ Close all production-readiness gaps identified in the research-backed review (20
 
 ---
 
-## Deficiency Register — OPEN
-
-### D11 - BGP / OSPF / IS-IS edges use raw IP as DstDevice
-
-Risk:
-- BGP/OSPF/IS-IS set `DstDevice` to peer IP; LLDP sets it to sysName. Same
-  physical link appears as two separate edges — deduplication misses it.
-
-Required remediation:
-- After each device walk, resolve discovered peer IPs to sysName using the
-  `deviceInventory` map already built in `main.go`. Apply as a post-processing
-  step or thread a resolver into the protocol Walk functions.
-
-Acceptance criteria:
-- Test: device A (LLDP-visible) and device B (BGP peer only) → single canonical edge.
-
----
-
 ## Release Gate
 
 - [ ] `go test ./tests/integration/... -tags integration`
@@ -40,7 +22,6 @@ Acceptance criteria:
 
 ## Exit Criteria (Ship Blockers for v1.2.0)
 
-- [ ] D11 closed with merged tests.
 - [ ] Release gate passes in full environment.
 - [ ] Changelog updated.
 
