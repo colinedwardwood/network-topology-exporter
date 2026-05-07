@@ -20,10 +20,9 @@
 //
 //  3. The OID suffix for isisISAdjIPAddrEntry has the form
 //     {sysInst}.{circIdx}.{adjIdx}.{addrType}.{addrLen}.{addr octets}.
-//     The boundary between the adjKey and the IPv4 marker is located with
-//     strings.LastIndex(suffix, ".1.4.") so that the adjKey can be correlated
-//     back to the state map regardless of the numeric values of the index
-//     components.
+//     The adjKey is extracted by splitting on "." and dropping the last 6
+//     tail components (addrType + addrLen + 4 octets). Using LastIndex(".1.4.")
+//     is unsafe when adjIdx==4 and the IP starts with 1.4.x.x.
 package isis
 
 import (
@@ -100,17 +99,20 @@ func walkAdjIPAddrs(ctx context.Context, client *gsnmp.GoSNMP, localDevice strin
 		if !ok {
 			continue
 		}
-		// Only handle IPv4 entries: addrType=1, addrLen=4 → ".1.4." marker.
-		markerIdx := strings.LastIndex(suffix, ".1.4.")
-		if markerIdx < 0 {
+		// Split suffix into components to safely extract the adjKey head.
+		// Tail is always: addrType(1) + addrLen(4) + 4 addr octets = 6 components.
+		// Using LastIndex is unsafe when adjIdx==4 and IP starts with 1.4.x.x.
+		parts := strings.Split(suffix, ".")
+		const ipv4TailLen = 6
+		if len(parts) <= ipv4TailLen || parts[len(parts)-ipv4TailLen] != "1" || parts[len(parts)-ipv4TailLen+1] != "4" {
 			continue
 		}
-		adjKey := suffix[:markerIdx]
+		adjKey := strings.Join(parts[:len(parts)-ipv4TailLen], ".")
 		state, known := states[adjKey]
 		if !known || state != isisAdjStateUp {
 			continue
 		}
-		ip := pduIP(pdu)
+		ip := snmputil.PDUIPv4(pdu)
 		if ip == nil {
 			continue
 		}
@@ -135,20 +137,4 @@ func walkAdjIPAddrs(ctx context.Context, client *gsnmp.GoSNMP, localDevice strin
 		})
 	}
 	return edges, oos, nil
-}
-
-// pduIP extracts an IPv4 address from an SNMP PDU. gosnmp may decode the value
-// as a string or as a raw []byte slice depending on the PDU type field.
-func pduIP(pdu gsnmp.SnmpPDU) net.IP {
-	switch v := pdu.Value.(type) {
-	case string:
-		if ip := net.ParseIP(v); ip != nil {
-			return ip.To4()
-		}
-	case []byte:
-		if len(v) == 4 {
-			return net.IP(append([]byte(nil), v...))
-		}
-	}
-	return nil
 }

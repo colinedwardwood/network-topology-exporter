@@ -223,3 +223,52 @@ func TestWalkOpenFails(t *testing.T) {
 		t.Fatal("expected error when Open fails, got nil")
 	}
 }
+
+// Walk: tunnelIdx=42 → SrcPort formatted as "te-tunnel42".
+func TestWalkTunnelIdxFormatting(t *testing.T) {
+	oid := tunnelOID("42", "1", "10.0.0.1", "192.0.2.1")
+	pdus := []gsnmp.SnmpPDU{
+		{Name: oid, Type: gsnmp.Integer, Value: mplsTunnelOperUp},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	edges, _, err := Walk(context.Background(), p, "router-a", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(edges))
+	}
+	if edges[0].SrcPort != "te-tunnel42" {
+		t.Errorf("SrcPort = %q, want te-tunnel42", edges[0].SrcPort)
+	}
+}
+
+// parseTunnelSuffix: non-integer tunnel index → ok=false, entry skipped.
+// SNMP OIDs can only carry integers so this path is exercised via the helper
+// directly rather than through the SNMP test server.
+func TestParseTunnelSuffixNonIntegerIdx(t *testing.T) {
+	// "abc" as the tunnel index; remaining components are otherwise valid.
+	suffix := "abc.1.10.0.0.1.192.0.2.1"
+	_, _, ok := parseTunnelSuffix(suffix)
+	if ok {
+		t.Error("expected ok=false for non-integer tunnel index, got true")
+	}
+}
+
+// parseTunnelSuffix: valid suffix with tunnelIdx=42 → correct index and egress IP.
+func TestParseTunnelSuffixValid(t *testing.T) {
+	suffix := "42.1.10.0.0.1.192.0.2.1"
+	idx, egressIP, ok := parseTunnelSuffix(suffix)
+	if !ok {
+		t.Fatal("expected ok=true for valid suffix, got false")
+	}
+	if idx != 42 {
+		t.Errorf("tunnelIdx = %d, want 42", idx)
+	}
+	if egressIP.String() != "192.0.2.1" {
+		t.Errorf("egressIP = %q, want 192.0.2.1", egressIP.String())
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -48,8 +49,6 @@ func New(cfg Config) *Exporter {
 	}
 }
 
-// ── OTLP JSON types ───────────────────────────────────────────────────────────
-
 // The structs below are a minimal faithful encoding of the OTLP proto3 JSON
 // mapping for metrics and logs. uint64 timestamps are encoded as strings per
 // the proto3 spec (avoids JSON number precision loss).
@@ -70,8 +69,6 @@ type resource struct {
 type scope struct {
 	Name string `json:"name"`
 }
-
-// ── Metrics types ─────────────────────────────────────────────────────────────
 
 type dataPoint struct {
 	Attributes   []kv    `json:"attributes"`
@@ -102,8 +99,6 @@ type metricsPayload struct {
 	ResourceMetrics []resourceMetrics `json:"resourceMetrics"`
 }
 
-// ── Logs types ────────────────────────────────────────────────────────────────
-
 type logBody struct {
 	StringValue string `json:"stringValue"`
 }
@@ -130,8 +125,6 @@ type logsPayload struct {
 	ResourceLogs []resourceLogs `json:"resourceLogs"`
 }
 
-// ── constants ─────────────────────────────────────────────────────────────────
-
 const (
 	serviceName  = "network-topology-exporter"
 	scopeName    = "github.com/colinedwardwood/network-topology-exporter"
@@ -139,22 +132,17 @@ const (
 	severityWarn = 13
 )
 
-func serviceResource() resource {
-	return resource{
-		Attributes: []kv{
-			{Key: "service.name", Value: kvValue{StringValue: serviceName}},
-		},
-	}
+var serviceRes = resource{
+	Attributes: []kv{
+		{Key: "service.name", Value: kvValue{StringValue: serviceName}},
+	},
 }
-
-// ── PushGraph ─────────────────────────────────────────────────────────────────
 
 // PushGraph serialises graph.Edges and graph.Devices as OTLP gauge metrics and
 // POSTs them to {endpoint}/v1/metrics.
 func (e *Exporter) PushGraph(ctx context.Context, g discovery.Graph) error {
 	now := strconv.FormatInt(time.Now().UnixNano(), 10)
 
-	// Build edge data points.
 	edgePoints := make([]dataPoint, 0, len(g.Edges))
 	for _, edge := range g.Edges {
 		edgePoints = append(edgePoints, dataPoint{
@@ -171,7 +159,6 @@ func (e *Exporter) PushGraph(ctx context.Context, g discovery.Graph) error {
 		})
 	}
 
-	// Build device data points.
 	devicePoints := make([]dataPoint, 0, len(g.Devices))
 	for _, dev := range g.Devices {
 		devicePoints = append(devicePoints, dataPoint{
@@ -186,7 +173,7 @@ func (e *Exporter) PushGraph(ctx context.Context, g discovery.Graph) error {
 	payload := metricsPayload{
 		ResourceMetrics: []resourceMetrics{
 			{
-				Resource: serviceResource(),
+				Resource: serviceRes,
 				ScopeMetrics: []scopeMetrics{
 					{
 						Scope: scope{Name: scopeName},
@@ -208,8 +195,6 @@ func (e *Exporter) PushGraph(ctx context.Context, g discovery.Graph) error {
 
 	return e.post(ctx, "/v1/metrics", payload)
 }
-
-// ── PushChanges ───────────────────────────────────────────────────────────────
 
 // PushChanges serialises changes as OTLP log records and POSTs them to
 // {endpoint}/v1/logs. Each EdgeChange becomes one log record.
@@ -269,7 +254,7 @@ func (e *Exporter) PushChanges(ctx context.Context, changes []graph.EdgeChange) 
 	payload := logsPayload{
 		ResourceLogs: []resourceLogs{
 			{
-				Resource: serviceResource(),
+				Resource: serviceRes,
 				ScopeLogs: []scopeLogs{
 					{
 						Scope:      scope{Name: scopeName},
@@ -282,8 +267,6 @@ func (e *Exporter) PushChanges(ctx context.Context, changes []graph.EdgeChange) 
 
 	return e.post(ctx, "/v1/logs", payload)
 }
-
-// ── post ──────────────────────────────────────────────────────────────────────
 
 // post marshals payload to JSON and POSTs it to e.cfg.Endpoint+path.
 // Returns an error for any HTTP error or status >= 400.
@@ -303,8 +286,8 @@ func (e *Exporter) post(ctx context.Context, path string, payload any) error {
 	if err != nil {
 		return fmt.Errorf("otlp: post %s: %w", path, err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
-
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close() //nolint:errcheck
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("otlp: post %s: server returned %d", path, resp.StatusCode)
 	}

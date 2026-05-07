@@ -1,12 +1,13 @@
 # network-topology-exporter
 
-A standalone, Apache 2.0 Go exporter that discovers network topology over SNMP, LLDP, CDP, BGP, OSPF, and FDB, and emits three signals:
+A standalone, Apache 2.0 Go exporter that discovers network topology over SNMP, LLDP, CDP, BGP, OSPF, FDB, IS-IS, and MPLS-TE, and emits four signals:
 
 - **Prometheus metrics** for device inventory and topology edges, scraped via `/metrics`.
 - **Structured log lines** (JSON to stderr) for topology change events and operational state.
 - **A versioned JSON snapshot** on disk so `/metrics` serves the previous graph immediately on restart.
+- **OTLP push** (optional) — topology edges and devices as OTLP metrics, change events as OTLP log records, delivered directly to any OTLP-capable receiver.
 
-There is no bespoke control-plane API. Anything that needs the topology graph queries Prometheus / Mimir. Topology change events are log lines — ship them to Loki, Elasticsearch, or any log aggregator using the collector agent already in your stack (Promtail, Alloy, Fluentd). The exporter does not push to external systems.
+By default there is no bespoke control-plane API and the exporter does not push to external systems. Anything that needs the topology graph queries Prometheus / Mimir. Topology change events are log lines — ship them to Loki, Elasticsearch, or any log aggregator using the collector agent already in your stack (Promtail, Alloy, Fluentd). Enable `output.otlp` to additionally push topology state directly to an OTLP endpoint.
 
 ## Why this exists
 
@@ -14,7 +15,7 @@ The Prometheus / Grafana stack already covers storage, query, alerting, and visu
 
 ## Status
 
-**Release candidate.** SNMP / LLDP / CDP / BGP / OSPF / FDB discovery, graph reconciliation, credential management, snapshot persistence, and multi-instance federation are all implemented and covered by unit, integration, and end-to-end tests.
+**Release candidate.** SNMP / LLDP / CDP / BGP / OSPF / FDB / IS-IS / MPLS-TE discovery, graph reconciliation, credential management, snapshot persistence, multi-instance federation, and optional OTLP push are all implemented and covered by unit, integration, and end-to-end tests.
 
 ## Quickstart
 
@@ -59,6 +60,7 @@ docker run --rm -p 9100:9100 \
 | `network_topology_federation_spoke_last_push_unix` | gauge | `spoke_id` | Hub mode only. Wall-clock time of most recent push from each spoke. |
 | `network_topology_federation_spoke_push_failures_total` | counter | (none) | Spoke mode only. Incremented each time a push exhausts all retries. |
 | `network_topology_hub_oos_unmatched_total` | gauge | (none) | Hub mode only. OOS neighbour hints that could not be matched to any known device name. |
+| `network_topology_otlp_push_total` | counter | `status` (ok\|error) | Incremented after each OTLP push attempt. Only present when `output.otlp.enabled: true`. |
 
 Full label reference, cardinality budget, and recommended alerts: [`docs/metrics.md`](docs/metrics.md).
 
@@ -82,6 +84,88 @@ See [`config/example.yaml`](config/example.yaml) for the full schema. Four opera
 - **Credentials are named profiles with rate-limited trial.** Per-IP and per-CIDR assignments resolve before the fallback list; the global trial rate is bounded so cold start doesn't lock devices out. Cold-start runbook: [`docs/operator/cold-start-credentials.md`](docs/operator/cold-start-credentials.md).
 - **The graph survives restarts.** A versioned JSON snapshot reloads on startup so `/metrics` serves the previous edge set immediately with `network_topology_graph_stale=1` until the first live cycle completes.
 - **Unidirectional links expire.** A link reported by only one endpoint for three consecutive cycles is removed and emits a `network_topology_change_total{change_kind="removed"}` increment.
+
+## Discovery modules
+
+Each module is independently enabled and runs within the same cycle. Edges from multiple sources covering the same physical link are reconciled by precedence — the highest-precedence source wins; the rest increment `network_topology_conflict_total` if they disagree.
+
+| Module | Protocol / MIB | Precedence | YAML key | Notes |
+|--------|---------------|------------|----------|-------|
+| LLDP | LLDP-MIB (IEEE 802.1AB) | 10 | `modules.lldp.enabled` | Standard; preferred source when available. |
+| CDP | CISCO-CDP-MIB | 9 | `modules.cdp.enabled` | Cisco-only; lower precedence than LLDP. |
+| OSPF | OSPF-MIB (RFC 1850) | 8 | `modules.ospf.enabled` | |
+| IS-IS | ISIS-MIB (RFC 4444) | 8 | `modules.isis.enabled` | See below. |
+| MPLS-TE | MPLS-TE-STD-MIB (RFC 3812) | 7 | `modules.mpls_te.enabled` | See below. |
+| BGP | BGP4-MIB (RFC 4273) | 6 | `modules.bgp.enabled` | |
+| FDB | BRIDGE-MIB (RFC 4188) | 5 | `modules.fdb.enabled` | Layer-2 only; noisy on large networks. |
+
+### IS-IS (RFC 4444)
+
+Walks `isisISAdjState` and `isisISAdjIPAddrTable`. Only adjacencies in state `up(3)` produce edges. `DstDevice` is the neighbour IP from `isisISAdjIPAddrTable`.
+
+```yaml
+modules:
+  isis:
+    enabled: true
+```
+
+### MPLS-TE (RFC 3812)
+
+Walks `mplsTunnelOperStatus`. `SrcPort` is formatted as `te-tunnel<idx>` where `idx` is the tunnel index from the MIB. `DstDevice` is the egress LSR IP.
+
+```yaml
+modules:
+  mpls_te:
+    enabled: true
+```
+
+## OTLP output
+
+The exporter can push topology state directly to any OTLP-compatible receiver (Grafana Alloy, OpenTelemetry Collector, Grafana Cloud OTLP endpoint, etc.). This is additive — Prometheus `/metrics` continues to work unchanged.
+
+```yaml
+output:
+  otlp:
+    enabled: true
+    endpoint: "http://alloy:4318"   # must be http:// or https://
+    timeout: 10s                    # per-push deadline; default 10s
+    heartbeat_cycles: 10            # push full graph every N cycles even if no changes; default 10
+```
+
+**What gets pushed:**
+
+| Signal | OTLP path | Content |
+|--------|-----------|---------|
+| Full graph | `POST /v1/metrics` | `network_topology_edge` and `network_topology_device` gauge metrics, one data point per edge/device. Sent every cycle when there are changes, and unconditionally every `heartbeat_cycles` cycles. |
+| Change events | `POST /v1/logs` | OTLP log records — severity INFO for added/updated edges, WARN for removed edges. Mirrors the JSON log lines already written to stderr. |
+
+**Heartbeat semantics:** If no topology change is detected, the exporter skips the `/v1/metrics` push to avoid redundant data. Every `heartbeat_cycles` cycles (default: every 10th cycle) the full graph is pushed unconditionally so downstream receivers can detect a stale or silently-dropped connection.
+
+**Self-monitoring metric:** `network_topology_otlp_push_total{status="ok|error"}` — a counter incremented after each push attempt, scraped via the normal `/metrics` endpoint.
+
+### Receiving OTLP in Grafana Alloy
+
+```alloy
+otelcol.receiver.otlp "topology" {
+  grpc { endpoint = "0.0.0.0:4317" }
+  http { endpoint = "0.0.0.0:4318" }
+
+  output {
+    metrics = [otelcol.exporter.prometheus.topology.input]
+    logs    = [otelcol.exporter.loki.topology.input]
+  }
+}
+
+otelcol.exporter.prometheus "topology" {
+  forward_to = [prometheus.remote_write.mimir.receiver]
+}
+
+otelcol.exporter.loki "topology" {
+  forward_to = [loki.write.default.receiver]
+}
+```
+
+Set `output.otlp.endpoint: "http://<alloy-host>:4318"` in the exporter config to target the HTTP receiver above.
 
 ## Federation
 

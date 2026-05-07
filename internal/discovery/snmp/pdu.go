@@ -77,6 +77,22 @@ func PDUBytes(pdu g.SnmpPDU) []byte {
 	return nil
 }
 
+// PDUIPv4 extracts an IPv4 address from an SNMP PDU. gosnmp may decode
+// the value as a dotted-decimal string or as a raw 4-byte slice.
+func PDUIPv4(pdu g.SnmpPDU) net.IP {
+	switch v := pdu.Value.(type) {
+	case string:
+		if ip := net.ParseIP(v); ip != nil {
+			return ip.To4()
+		}
+	case []byte:
+		if len(v) == 4 {
+			return net.IP(append([]byte(nil), v...))
+		}
+	}
+	return nil
+}
+
 // SplitOIDComponent splits the leading numeric component from an OID suffix
 // string of the form "col.rest" or "col" (last component). Returns the integer
 // value, the remaining string after the dot, and true on success.

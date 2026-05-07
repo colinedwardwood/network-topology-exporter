@@ -218,7 +218,16 @@ func run(ctx context.Context, args []string) int {
 		workerDone.Add(1)
 		go func() {
 			defer workerDone.Done()
-			runDiscoveryLoop(ctx, cancel, logger, cfg, m, &status, &ready, spoke, otlpExp)
+			runDiscoveryLoop(ctx, loopConfig{
+				cancel:  cancel,
+				logger:  logger,
+				cfg:     cfg,
+				m:       m,
+				status:  &status,
+				ready:   &ready,
+				spoke:   spoke,
+				otlpExp: otlpExp,
+			})
 		}()
 	}
 
@@ -251,6 +260,17 @@ func run(ctx context.Context, args []string) int {
 	return 0
 }
 
+type loopConfig struct {
+	cancel  context.CancelFunc
+	logger  *slog.Logger
+	cfg     *config.Config
+	m       *metrics.Metrics
+	status  *atomic.Pointer[cycleStatus]
+	ready   *atomic.Bool
+	spoke   *federation.Spoke
+	otlpExp *otlp.Exporter
+}
+
 // runDiscoveryLoop is the main discovery scheduler. It loads the LD-13
 // snapshot on startup, starts the credential resolver, and then runs
 // periodic cycles. Each cycle probes all configured targets concurrently
@@ -258,17 +278,17 @@ func run(ctx context.Context, args []string) int {
 // against the previous cycle, emits change events, updates metrics, and
 // writes a new snapshot. When spoke is non-nil (federation.role: spoke),
 // it also pushes the pre-reconciled graph to the hub after each cycle.
-func runDiscoveryLoop(ctx context.Context, cancelFn context.CancelFunc, logger *slog.Logger, cfg *config.Config, m *metrics.Metrics, status *atomic.Pointer[cycleStatus], ready *atomic.Bool, spoke *federation.Spoke, otlpExp *otlp.Exporter) {
-	evLogger := events.New(logger)
+func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
+	evLogger := events.New(lc.logger)
 
 	// LD-13: load snapshot, serve stale-but-valid metrics until first live cycle.
-	m.GraphStale.Set(1)
-	snap, err := snapshot.Load(cfg.Snapshot.Path)
+	lc.m.GraphStale.Set(1)
+	snap, err := snapshot.Load(lc.cfg.Snapshot.Path)
 	if err != nil {
 		if errors.Is(err, snapshot.ErrVersionMismatch) {
-			logger.Warn("snapshot version mismatch, cold start", "path", cfg.Snapshot.Path, "error", err)
+			lc.logger.Warn("snapshot version mismatch, cold start", "path", lc.cfg.Snapshot.Path, "error", err)
 		} else {
-			logger.Warn("snapshot load failed, cold start", "path", cfg.Snapshot.Path, "error", err)
+			lc.logger.Warn("snapshot load failed, cold start", "path", lc.cfg.Snapshot.Path, "error", err)
 		}
 	}
 
@@ -282,19 +302,19 @@ func runDiscoveryLoop(ctx context.Context, cancelFn context.CancelFunc, logger *
 			OutOfScope: snap.OutOfScope,
 		}
 		ages = graph.AgesToEdgeKeys(snap.UnconfirmedAges)
-		logger.Info("snapshot loaded",
+		lc.logger.Info("snapshot loaded",
 			"devices", len(snap.Devices),
 			"edges", len(snap.Edges),
 		)
-		m.SnapshotLoadedDevicesTotal.Set(float64(len(snap.Devices)))
-		m.Topology.Update(prevGraph)
+		lc.m.SnapshotLoadedDevicesTotal.Set(float64(len(snap.Devices)))
+		lc.m.Topology.Update(prevGraph)
 	}
 
 	// LD-12: credential resolver.
-	resolver, err := credentials.New(cfg.Credentials)
+	resolver, err := credentials.New(lc.cfg.Credentials)
 	if err != nil {
-		logger.Error("building credential resolver", "error", err)
-		cancelFn()
+		lc.logger.Error("building credential resolver", "error", err)
+		lc.cancel()
 		return
 	}
 	if snap != nil {
@@ -302,15 +322,17 @@ func runDiscoveryLoop(ctx context.Context, cancelFn context.CancelFunc, logger *
 	}
 
 	// Parse CIDR allow-list once; the config is immutable at runtime.
-	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
+	allowedNets := snmpwalk.ParseCIDRs(lc.cfg.Discovery.Scope.CIDRAllowList)
 
+	var cycleNum int
 	cycle := func() {
+		cycleNum++
 		start := time.Now()
-		newGraph, newAges, conflicts, deviceErrors := runCycle(ctx, logger, cfg, m, resolver, allowedNets, ages)
+		newGraph, newAges, conflicts, deviceErrors := runCycle(ctx, lc.logger, lc.cfg, lc.m, resolver, allowedNets, ages)
 		if ctx.Err() != nil {
 			return
 		}
-		status.Store(&cycleStatus{
+		lc.status.Store(&cycleStatus{
 			LastCycleAt:  time.Now(),
 			DeviceErrors: int64(deviceErrors),
 		})
@@ -324,14 +346,17 @@ func runDiscoveryLoop(ctx context.Context, cancelFn context.CancelFunc, logger *
 				} else if c.Before != nil {
 					proto = c.Before.DiscoveryProto
 				}
-				m.TopologyChangeTotal.WithLabelValues(string(c.Kind), proto).Inc()
+				lc.m.TopologyChangeTotal.WithLabelValues(string(c.Kind), proto).Inc()
 			}
-			if otlpExp != nil {
+			if lc.otlpExp != nil {
 				go func(ch []graph.EdgeChange) {
-					pushCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					pushCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 					defer cancel()
-					if err := otlpExp.PushChanges(pushCtx, ch); err != nil {
-						logger.Warn("otlp push changes failed", "error", err)
+					if err := lc.otlpExp.PushChanges(pushCtx, ch); err != nil {
+						lc.logger.Warn("otlp push changes failed", "error", err)
+						lc.m.OTLPPushTotal.WithLabelValues("error").Inc()
+					} else {
+						lc.m.OTLPPushTotal.WithLabelValues("ok").Inc()
 					}
 				}(changes)
 			}
@@ -339,26 +364,32 @@ func runDiscoveryLoop(ctx context.Context, cancelFn context.CancelFunc, logger *
 		if len(conflicts) > 0 {
 			evLogger.EmitConflicts(ctx, conflicts)
 			for _, c := range conflicts {
-				m.TopologyConflictTotal.WithLabelValues(string(c.Kind)).Inc()
+				lc.m.TopologyConflictTotal.WithLabelValues(string(c.Kind)).Inc()
 			}
 		}
 		prevGraph = newGraph
 		ages = newAges
-		m.Topology.Update(newGraph)
-		if otlpExp != nil {
-			go func(g discovery.Graph) {
-				pushCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				if err := otlpExp.PushGraph(pushCtx, g); err != nil {
-					logger.Warn("otlp push failed", "error", err)
-				}
-			}(newGraph)
+		lc.m.Topology.Update(newGraph)
+		if lc.otlpExp != nil {
+			pushGraph := len(changes) > 0 || cycleNum%lc.cfg.Output.OTLP.HeartbeatCycles == 0
+			if pushGraph {
+				go func(g discovery.Graph) {
+					pushCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+					defer cancel()
+					if err := lc.otlpExp.PushGraph(pushCtx, g); err != nil {
+						lc.logger.Warn("otlp push failed", "error", err)
+						lc.m.OTLPPushTotal.WithLabelValues("error").Inc()
+					} else {
+						lc.m.OTLPPushTotal.WithLabelValues("ok").Inc()
+					}
+				}(newGraph)
+			}
 		}
-		m.GraphStale.Set(0)
-		if ready != nil {
-			ready.Store(true)
+		lc.m.GraphStale.Set(0)
+		if lc.ready != nil {
+			lc.ready.Store(true)
 		}
-		m.DiscoveryCycleDuration.Observe(time.Since(start).Seconds())
+		lc.m.DiscoveryCycleDuration.Observe(time.Since(start).Seconds())
 
 		// LD-13: write snapshot in a goroutine with a timeout so an NFS stall
 		// cannot block the discovery cycle. f is passed by value so the next
@@ -373,37 +404,37 @@ func runDiscoveryLoop(ctx context.Context, cancelFn context.CancelFunc, logger *
 		}
 		go func(f snapshot.File) {
 			done := make(chan error, 1)
-			go func() { done <- snapshot.Write(cfg.Snapshot.Path, f) }()
+			go func() { done <- snapshot.Write(lc.cfg.Snapshot.Path, f) }()
 			select {
 			case err := <-done:
 				if err != nil {
-					logger.Error("snapshot write failed", "error", err)
+					lc.logger.Error("snapshot write failed", "error", err)
 				} else {
-					m.SnapshotLastWrittenUnix.Set(float64(time.Now().Unix()))
+					lc.m.SnapshotLastWrittenUnix.Set(float64(time.Now().Unix()))
 				}
 			case <-time.After(snapshotWriteTimeout):
-				logger.Warn("snapshot write timed out (NFS stall?); discovery continues", "timeout", snapshotWriteTimeout)
+				lc.logger.Warn("snapshot write timed out (NFS stall?); discovery continues", "timeout", snapshotWriteTimeout)
 			}
 		}(f)
 
 		// LD-16/LD-17: spoke mode — push pre-reconciled graph to hub.
-		if spoke != nil {
+		if lc.spoke != nil {
 			payload := federation.SpokePayload{
-				SpokeID:    cfg.Federation.Spoke.SpokeID,
+				SpokeID:    lc.cfg.Federation.Spoke.SpokeID,
 				CycleAt:    time.Now(),
 				Devices:    newGraph.Devices,
 				Edges:      newGraph.Edges,
 				OutOfScope: newGraph.OutOfScope,
 				Ages:       graph.EdgeKeysToAges(ages),
 			}
-			if err := spoke.Push(ctx, payload); err != nil && ctx.Err() == nil {
-				logger.Warn("spoke push failed", "error", err)
+			if err := lc.spoke.Push(ctx, payload); err != nil && ctx.Err() == nil {
+				lc.logger.Warn("spoke push failed", "error", err)
 			}
 		}
 	}
 
 	cycle()
-	tick := time.NewTicker(cfg.Discovery.Interval)
+	tick := time.NewTicker(lc.cfg.Discovery.Interval)
 	defer tick.Stop()
 	for {
 		select {

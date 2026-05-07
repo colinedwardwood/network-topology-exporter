@@ -14,7 +14,7 @@ If it returns `0` and there are still no edges:
 
 1. Confirm at least one target device falls within `discovery.scope.cidr_allow_list`. Any device outside this range is never polled.
 2. Check `network_topology_discovery_devices_total{status="failed"}` and `{status="timeout"}`. If all devices are failing, SNMP is not reachable — see [SNMP timeouts and walk failures](#3-snmp-timeouts-and-walk-failures).
-3. Check that at least one discovery module is enabled: `modules.lldp.enabled`, `modules.cdp.enabled`, `modules.bgp.enabled`, `modules.ospf.enabled`, or `modules.fdb.enabled`.
+3. Check that at least one discovery module is enabled: `modules.lldp.enabled`, `modules.cdp.enabled`, `modules.bgp.enabled`, `modules.ospf.enabled`, `modules.fdb.enabled`, `modules.isis.enabled`, or `modules.mpls_te.enabled`.
 4. Edges require both endpoints to be in scope. If only one side of a link is in `cidr_allow_list`, the edge will not appear. Check `network_topology_out_of_scope_neighbours_total`.
 
 ---
@@ -271,7 +271,32 @@ jq '.devices | length' < /path/to/snapshot.json
 
 ---
 
-## 11. Topology metrics absent from /metrics entirely
+## 11. OTLP push goroutine overlapping with the next scrape cycle
+
+**Symptom:** `network_topology_otlp_push_total{status="error"}` is rising; log lines show push timeouts or context cancellation errors; discovery cycle duration is increasing.
+
+When `output.otlp.timeout` is set close to `discovery.interval`, the OTLP push goroutine from one cycle can still be running when the next discovery cycle starts. The two goroutines then compete for the same resources and the push from the previous cycle is cancelled mid-flight, incrementing the `error` counter.
+
+**Operator guidance:** Set `output.otlp.timeout` to less than half the discovery interval:
+
+```
+otlp.timeout < discovery.interval / 2
+```
+
+For example, with `discovery.interval: 60s`, keep `output.otlp.timeout` at `25s` or lower. The default of `10s` is safe for most intervals of 30 s or longer.
+
+**To diagnose:**
+
+```sh
+curl -s http://localhost:9100/metrics | grep network_topology_otlp_push_total
+curl -s http://localhost:9100/metrics | grep network_topology_discovery_cycle_duration_seconds
+```
+
+If cycle duration P99 is close to the configured interval and `otlp_push_total{status="error"}` is non-zero, lower `output.otlp.timeout` first before investigating the receiver endpoint.
+
+---
+
+## 12. Topology metrics absent from /metrics entirely
 
 **Symptom:** `network_device_info`, `network_topology_edge_info`, and related metric families do not appear anywhere in the `/metrics` output — not even as gauge families with zero series.
 

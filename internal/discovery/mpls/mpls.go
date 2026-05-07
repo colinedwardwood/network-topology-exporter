@@ -37,8 +37,10 @@ import (
 
 const (
 	oidMplsTunnelOperStatus = "1.3.6.1.2.1.10.166.3.2.2.1.17"
-	precedenceRank          = 4
 	mplsTunnelOperUp        = 1
+	// Rank ladder: LLDP/CDP=1-2, OSPF=5, BGP=6, MPLS-TE=7, IS-IS=8.
+	// Higher rank = lower precedence in graph merge.
+	precedenceRank = 7
 )
 
 // Walk returns MPLS-TE tunnel edges for the device at p.IP. Only tunnels with
@@ -69,13 +71,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 		if snmputil.PDUInt(pdu) != mplsTunnelOperUp {
 			continue
 		}
-		// Strip a leading dot if present so Split gives consistent results.
-		suffix = strings.TrimPrefix(suffix, ".")
-		parts := strings.Split(suffix, ".")
-		if len(parts) != 10 {
-			continue
-		}
-		egressIP, ok := parseIPFromParts(parts[6:10])
+		tunnelIdx, egressIP, ok := parseTunnelSuffix(suffix)
 		if !ok {
 			continue
 		}
@@ -89,9 +85,8 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 		}
 		edges = append(edges, discovery.Edge{
 			SrcDevice:      localDevice,
-			SrcPort:        fmt.Sprintf("te-tunnel%s", parts[0]),
+			SrcPort:        fmt.Sprintf("te-tunnel%d", tunnelIdx),
 			DstDevice:      egressIP.String(),
-			DstPort:        "",
 			DiscoveryProto: "mpls_te",
 			Direction:      discovery.DirectionUnidirectional,
 			Confidence:     discovery.ConfidenceMedium,
@@ -102,6 +97,29 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 		})
 	}
 	return edges, oos, nil
+}
+
+// parseTunnelSuffix parses the OID suffix that follows the mplsTunnelOperStatus
+// column prefix. The suffix must have exactly 10 dot-separated components:
+// tunnelIdx, tunnelInstance, ig0..ig3, eg0..eg3. Returns the tunnel index as an
+// integer and the egress LSR IPv4 address. Returns ok=false for any malformed
+// suffix, including a non-integer tunnel index.
+func parseTunnelSuffix(suffix string) (tunnelIdx int, egressIP net.IP, ok bool) {
+	// Strip a leading dot if present so Split gives consistent results.
+	suffix = strings.TrimPrefix(suffix, ".")
+	parts := strings.Split(suffix, ".")
+	if len(parts) != 10 {
+		return 0, nil, false
+	}
+	idx, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, nil, false
+	}
+	ip, ipOK := parseIPFromParts(parts[6:10])
+	if !ipOK {
+		return 0, nil, false
+	}
+	return idx, ip, true
 }
 
 // parseIPFromParts converts 4 decimal-string octets into an IPv4 net.IP.
