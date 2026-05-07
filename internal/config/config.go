@@ -124,6 +124,14 @@ type ScopeConfig struct {
 	CIDRAllowList []string `yaml:"cidr_allow_list"`
 }
 
+// FDBConfig holds FDB-module-specific tuning knobs. MaxVlans caps the number
+// of VLANs that walkVlanCommunityFdbs will iterate on IOS devices; beyond
+// that limit the walk is truncated and a warning is logged.
+type FDBConfig struct {
+	Enabled  bool `yaml:"enabled"`
+	MaxVlans int  `yaml:"max_vlans"`
+}
+
 // ModulesConfig toggles individual discovery modules. Each module's spec
 // citation lives in the corresponding internal/discovery/<name>/<name>.go header.
 type ModulesConfig struct {
@@ -133,7 +141,7 @@ type ModulesConfig struct {
 	BGP    ModuleToggle `yaml:"bgp"`
 	OSPF   ModuleToggle `yaml:"ospf"`
 	ARP    ModuleToggle `yaml:"arp"`
-	FDB    ModuleToggle `yaml:"fdb"`
+	FDB    FDBConfig    `yaml:"fdb"`
 	ISIS   ModuleToggle `yaml:"isis"`
 	MPLSTE ModuleToggle `yaml:"mpls_te"`
 }
@@ -182,6 +190,10 @@ type CredentialProfile struct {
 	AuthKeyEnv   string `yaml:"auth_key_env,omitempty"`
 	PrivProtocol string `yaml:"priv_protocol,omitempty"` // AES (recommended) | AES-192 | AES-256 | DES (deprecated, broken)
 	PrivKeyEnv   string `yaml:"priv_key_env,omitempty"`
+	// Retries is the number of SNMP retries per request. Defaults to 1.
+	Retries int `yaml:"retries"`
+	// ContextName is the SNMPv3 context name. Empty string means no context (default).
+	ContextName string `yaml:"context_name,omitempty"`
 }
 
 // CredentialAssignment binds one or more profiles to a device or CIDR.
@@ -249,6 +261,14 @@ func (c *Config) applyDefaults() {
 	if c.Credentials.TrialRatePerSecond == 0 {
 		c.Credentials.TrialRatePerSecond = 5
 	}
+	for i := range c.Credentials.Profiles {
+		if c.Credentials.Profiles[i].Retries == 0 {
+			c.Credentials.Profiles[i].Retries = 1
+		}
+	}
+	if c.Modules.FDB.MaxVlans == 0 {
+		c.Modules.FDB.MaxVlans = 100
+	}
 	if c.Snapshot.Path == "" {
 		c.Snapshot.Path = "/var/lib/network-topology-exporter/snapshot.json"
 	}
@@ -298,6 +318,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := c.validateTargets(); err != nil {
+		return err
+	}
+	if err := c.validateFDB(); err != nil {
 		return err
 	}
 	if err := c.validateFederation(); err != nil {
@@ -392,6 +415,9 @@ func (c *Config) validateCredentials() error {
 		}
 		if _, dup := known[p.Name]; dup {
 			return fmt.Errorf("credentials.profiles: duplicate name %q", p.Name)
+		}
+		if p.Retries < 0 {
+			return fmt.Errorf("profile %q: retries must be >= 0", p.Name)
 		}
 		switch p.Type {
 		case ProfileTypeSNMPv2c:
@@ -513,6 +539,16 @@ func (c *Config) validateFederation() error {
 		if link.LocalDevice == "" || link.LocalPort == "" || link.RemoteDevice == "" || link.RemotePort == "" {
 			return fmt.Errorf("federation.known_inter_domain_links[%d]: local_device, local_port, remote_device, and remote_port are all required", i)
 		}
+	}
+	return nil
+}
+
+func (c *Config) validateFDB() error {
+	if c.Modules.FDB.MaxVlans < 1 {
+		return errors.New("fdb.max_vlans must be at least 1")
+	}
+	if c.Modules.FDB.MaxVlans > 4096 {
+		return errors.New("fdb.max_vlans must be at most 4096")
 	}
 	return nil
 }

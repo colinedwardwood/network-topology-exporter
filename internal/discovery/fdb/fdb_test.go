@@ -870,6 +870,85 @@ func TestDiscoverVlanIDsOutOfRange(t *testing.T) {
 // walkVlanCommunityFdbs() coverage gaps
 // ---------------------------------------------------------------------------
 
+// TestWalkVlanCommunityFdbsMaxVlans verifies that when MaxVlans is 2 and 3 VLANs
+// are discovered, only the first 2 are walked.
+func TestWalkVlanCommunityFdbsMaxVlans(t *testing.T) {
+	// Three VLANs in dot1qVlanCurrentTable.
+	vlanTablePDUs := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.17.7.1.4.2.3.0.10", Type: gsnmp.Integer, Value: 10},
+		{Name: ".1.3.6.1.2.1.17.7.1.4.2.3.0.20", Type: gsnmp.Integer, Value: 20},
+		{Name: ".1.3.6.1.2.1.17.7.1.4.2.3.0.30", Type: gsnmp.Integer, Value: 30},
+	}
+
+	// FDB entries for each per-VLAN community.
+	mac10 := []byte{0, 0xAA, 0xBB, 0xCC, 0xDD, 0x10}
+	mac20 := []byte{0, 0xAA, 0xBB, 0xCC, 0xDD, 0x20}
+	mac30 := []byte{0, 0xAA, 0xBB, 0xCC, 0xDD, 0x30}
+
+	vlan10PDUs := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.17.4.3.1.1.0.170.187.204.221.16", Type: gsnmp.OctetString, Value: mac10},
+		{Name: ".1.3.6.1.2.1.17.4.3.1.2.0.170.187.204.221.16", Type: gsnmp.Integer, Value: 1},
+		{Name: ".1.3.6.1.2.1.17.4.3.1.3.0.170.187.204.221.16", Type: gsnmp.Integer, Value: fdbStatusLearned},
+	}
+	vlan20PDUs := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.17.4.3.1.1.0.170.187.204.221.32", Type: gsnmp.OctetString, Value: mac20},
+		{Name: ".1.3.6.1.2.1.17.4.3.1.2.0.170.187.204.221.32", Type: gsnmp.Integer, Value: 1},
+		{Name: ".1.3.6.1.2.1.17.4.3.1.3.0.170.187.204.221.32", Type: gsnmp.Integer, Value: fdbStatusLearned},
+	}
+	// VLAN 30 PDUs — these must NOT be collected when MaxVlans=2.
+	vlan30PDUs := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.17.4.3.1.1.0.170.187.204.221.48", Type: gsnmp.OctetString, Value: mac30},
+		{Name: ".1.3.6.1.2.1.17.4.3.1.2.0.170.187.204.221.48", Type: gsnmp.Integer, Value: 1},
+		{Name: ".1.3.6.1.2.1.17.4.3.1.3.0.170.187.204.221.48", Type: gsnmp.Integer, Value: fdbStatusLearned},
+	}
+
+	communities := map[string][]gsnmp.SnmpPDU{
+		"public":    vlanTablePDUs,
+		"public@10": vlan10PDUs,
+		"public@20": vlan20PDUs,
+		"public@30": vlan30PDUs,
+	}
+	addr := snmptest.StartMultiCommunity(t, communities)
+	ip, port := snmptest.ParseAddr(addr)
+
+	// Open a client pointing at the agent.
+	mainClient, err := snmputil.Open(snmputil.Params{
+		IP:        ip,
+		Port:      port,
+		Community: "public",
+		Timeout:   3 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = mainClient.Conn.Close() }()
+
+	p := snmputil.Params{
+		IP:        ip,
+		Port:      port,
+		Community: "public",
+		Timeout:   3 * time.Second,
+	}
+	entries := make(map[string]*fdbEntry)
+	// MaxVlans=2: only VLANs 10 and 20 should be walked; VLAN 30 must be skipped.
+	walkVlanCommunityFdbs(context.Background(), p, mainClient, entries, 2)
+
+	// VLAN 10 and 20 entries should be present.
+	key10 := "0.170.187.204.221.16"
+	key20 := "0.170.187.204.221.32"
+	key30 := "0.170.187.204.221.48"
+
+	if _, ok := entries[key10]; !ok {
+		t.Errorf("expected VLAN 10 entry (key %q) to be present", key10)
+	}
+	if _, ok := entries[key20]; !ok {
+		t.Errorf("expected VLAN 20 entry (key %q) to be present", key20)
+	}
+	if _, ok := entries[key30]; ok {
+		t.Errorf("expected VLAN 30 entry (key %q) to be absent (MaxVlans=2)", key30)
+	}
+}
+
 // walkVlanCommunityFdbs: V3 session → early return (community-string indexing
 // is SNMPv2c-only).
 func TestWalkVlanCommunityFdbsV3Skip(t *testing.T) {
@@ -877,7 +956,7 @@ func TestWalkVlanCommunityFdbsV3Skip(t *testing.T) {
 	entries := make(map[string]*fdbEntry)
 	p := snmputil.Params{V3: true, Community: "public"}
 	// Should return without calling anything on client (which is dead).
-	walkVlanCommunityFdbs(context.Background(), p, client, entries)
+	walkVlanCommunityFdbs(context.Background(), p, client, entries, 100)
 }
 
 // walkVlanCommunityFdbs: per-VLAN snmputil.Open fails (nil IP) → continue
@@ -916,7 +995,7 @@ func TestWalkVlanCommunityFdbsOpenFails(t *testing.T) {
 	}
 	entries := make(map[string]*fdbEntry)
 	// Should not panic and should not add any entries.
-	walkVlanCommunityFdbs(context.Background(), p, realClient, entries)
+	walkVlanCommunityFdbs(context.Background(), p, realClient, entries, 100)
 }
 
 // ---------------------------------------------------------------------------

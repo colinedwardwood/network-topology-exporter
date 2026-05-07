@@ -3,7 +3,6 @@ package snmp
 import (
 	"context"
 	"net"
-	"strings"
 	"testing"
 	"time"
 
@@ -167,8 +166,10 @@ func TestWalkSystemGroup(t *testing.T) {
 	if dev.Vendor != "cisco" {
 		t.Errorf("Vendor = %q, want cisco", dev.Vendor)
 	}
-	if !strings.Contains(dev.OSVersion, "Cisco IOS") {
-		t.Errorf("OSVersion = %q, want to contain Cisco IOS", dev.OSVersion)
+	// normalizeSysDescr extracts the first version token from the sysDescr.
+	// "Cisco IOS 15.2" → "15.2"
+	if dev.OSVersion != "15.2" {
+		t.Errorf("OSVersion = %q, want 15.2 (normalized from sysDescr)", dev.OSVersion)
 	}
 	if dev.Uptime != time.Duration(100000)*10*time.Millisecond {
 		t.Errorf("Uptime = %v, want 1000s", dev.Uptime)
@@ -709,6 +710,63 @@ func TestParseCIDRsSkipsInvalid(t *testing.T) {
 	}
 	if nets[0].String() != "10.0.0.0/8" {
 		t.Errorf("nets[0] = %q, want 10.0.0.0/8", nets[0].String())
+	}
+}
+
+// TestNormalizeSysDescr verifies that normalizeSysDescr extracts the first
+// version-like token from a sysDescr string.
+func TestNormalizeSysDescr(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "Cisco IOS full string extracts first version",
+			input: "Cisco IOS Software, Version 15.2.4, RELEASE SOFTWARE (fc4)",
+			want:  "15.2.4",
+		},
+		{
+			name:  "empty string returns empty",
+			input: "",
+			want:  "",
+		},
+		{
+			name:  "string with no version truncated at 64 chars",
+			input: "Cisco Internetwork Operating System Software IOS (tm) C2950 Software",
+			want:  "Cisco Internetwork Operating System Software IOS (tm) C2950 Soft",
+		},
+		{
+			name:  "short string with no version returned as-is",
+			input: "no version here",
+			want:  "no version here",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := normalizeSysDescr(c.input)
+			if got != c.want {
+				t.Errorf("normalizeSysDescr(%q) = %q, want %q", c.input, got, c.want)
+			}
+		})
+	}
+}
+
+// TestBuildClientRetries verifies that Retries from Params propagates to GoSNMP.
+func TestBuildClientRetries(t *testing.T) {
+	p := Params{IP: net.ParseIP("10.0.0.1"), Retries: 3}
+	c := buildClient(p)
+	if c.Retries != 3 {
+		t.Errorf("Retries = %d, want 3", c.Retries)
+	}
+}
+
+// TestBuildClientRetriesDefault verifies that Retries=0 in Params defaults to 1.
+func TestBuildClientRetriesDefault(t *testing.T) {
+	p := Params{IP: net.ParseIP("10.0.0.1"), Retries: 0}
+	c := buildClient(p)
+	if c.Retries != 1 {
+		t.Errorf("Retries = %d, want 1 (default)", c.Retries)
 	}
 }
 

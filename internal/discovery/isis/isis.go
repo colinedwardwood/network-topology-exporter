@@ -41,8 +41,11 @@ import (
 const (
 	oidISISAdjState  = "1.3.6.1.2.1.138.1.6.1.1.2"
 	oidISISAdjIPAddr = "1.3.6.1.2.1.138.1.6.2.1.2"
-	precedenceRank   = 5
-	isisAdjStateUp   = 3
+	// precedenceRank 5: IS-IS ranked above OSPF (6) because it is more commonly
+	// the primary IGP on service-provider networks and carries richer TE data.
+	// Ladder: LLDP=2, CDP=3, FDB=4, IS-IS=5, OSPF=6, BGP=7, MPLS-TE=8.
+	precedenceRank = 5
+	isisAdjStateUp = 3
 )
 
 // Walk returns IS-IS adjacency edges for the device at p.IP. Only adjacencies
