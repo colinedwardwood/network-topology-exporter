@@ -2,9 +2,17 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -1834,5 +1842,128 @@ func TestResolveEdgeDstDevices(t *testing.T) {
 		if e.DstDevice != want[i] {
 			t.Errorf("edge[%d] DstDevice = %q, want %q", i, e.DstDevice, want[i])
 		}
+	}
+}
+
+// generateSelfSignedCert generates a self-signed ECDSA certificate valid for
+// localhost and writes cert.pem / key.pem into dir. Returns the paths.
+func generateSelfSignedCert(t *testing.T, dir string) (certFile, keyFile string) {
+	t.Helper()
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+
+	certFile = filepath.Join(dir, "cert.pem")
+	keyFile = filepath.Join(dir, "key.pem")
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	if err := os.WriteFile(certFile, certPEM, 0o600); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+
+	keyDER, err := x509.MarshalECPrivateKey(priv)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	if err := os.WriteFile(keyFile, keyPEM, 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	return certFile, keyFile
+}
+
+// TestRunTLSMetrics verifies that when listen.tls_cert_file and
+// listen.tls_key_file are configured, the /metrics endpoint is reachable over
+// HTTPS and returns HTTP 200.
+func TestRunTLSMetrics(t *testing.T) {
+	dir := t.TempDir()
+	certFile, keyFile := generateSelfSignedCert(t, dir)
+
+	// Pick a random free port for the TLS listener.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	listenAddr := ln.Addr().String()
+	_ = ln.Close()
+
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgContent := fmt.Sprintf(`
+discovery:
+  interval: 60s
+  timeout_per_device: 1s
+  parallelism: 1
+modules:
+  snmp:
+    enabled: false
+snapshot:
+  path: %s/snapshot.json
+listen:
+  addr: %s
+  tls_cert_file: %s
+  tls_key_file: %s
+`, dir, listenAddr, certFile, keyFile)
+	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() {
+		done <- run(ctx, []string{"--config.file=" + cfgPath})
+	}()
+
+	// Wait for the TLS server to become ready.
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+		},
+		Timeout: 5 * time.Second,
+	}
+	url := "https://" + listenAddr + "/metrics"
+	deadline := time.Now().Add(10 * time.Second)
+	var resp *http.Response
+	for time.Now().Before(deadline) {
+		resp, err = client.Get(url) //nolint:noctx
+		if err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err != nil {
+		cancel()
+		t.Fatalf("TLS /metrics not reachable within deadline: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	cancel()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /metrics over TLS: status = %d, want 200", resp.StatusCode)
+	}
+
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Errorf("run() exit code = %d, want 0", code)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run() did not return within 10s after cancel")
 	}
 }

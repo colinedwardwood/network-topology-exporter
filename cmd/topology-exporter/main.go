@@ -112,7 +112,6 @@ func run(ctx context.Context, args []string) int {
 		"commit", version.Commit,
 		"build_date", version.BuildDate,
 		"config", *configPath,
-		"listen", *listenAddr,
 	)
 
 	cfg, err := config.Load(*configPath)
@@ -147,8 +146,15 @@ func run(ctx context.Context, args []string) int {
 		_, _ = fmt.Fprintf(w, "topology-exporter %s\nendpoints: /metrics /healthz /readyz\n", version.Version)
 	})
 
+	// Prefer the config-file listen address; the CLI flag overrides only when
+	// the caller explicitly passes --web.listen-address (legacy / test compat).
+	effectiveAddr := cfg.Listen.Addr
+	if *listenAddr != ":9100" {
+		effectiveAddr = *listenAddr
+	}
+
 	srv := &http.Server{
-		Addr:              *listenAddr,
+		Addr:              effectiveAddr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -244,13 +250,23 @@ func run(ctx context.Context, args []string) int {
 
 	mux.HandleFunc("/readyz", newReadyzHandler(isReadyFn))
 
-	go func() {
-		logger.Info("http server listening", "addr", *listenAddr)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("http server error", "error", err)
-			cancel()
-		}
-	}()
+	if cfg.Listen.TLSCertFile != "" {
+		go func() {
+			logger.Info("metrics TLS server listening", "addr", effectiveAddr)
+			if err := srv.ListenAndServeTLS(cfg.Listen.TLSCertFile, cfg.Listen.TLSKeyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("metrics TLS server error", "error", err)
+				cancel()
+			}
+		}()
+	} else {
+		go func() {
+			logger.Info("metrics server listening", "addr", effectiveAddr)
+			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("metrics server error", "error", err)
+				cancel()
+			}
+		}()
+	}
 
 	<-ctx.Done()
 	logger.Info("shutdown signal received, draining")
