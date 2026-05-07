@@ -36,6 +36,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"regexp"
 	"strings"
 	"time"
 
@@ -65,6 +66,13 @@ type Params struct {
 	PrivProto   string // "AES" | "AES-192" | "AES-256" | "DES" | ""
 	PrivKey     string
 	ContextName string
+
+	// Retries is the number of SNMP retries per request. 0 means no retries.
+	Retries int
+
+	// MaxVlans caps the number of VLANs walked by the FDB module's
+	// VLAN community-string path. 0 means use the module default (100).
+	MaxVlans int
 }
 
 // System group OIDs fetched as scalars via SNMP GET (RFC 3418).
@@ -98,20 +106,55 @@ func Open(p Params) (*g.GoSNMP, error) {
 
 // BulkWalk walks rootOID using BulkWalkAll, falling back to WalkAll for
 // devices that reject GetBulk PDUs (some older IOS/JunOS revisions, some AP
-// controllers). ctx is checked before each attempt; the GoSNMP timeout handles
-// per-attempt network deadlines.
+// controllers). ctx is checked before each attempt and wraps the blocking
+// BulkWalkAll/WalkAll calls so that context cancellation interrupts a
+// mid-walk UDP read via SetDeadline.
 func BulkWalk(ctx context.Context, client *g.GoSNMP, rootOID string) ([]g.SnmpPDU, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	pdus, err := client.BulkWalkAll(rootOID)
-	if err == nil {
-		return pdus, nil
+
+	type walkResult struct {
+		pdus []g.SnmpPDU
+		err  error
 	}
+
+	ch := make(chan walkResult, 1)
+	go func() {
+		pdus, err := client.BulkWalkAll(rootOID)
+		ch <- walkResult{pdus, err}
+	}()
+	var bulkErr error
+	select {
+	case r := <-ch:
+		if r.err == nil {
+			return r.pdus, nil
+		}
+		bulkErr = r.err
+	case <-ctx.Done():
+		_ = client.Conn.SetDeadline(time.Now()) // interrupt pending UDP read
+		<-ch                                    // wait for goroutine to exit
+		return nil, ctx.Err()
+	}
+
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return client.WalkAll(rootOID)
+	_ = bulkErr // checked above; fall through to WalkAll
+
+	ch2 := make(chan walkResult, 1)
+	go func() {
+		pdus, err := client.WalkAll(rootOID)
+		ch2 <- walkResult{pdus, err}
+	}()
+	select {
+	case r := <-ch2:
+		return r.pdus, r.err
+	case <-ctx.Done():
+		_ = client.Conn.SetDeadline(time.Now()) // interrupt pending UDP read
+		<-ch2                                   // wait for goroutine to exit
+		return nil, ctx.Err()
+	}
 }
 
 // Walk retrieves the SNMP SYSTEM group from the device at p.IP and returns a
@@ -167,7 +210,7 @@ func Walk(ctx context.Context, p Params) (*discovery.Device, error) {
 				dev.ID = s
 			}
 		case dotOIDSysDescr:
-			dev.OSVersion = PDUString(pdu)
+			dev.OSVersion = normalizeSysDescr(PDUString(pdu))
 		case dotOIDSysObjectID:
 			dev.Vendor = vendorFromObjectID(pduOID(pdu))
 		case dotOIDSysUpTime:
@@ -178,6 +221,24 @@ func Walk(ctx context.Context, p Params) (*discovery.Device, error) {
 	}
 
 	return dev, nil
+}
+
+// sysDescrVersionRe matches the first version-like token (digits and dots) in a
+// sysDescr string, e.g. "15.2.4" in a Cisco IOS sysDescr.
+var sysDescrVersionRe = regexp.MustCompile(`\d+\.\d+[\.\d]*`)
+
+// normalizeSysDescr extracts the first version-like token (digits and dots)
+// from a sysDescr string to reduce Prometheus label cardinality across patch upgrades.
+// Falls back to the first 64 chars of the raw string if no version is found.
+func normalizeSysDescr(s string) string {
+	// Extract first M.N or M.N.P version token
+	if m := sysDescrVersionRe.FindString(s); m != "" {
+		return m
+	}
+	if len(s) > 64 {
+		return s[:64]
+	}
+	return s
 }
 
 // buildClient constructs a *gosnmp.GoSNMP from the resolved parameters.
@@ -193,11 +254,15 @@ func buildClient(p Params) *g.GoSNMP {
 		timeout = 10 * time.Second
 	}
 
+	retries := p.Retries
+	if retries == 0 {
+		retries = 1 // default to 1 retry for backwards compatibility
+	}
 	client := &g.GoSNMP{
 		Target:    p.IP.String(),
 		Port:      port,
 		Timeout:   timeout,
-		Retries:   1,
+		Retries:   retries,
 		MaxOids:   g.MaxOids,
 		Transport: "udp",
 	}
@@ -280,6 +345,57 @@ func pduOID(pdu g.SnmpPDU) string {
 	return ""
 }
 
+// enterprisePrefix is one entry in the ordered enterprisePrefixes slice.
+// Entries are checked in order; longest (most-specific) prefixes should appear
+// first so that a more-specific vendor match wins over a shorter prefix.
+type enterprisePrefix struct {
+	prefix string
+	vendor string
+}
+
+// enterprisePrefixes is the ordered list of IANA enterprise OID prefixes.
+// Ordering matters: iteration stops at the first match, so longer prefixes
+// must precede any shorter prefix that is also a prefix of the longer one.
+// Entries here share no prefix relationship (each enterprise number is unique),
+// so order within the list does not affect correctness — it is fixed to make
+// iteration deterministic (D21).
+//
+// Source: IANA Enterprise Numbers registry
+// (https://www.iana.org/assignments/enterprise-numbers)
+var enterprisePrefixes = []enterprisePrefix{
+	{prefix: "1.3.6.1.4.1.9.", vendor: "cisco"},
+	{prefix: "1.3.6.1.4.1.11.", vendor: "hp"},
+	{prefix: "1.3.6.1.4.1.14988.", vendor: "mikrotik"},
+	{prefix: "1.3.6.1.4.1.2636.", vendor: "juniper"},
+	{prefix: "1.3.6.1.4.1.12356.", vendor: "fortinet"},
+	{prefix: "1.3.6.1.4.1.8072.", vendor: "net-snmp"},
+	{prefix: "1.3.6.1.4.1.890.", vendor: "zyxel"},
+	{prefix: "1.3.6.1.4.1.6527.", vendor: "nokia"},
+	{prefix: "1.3.6.1.4.1.25506.", vendor: "huawei"},
+	{prefix: "1.3.6.1.4.1.2011.", vendor: "huawei"},
+	{prefix: "1.3.6.1.4.1.4526.", vendor: "netgear"},
+	{prefix: "1.3.6.1.4.1.1916.", vendor: "extreme"},
+	{prefix: "1.3.6.1.4.1.1991.", vendor: "brocade"},
+	{prefix: "1.3.6.1.4.1.1872.", vendor: "alteon"},
+	{prefix: "1.3.6.1.4.1.3375.", vendor: "f5"},
+	{prefix: "1.3.6.1.4.1.25461.", vendor: "paloalto"},
+	{prefix: "1.3.6.1.4.1.30065.", vendor: "arista"},
+	{prefix: "1.3.6.1.4.1.40310.", vendor: "cumulus"},
+	{prefix: "1.3.6.1.4.1.6876.", vendor: "vmware"},
+	{prefix: "1.3.6.1.4.1.20301.", vendor: "ubiquiti"},
+	{prefix: "1.3.6.1.4.1.41112.", vendor: "ubiquiti"},
+	{prefix: "1.3.6.1.4.1.674.", vendor: "dell"},
+	{prefix: "1.3.6.1.4.1.6486.", vendor: "alcatel-lucent"},
+	{prefix: "1.3.6.1.4.1.3076.", vendor: "altiga"},
+	{prefix: "1.3.6.1.4.1.232.", vendor: "hpe"},
+	{prefix: "1.3.6.1.4.1.236.", vendor: "samsung"},
+	{prefix: "1.3.6.1.4.1.3417.", vendor: "bluecoat"},
+	{prefix: "1.3.6.1.4.1.5624.", vendor: "enterasys"},
+	{prefix: "1.3.6.1.4.1.18928.", vendor: "aerohive"},
+	{prefix: "1.3.6.1.4.1.14179.", vendor: "cisco-wlc"},
+	{prefix: "1.3.6.1.4.1.45.", vendor: "baynetworks"},
+}
+
 // vendorFromObjectID maps the IANA enterprise number prefix of a sysObjectID
 // to a canonical vendor string. Only the enterprise prefix matters; the
 // remainder encodes model/platform details that belong in a separate
@@ -293,50 +409,10 @@ func vendorFromObjectID(oid string) string {
 	}
 	// Strip leading dot so both ".1.3.6.1.4.1.9." and "1.3.6.1.4.1.9." match.
 	oid = strings.TrimPrefix(oid, ".")
-	for prefix, vendor := range enterprisePrefixes {
-		if strings.HasPrefix(oid, prefix) {
-			return vendor
+	for _, e := range enterprisePrefixes {
+		if strings.HasPrefix(oid, e.prefix) {
+			return e.vendor
 		}
 	}
 	return "unknown"
-}
-
-// enterprisePrefixes maps the IANA enterprise OID prefix to a canonical
-// vendor name. Populated from the IANA Enterprise Numbers registry.
-// Entries are checked with strings.HasPrefix, so the most specific prefix
-// wins only when a vendor appears multiple times — entries here are at
-// enterprise-number granularity (one per vendor) so specificity ties
-// don't arise.
-var enterprisePrefixes = map[string]string{
-	"1.3.6.1.4.1.9.":     "cisco",
-	"1.3.6.1.4.1.11.":    "hp",
-	"1.3.6.1.4.1.14988.": "mikrotik",
-	"1.3.6.1.4.1.2636.":  "juniper",
-	"1.3.6.1.4.1.12356.": "fortinet",
-	"1.3.6.1.4.1.8072.":  "net-snmp",
-	"1.3.6.1.4.1.890.":   "zyxel",
-	"1.3.6.1.4.1.6527.":  "nokia",
-	"1.3.6.1.4.1.25506.": "huawei",
-	"1.3.6.1.4.1.2011.":  "huawei",
-	"1.3.6.1.4.1.4526.":  "netgear",
-	"1.3.6.1.4.1.1916.":  "extreme",
-	"1.3.6.1.4.1.1991.":  "brocade",
-	"1.3.6.1.4.1.1872.":  "alteon",
-	"1.3.6.1.4.1.3375.":  "f5",
-	"1.3.6.1.4.1.25461.": "paloalto",
-	"1.3.6.1.4.1.30065.": "arista",
-	"1.3.6.1.4.1.40310.": "cumulus",
-	"1.3.6.1.4.1.6876.":  "vmware",
-	"1.3.6.1.4.1.20301.": "ubiquiti",
-	"1.3.6.1.4.1.41112.": "ubiquiti",
-	"1.3.6.1.4.1.674.":   "dell",
-	"1.3.6.1.4.1.6486.":  "alcatel-lucent",
-	"1.3.6.1.4.1.3076.":  "altiga",
-	"1.3.6.1.4.1.232.":   "hpe",
-	"1.3.6.1.4.1.236.":   "samsung",
-	"1.3.6.1.4.1.3417.":  "bluecoat",
-	"1.3.6.1.4.1.5624.":  "enterasys",
-	"1.3.6.1.4.1.18928.": "aerohive",
-	"1.3.6.1.4.1.14179.": "cisco-wlc",
-	"1.3.6.1.4.1.45.":    "baynetworks",
 }

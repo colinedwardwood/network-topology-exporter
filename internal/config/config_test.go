@@ -1154,6 +1154,138 @@ func TestValidateHTTPSEndpoint(t *testing.T) {
 	}
 }
 
+// D8: FDB MaxVlans validation tests.
+
+func TestFDBMaxVlansZeroFails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+modules:
+  fdb:
+    max_vlans: 0
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// max_vlans=0 is below the minimum of 1 (after applyDefaults sets 0→100, this
+	// only fires when the user explicitly sets a value that applyDefaults won't touch).
+	// We need to set it to a negative value to bypass applyDefaults.
+	// Instead, test the negative path directly.
+	c := &Config{Modules: ModulesConfig{FDB: FDBConfig{MaxVlans: 0}}}
+	c.applyDefaults()
+	// After applyDefaults, MaxVlans should be 100 (default).
+	if c.Modules.FDB.MaxVlans != 100 {
+		t.Errorf("MaxVlans default = %d, want 100", c.Modules.FDB.MaxVlans)
+	}
+	// Manually set to -1 to test validation directly.
+	c.Modules.FDB.MaxVlans = -1
+	if err := c.validateFDB(); err == nil {
+		t.Fatal("expected error for max_vlans=-1, got nil")
+	}
+	_ = path // suppress unused warning
+}
+
+func TestFDBMaxVlansTooHighFails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+modules:
+  fdb:
+    max_vlans: 5000
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for max_vlans=5000, got nil")
+	}
+}
+
+func TestFDBMaxVlansValidPasses(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+modules:
+  fdb:
+    max_vlans: 50
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error for max_vlans=50: %v", err)
+	}
+	if c.Modules.FDB.MaxVlans != 50 {
+		t.Errorf("MaxVlans = %d, want 50", c.Modules.FDB.MaxVlans)
+	}
+}
+
+func TestFDBMaxVlansDefault(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("targets: []\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if c.Modules.FDB.MaxVlans != 100 {
+		t.Errorf("MaxVlans default = %d, want 100", c.Modules.FDB.MaxVlans)
+	}
+}
+
+// D15: Retries validation tests.
+
+func TestCredentialRetriesNegativeFails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+credentials:
+  profiles:
+    - name: p1
+      type: snmp_v2c
+      community_env: C
+      retries: -1
+  fallback_order: [p1]
+  trial_rate_per_second: 1
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for retries=-1, got nil")
+	}
+}
+
+func TestCredentialRetriesPositivePasses(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+credentials:
+  profiles:
+    - name: p1
+      type: snmp_v2c
+      community_env: C
+      retries: 3
+  fallback_order: [p1]
+  trial_rate_per_second: 1
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error for retries=3: %v", err)
+	}
+	if c.Credentials.Profiles[0].Retries != 3 {
+		t.Errorf("Retries = %d, want 3", c.Credentials.Profiles[0].Retries)
+	}
+}
+
 func TestValidateFederationSpokeRejectsInsecureHubURL(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

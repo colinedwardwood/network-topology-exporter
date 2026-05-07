@@ -576,6 +576,10 @@ func runCycle(
 			var allEdges []discovery.Edge
 			var allOOS []discovery.OutOfScopeNeighbour
 
+			// Propagate FDB-specific tuning into params. MaxVlans is only
+			// consumed by fdb.Walk; other modules ignore it.
+			params.MaxVlans = cfg.Modules.FDB.MaxVlans
+
 			mods := []module{
 				{"lldp", cfg.Modules.LLDP.Enabled, lldp.Walk},
 				{"cdp", cfg.Modules.CDP.Enabled, cdp.Walk},
@@ -760,9 +764,11 @@ func walkSystemWithCredentials(ctx context.Context, cfg *config.Config, resolver
 
 func profileToParams(ip net.IP, port uint16, timeout time.Duration, p config.CredentialProfile) (snmpwalk.Params, error) {
 	params := snmpwalk.Params{
-		IP:      ip,
-		Port:    port,
-		Timeout: timeout,
+		IP:          ip,
+		Port:        port,
+		Timeout:     timeout,
+		Retries:     p.Retries,
+		ContextName: p.ContextName,
 	}
 	switch p.Type {
 	case config.ProfileTypeSNMPv2c:

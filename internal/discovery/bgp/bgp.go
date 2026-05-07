@@ -56,7 +56,9 @@ import (
 
 const (
 	oidBgpPeerTable = "1.3.6.1.2.1.15.3"
-	precedenceRank  = 6
+	// precedenceRank 7: ranked below OSPF (6) and IS-IS (5).
+	// Ladder: LLDP=2, CDP=3, FDB=4, IS-IS=5, OSPF=6, BGP=7, MPLS-TE=8.
+	precedenceRank = 7
 )
 
 // bgpPeerTable column numbers (RFC 1657 §3.4).

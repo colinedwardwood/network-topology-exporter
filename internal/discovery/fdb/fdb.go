@@ -73,6 +73,7 @@ package fdb
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"sort"
 	"strconv"
@@ -138,7 +139,11 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, _ []*net.I
 	// Q-BRIDGE walk failures are non-fatal: devices that implement only B-MIB
 	// return an empty result or a no-such-object error, both of which are fine.
 	_ = walkQBridgeFdbTable(ctx, client, entries)
-	walkVlanCommunityFdbs(ctx, p, client, entries)
+	maxVlans := p.MaxVlans
+	if maxVlans <= 0 {
+		maxVlans = 100 // default when not set by caller
+	}
+	walkVlanCommunityFdbs(ctx, p, client, entries, maxVlans)
 	bridgePorts, err := walkBasePortTable(ctx, client)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fdb baseport %s: %w", p.IP, err)
@@ -298,21 +303,28 @@ func discoverVlanIDs(ctx context.Context, client *gsnmp.GoSNMP) []int {
 // These devices maintain one BRIDGE-MIB instance per VLAN and expose it only
 // through community-string indexing; Q-BRIDGE is not available on IOS 12.x/15.x.
 // Entries already present in the map (from B-MIB or Q-BRIDGE) are not overwritten.
-func walkVlanCommunityFdbs(ctx context.Context, p snmputil.Params, client *gsnmp.GoSNMP, entries map[string]*fdbEntry) {
+// maxVlans caps the number of VLANs iterated; if the discovered VLAN list is
+// longer, a warning is logged and the remaining VLANs are skipped.
+func walkVlanCommunityFdbs(ctx context.Context, p snmputil.Params, client *gsnmp.GoSNMP, entries map[string]*fdbEntry, maxVlans int) {
 	if p.V3 || p.Community == "" {
 		return
 	}
 	vlanIDs := discoverVlanIDs(ctx, client)
+	if len(vlanIDs) > maxVlans {
+		slog.WarnContext(ctx, "fdb: VLAN community walk truncated at max_vlans limit; increase fdb.max_vlans to see all VLANs",
+			"discovered", len(vlanIDs), "max_vlans", maxVlans)
+		vlanIDs = vlanIDs[:maxVlans]
+	}
 	for _, vlanID := range vlanIDs {
 		vp := p
 		vp.Community = fmt.Sprintf("%s@%d", p.Community, vlanID)
-		client, err := snmputil.Open(vp)
+		vlanClient, err := snmputil.Open(vp)
 		if err != nil {
 			continue
 		}
 		vlanEntries := make(map[string]*fdbEntry)
-		_ = walkFdbTableInto(ctx, client, vlanEntries)
-		_ = client.Conn.Close()
+		_ = walkFdbTableInto(ctx, vlanClient, vlanEntries)
+		_ = vlanClient.Conn.Close()
 		for key, e := range vlanEntries {
 			if _, exists := entries[key]; !exists {
 				entries[key] = e

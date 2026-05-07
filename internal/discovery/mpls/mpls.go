@@ -38,9 +38,10 @@ import (
 const (
 	oidMplsTunnelOperStatus = "1.3.6.1.2.1.10.166.3.2.2.1.17"
 	mplsTunnelOperUp        = 1
-	// Rank ladder: LLDP/CDP=1-2, OSPF=5, BGP=6, MPLS-TE=7, IS-IS=8.
+	// precedenceRank 8: lowest priority in the graph merge ladder.
+	// Ladder: LLDP=2, CDP=3, FDB=4, IS-IS=5, OSPF=6, BGP=7, MPLS-TE=8.
 	// Higher rank = lower precedence in graph merge.
-	precedenceRank = 7
+	precedenceRank = 8
 )
 
 // Walk returns MPLS-TE tunnel edges for the device at p.IP. Only tunnels with

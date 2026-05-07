@@ -48,7 +48,10 @@ import (
 
 const (
 	oidOspfNbrTable = "1.3.6.1.2.1.14.10"
-	precedenceRank  = 5
+	// precedenceRank 6: ranked above IS-IS (5) is intentional — IS-IS is the
+	// primary IGP on service-provider networks and carries richer TE data.
+	// Ladder: LLDP=2, CDP=3, FDB=4, IS-IS=5, OSPF=6, BGP=7, MPLS-TE=8.
+	precedenceRank = 6
 )
 
 // ospfNbrTable column numbers (RFC 4750 §11.2).
