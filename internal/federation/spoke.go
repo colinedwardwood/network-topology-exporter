@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
@@ -21,10 +23,11 @@ import (
 // per LD-20: the spoke presents a client certificate; the hub verifies it
 // against its configured CA before accepting the payload.
 type Spoke struct {
-	cfg    config.FederationConfig
-	client *http.Client
-	logger *slog.Logger
-	m      *metrics.Metrics
+	cfg     config.FederationConfig
+	client  *http.Client
+	logger  *slog.Logger
+	m       *metrics.Metrics
+	pushURL string
 }
 
 // NewSpoke constructs a Spoke with an mTLS-capable HTTP client. Returns an
@@ -47,14 +50,19 @@ func NewSpoke(cfg config.FederationConfig, logger *slog.Logger, m *metrics.Metri
 		Certificates: []tls.Certificate{clientCert},
 		MinVersion:   tls.VersionTLS13,
 	}
+	pushURL, err := buildSpokeURL(cfg.Spoke.HubURL)
+	if err != nil {
+		return nil, fmt.Errorf("spoke: %w", err)
+	}
 	return &Spoke{
 		cfg: cfg,
 		client: &http.Client{
 			Transport: &http.Transport{TLSClientConfig: tlsCfg},
 			Timeout:   30 * time.Second,
 		},
-		logger: logger,
-		m:      m,
+		logger:  logger,
+		m:       m,
+		pushURL: pushURL,
 	}, nil
 }
 
@@ -100,9 +108,21 @@ func (s *Spoke) Push(ctx context.Context, payload SpokePayload) error {
 	return fmt.Errorf("spoke: push failed after %d attempts: %w", maxAttempts, err)
 }
 
+// buildSpokeURL joins baseURL with the /spoke/push path using net/url so that
+// trailing slashes and path prefixes are handled correctly.
+func buildSpokeURL(baseURL string) (string, error) {
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("parse hub URL: %w", err)
+	}
+	if !strings.HasSuffix(base.Path, "/") {
+		base.Path += "/"
+	}
+	return base.ResolveReference(&url.URL{Path: "spoke/push"}).String(), nil
+}
+
 func (s *Spoke) post(ctx context.Context, body []byte) error {
-	url := s.cfg.Spoke.HubURL + "/spoke/push"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.pushURL, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

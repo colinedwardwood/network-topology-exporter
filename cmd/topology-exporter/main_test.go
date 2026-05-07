@@ -1703,6 +1703,32 @@ func TestWalkSystemWithCredentialsAllTimeout(t *testing.T) {
 	}
 }
 
+// TestOtlpPushDropsWhenSemaphoreFull verifies that otlpPush increments the
+// dropped counter and returns immediately when the semaphore is full.
+func TestOtlpPushDropsWhenSemaphoreFull(t *testing.T) {
+	// Fill the semaphore to capacity.
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{} // occupy the only slot
+
+	dropped := make(chan struct{}, 1)
+	lc := loopConfig{
+		logger:  slog.Default(),
+		m:       metrics.New(false),
+		otlpSem: sem,
+	}
+
+	ctx := context.Background()
+	lc.otlpPush(ctx, func(_ context.Context) error {
+		return nil
+	}, "should not be called")
+
+	// otlpPush should have incremented the dropped counter and returned immediately.
+	if got := testutil.ToFloat64(lc.m.OTLPPushTotal.WithLabelValues("dropped")); got != 1 {
+		t.Errorf("OTLPPushTotal{dropped} = %v, want 1", got)
+	}
+	_ = dropped
+}
+
 // TestWalkSystemWithCredentialsNonTimeoutFailure verifies that when the parent
 // context is already cancelled, AcquireTrial returns context.Canceled and
 // walkSystemWithCredentials propagates that error immediately.

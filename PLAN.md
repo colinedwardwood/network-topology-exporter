@@ -1,107 +1,61 @@
-# v1.1 Execution Plan
+# v1.1 Remediation Plan
 
-## Status: READY TO TAG
+## Objective
 
-All 12 workstreams complete. Full test suite (`go test -race -count=1 ./...`) green.
-`golangci-lint` and `helm lint` remain to run before tagging.
+Close all currently identified production-readiness gaps from adversarial reviews and ship `v1.1.0` with explicit security, correctness, and release-gate evidence.
 
-`v1.0.0` shipped 2026-05-07. IS-IS, MPLS-TE, and OTLP output landed post-tag.
-Adversarial review findings fully remediated in commit `10c1920` (2026-05-07).
+## Rules for This Plan
 
----
+- Track only unresolved work (no historical "done" sections).
+- Every deficiency must map to code changes, tests, and a verification command.
+- No item is considered complete until its acceptance criteria are met.
 
-## Workstream 1 — IS-IS adjKey Bug — DONE
+## Deficiency Register
 
-- [x] Replaced `strings.LastIndex` with tail-count split in `internal/discovery/isis/isis.go`.
-- [x] Unit tests: normal case (adjIdx=1, IP 10.0.0.1) and ambiguous case (adjIdx=4, IP 1.4.5.6).
+### D4 - Release gate incomplete
 
----
+Risk:
+- Lint/Helm/release-path regressions can ship despite green unit tests.
 
-## Workstream 2 — OTLP TCP Connection Churn — DONE
+Required remediation:
+- Run and record all required pre-tag checks.
+- Block tag creation until all gates pass.
 
-- [x] `io.Copy(io.Discard, resp.Body)` before `Close()` in `post()`.
-- [x] Connection-reuse test added in `otlp_test.go`.
+Acceptance criteria:
+- All release gate commands pass in CI or locally with captured evidence.
 
----
+## Work Plan
 
-## Workstream 3 — OTLP Write Amplification — DONE
+## Workstream 4 - Release Gate Completion (D4)
 
-- [x] `HeartbeatCycles int` added to `OTLPOutputConfig` (default 10).
-- [x] Cycle counter in `runDiscoveryLoop`; `PushGraph` only on changes or heartbeat.
-- [x] `PushChanges` fires only when `len(changes) > 0`.
+- [x] `go test -race -count=1 ./...` — PASS (2026-05-07)
+- [x] `golangci-lint run ./...` — 0 issues (2026-05-07)
+- [x] `helm lint deploy/helm/topology-exporter/` — 0 failures (2026-05-07)
+- [ ] `go test ./tests/integration/... -tags integration`
+- [ ] `make e2e-image && CLAB_DOCKER=1 make test-e2e`
 
----
+## Verification Matrix
 
-## Workstream 4 — OTLP Context Leak on Shutdown — DONE
+- Security:
+  - [x] Spoke config rejects insecure transport. (D1 — `validateHTTPSEndpoint`)
+  - [x] Spoke push endpoint path generation is deterministic. (D2 — `buildSpokeURL`)
+- Correctness:
+  - [x] Existing federation and OTLP behavior remains backward-compatible where intended.
+- Performance:
+  - [x] OTLP push path remains bounded under churn. (D3 — semaphore + dropped counter)
+- Operability:
+  - [x] New failure modes are observable via metrics/logs and documented.
 
-- [x] OTLP goroutines use loop `ctx` instead of `context.Background()`.
+## Exit Criteria (Ship Blockers)
 
----
+- [x] D1-D3 closed with merged tests.
+- [ ] D4 release gates fully pass (integration + e2e pending environment).
+- [ ] No open HIGH severity adversarial findings.
+- [ ] Release gate commands pass.
+- [ ] Changelog/docs updated to reflect enforcement and behavior changes.
 
-## Workstream 5 — MPLS-TE Precedence Rank — DONE
+## Deferred (Post-v1.1)
 
-- [x] `precedenceRank` changed from 4 to 7 in `internal/discovery/mpls/mpls.go`.
-- [x] Rank-ladder comment added to constants block.
-
----
-
-## Workstream 6 — Shared pduIP Helper — DONE
-
-- [x] `PDUIPv4` added to `internal/discovery/snmp/pdu.go`.
-- [x] `pduIP` removed from `bgp.go` and `isis.go`; callers updated.
-
----
-
-## Workstream 7 — OTLP Quality Fixes — DONE
-
-- [x] `serviceRes` package-level var replaces `serviceResource()` function.
-- [x] WHAT comments removed from `PushGraph`.
-- [x] All `// ──` section dividers removed.
-
----
-
-## Workstream 8 — MPLS-TE Quality Fixes — DONE
-
-- [x] `DstPort: ""` removed from edge literal.
-- [x] `parts[0]` validated with `strconv.Atoi`; SrcPort uses `%d` format.
-
----
-
-## Workstream 9 — OTLP Push Health Metric — DONE
-
-- [x] `network_topology_otlp_push_total{status}` counter added to `Metrics`.
-- [x] Incremented on every `PushGraph` and `PushChanges` outcome.
-- [x] Documented in README metrics table.
-
----
-
-## Workstream 10 — OTLP Endpoint Validation / SSRF — DONE
-
-- [x] `validateOTLPEndpoint` added to `config.go`; enforces `http`/`https` scheme and non-empty host.
-- [x] Tests: `file://`, `ftp://`, empty string all fail; `http://` and `https://` pass.
-
----
-
-## Workstream 11 — runDiscoveryLoop Refactor — DONE
-
-- [x] `loopConfig` struct defined; `runDiscoveryLoop` reduced to 2 params.
-- [x] All 7 test call sites updated.
-
----
-
-## Workstream 12 — Documentation — DONE
-
-- [x] IS-IS and MPLS-TE module sections added to `README.md`.
-- [x] OTLP output section with Alloy snippet added to `README.md`.
-- [x] `docs/metrics.md` updated with new modules and `network_topology_otlp_push_total`.
-- [x] `docs/operator/troubleshooting.md` updated with OTLP scrape-collision guidance.
-
----
-
-## Release Gate — v1.1.0
-
-- [x] `go test -race -count=1 ./...` — green
-- [ ] `golangci-lint run ./...`
-- [ ] `helm lint deploy/helm/topology-exporter/`
-- [ ] Tag `v1.1.0`, verify CI publishes container image and release binaries.
-- [ ] Update companion repo `network-o11y-dev` to `tag: v1.1.0`.
+- IS-IS feature expansion beyond current scope.
+- MPLS-TE/SR-TE modeling enhancements.
+- Additional OTLP payload schema/versioning work.

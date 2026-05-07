@@ -328,6 +328,23 @@ func validateHTTPEndpoint(endpoint string) error {
 	return nil
 }
 
+func validateHTTPSEndpoint(endpoint string) error {
+	if endpoint == "" {
+		return errors.New("endpoint is required")
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("scheme must be https, got %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return errors.New("host is required")
+	}
+	return nil
+}
+
 // validateScope enforces LD-11: the allow-list is mandatory, every entry
 // must parse as a CIDR, and every target host must resolve into one of the
 // allow-list networks.
@@ -474,7 +491,7 @@ func (c *Config) validateFederation() error {
 		if c.Federation.Spoke.SpokeID == "" {
 			return errors.New("federation.spoke.spoke_id is required for spoke role")
 		}
-		if err := validateHTTPEndpoint(c.Federation.Spoke.HubURL); err != nil {
+		if err := validateHTTPSEndpoint(c.Federation.Spoke.HubURL); err != nil {
 			return fmt.Errorf("federation.spoke.hub_url: %w", err)
 		}
 		if c.Federation.Spoke.TLSCACert == "" || c.Federation.Spoke.TLSCert == "" || c.Federation.Spoke.TLSKey == "" {

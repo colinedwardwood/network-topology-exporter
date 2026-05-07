@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -1127,5 +1128,53 @@ output:
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for OTLP enabled with ftp:// endpoint, got nil")
+	}
+}
+
+func TestValidateHTTPSEndpoint(t *testing.T) {
+	invalid := []string{
+		"",
+		"http://hub:9101",
+		"ftp://hub:9101",
+		"://no-scheme",
+	}
+	for _, tc := range invalid {
+		if err := validateHTTPSEndpoint(tc); err == nil {
+			t.Errorf("validateHTTPSEndpoint(%q) = nil, want error", tc)
+		}
+	}
+	valid := []string{
+		"https://hub:9101",
+		"https://hub.example.com:9101",
+	}
+	for _, tc := range valid {
+		if err := validateHTTPSEndpoint(tc); err != nil {
+			t.Errorf("validateHTTPSEndpoint(%q) = %v, want nil", tc, err)
+		}
+	}
+}
+
+func TestValidateFederationSpokeRejectsInsecureHubURL(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+federation:
+  role: spoke
+  spoke:
+    spoke_id: dc-a
+    hub_url: http://hub:9101
+    tls_ca_cert: /nonexistent/ca.pem
+    tls_cert: /nonexistent/spoke.crt
+    tls_key: /nonexistent/spoke.key
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for http:// spoke hub_url, got nil")
+	}
+	if !strings.Contains(err.Error(), "https") {
+		t.Errorf("error %q should mention https", err.Error())
 	}
 }

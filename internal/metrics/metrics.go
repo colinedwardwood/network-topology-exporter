@@ -113,8 +113,8 @@ func New(emitBoundaryObs bool) *Metrics {
 		}, []string{"status"}), // ok | failed
 		OTLPPushTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "network_topology_otlp_push_total",
-			Help: "OTLP push attempts by outcome. Alert on error rate > 0.",
-		}, []string{"status"}), // ok | error
+			Help: "OTLP push attempts by outcome (ok, error, dropped). Alert on error or dropped rate > 0.",
+		}, []string{"status"}),
 		FederationSpokeUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "network_topology_federation_spoke_up",
 			Help: "LD-18 hub mode: 1 while a spoke is active (pushed within federation.spoke_timeout), 0 after eviction.",
