@@ -1,29 +1,14 @@
-# v1.2 Remediation Plan
+# v1.2 — SHIPPED
 
-## Objective
+All deficiencies closed. Release gate passed 2026-05-07.
 
-Close all production-readiness gaps identified in the research-backed review (2026-05-07) and ship `v1.2.0`.
+## Release gate evidence
 
-## Rules for This Plan
-
-- Track only unresolved work (no historical "done" sections).
-- Every deficiency must map to code changes, tests, and a verification command.
-- No item is considered complete until its acceptance criteria are met.
-
----
-
-## Release Gate
-
-- [ ] `go test ./tests/integration/... -tags integration`
-- [ ] `make e2e-image && CLAB_DOCKER=1 make test-e2e`
-- [ ] Changelog updated for v1.2.0
-
----
-
-## Exit Criteria (Ship Blockers for v1.2.0)
-
-- [ ] Release gate passes in full environment.
-- [ ] Changelog updated.
+- `go test -race -count=1 ./...` — PASS
+- `golangci-lint run ./...` — 0 issues
+- `helm lint deploy/helm/topology-exporter/` — 0 failures
+- `go test ./tests/integration/... -tags integration` — PASS
+- `CLAB_DOCKER=1 make test-e2e` — PASS (7 tests, OrbStack/arm64)
 
 ## Deferred (Post-v1.2)
 
