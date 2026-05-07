@@ -9,18 +9,53 @@ import (
 	g "github.com/gosnmp/gosnmp"
 )
 
-// oidIfNameTable is the IF-MIB ifXTable.ifName column (RFC 2863 §3.1.4).
-const oidIfNameTable = "1.3.6.1.2.1.31.1.1.1.1"
+const (
+	// oidIfNameTable is the IF-MIB ifXTable.ifName column (RFC 2863 §3.1.4).
+	oidIfNameTable = "1.3.6.1.2.1.31.1.1.1.1"
+	// OIDIfDescr is the IF-MIB ifTable.ifDescr column (RFC 2863 §3.1.2).
+	// Older devices that lack the ifXTable ifName column use this OID instead.
+	OIDIfDescr = "1.3.6.1.2.1.2.2.1.2"
+)
 
-// WalkIfNames walks the IF-MIB ifXTable.ifName column (RFC 2863) and returns
-// a map of ifIndex → ifName. Multiple discovery modules (CDP, FDB) require
-// this mapping to translate bridge/CDP port numbers to human-readable names.
-func WalkIfNames(ctx context.Context, client *g.GoSNMP) (map[int]string, error) {
-	pdus, err := BulkWalk(ctx, client, oidIfNameTable)
+// WalkToIntMap walks oid and returns a map from OID suffix to integer value.
+// The suffix is the instance index portion of the OID (everything after the
+// column prefix). Returns nil on walk error.
+func WalkToIntMap(ctx context.Context, client *g.GoSNMP, oid string) (map[string]int, error) {
+	pdus, err := BulkWalk(ctx, client, oid)
 	if err != nil {
 		return nil, err
 	}
-	const prefix = "." + oidIfNameTable + "."
+	prefix := "." + oid + "."
+	result := make(map[string]int, len(pdus))
+	for _, pdu := range pdus {
+		key, ok := TrimOIDPrefix(pdu.Name, prefix)
+		if !ok {
+			continue
+		}
+		result[key] = PDUInt(pdu)
+	}
+	return result, nil
+}
+
+// WalkIfNames walks the IF-MIB ifXTable.ifName column (RFC 2863 §3.1.4) and
+// returns a map of ifIndex → ifName. Multiple discovery modules (CDP, FDB)
+// require this mapping to translate bridge/CDP port numbers to interface names.
+func WalkIfNames(ctx context.Context, client *g.GoSNMP) (map[int]string, error) {
+	return walkIntIndexedStrings(ctx, client, oidIfNameTable)
+}
+
+// WalkIfDescr walks the IF-MIB ifTable.ifDescr column (RFC 2863 §3.1.2) and
+// returns a map of ifIndex → ifDescr string.
+func WalkIfDescr(ctx context.Context, client *g.GoSNMP) (map[int]string, error) {
+	return walkIntIndexedStrings(ctx, client, OIDIfDescr)
+}
+
+func walkIntIndexedStrings(ctx context.Context, client *g.GoSNMP, oid string) (map[int]string, error) {
+	pdus, err := BulkWalk(ctx, client, oid)
+	if err != nil {
+		return nil, err
+	}
+	prefix := "." + oid + "."
 	names := make(map[int]string, len(pdus))
 	for _, pdu := range pdus {
 		idxStr, ok := TrimOIDPrefix(pdu.Name, prefix)

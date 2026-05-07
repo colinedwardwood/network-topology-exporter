@@ -133,6 +133,51 @@ func TestIPInNets(t *testing.T) {
 	}
 }
 
+// WalkToIntMap: returns a map from OID suffix to integer value.
+func TestWalkToIntMap(t *testing.T) {
+	const oid = "1.3.6.1.2.1.138.1.6.1.1.2"
+	pdus := []gsnmp.SnmpPDU{
+		{Name: "." + oid + ".0.1.1", Type: gsnmp.Integer, Value: 3},
+		{Name: "." + oid + ".0.1.2", Type: gsnmp.Integer, Value: 1},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+	client, err := Open(Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = client.Conn.Close() }()
+	m, err := WalkToIntMap(context.Background(), client, oid)
+	if err != nil {
+		t.Fatalf("WalkToIntMap: %v", err)
+	}
+	if m["0.1.1"] != 3 || m["0.1.2"] != 1 {
+		t.Errorf("WalkToIntMap = %v, want {0.1.1:3, 0.1.2:1}", m)
+	}
+}
+
+// WalkIfDescr: returns a map from ifIndex to ifDescr string.
+func TestWalkIfDescr(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: "." + OIDIfDescr + ".1", Type: gsnmp.OctetString, Value: []byte("GigabitEthernet0/0")},
+		{Name: "." + OIDIfDescr + ".2", Type: gsnmp.OctetString, Value: []byte("GigabitEthernet0/1")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+	client, err := Open(Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = client.Conn.Close() }()
+	m, err := WalkIfDescr(context.Background(), client)
+	if err != nil {
+		t.Fatalf("WalkIfDescr: %v", err)
+	}
+	if m[1] != "GigabitEthernet0/0" || m[2] != "GigabitEthernet0/1" {
+		t.Errorf("WalkIfDescr = %v, want {1:GigabitEthernet0/0, 2:GigabitEthernet0/1}", m)
+	}
+}
+
 // Walk: sysName, sysDescr, sysObjectID, and sysUpTime round-trip through a
 // fake agent and come back in the Device record.
 func TestWalkSystemGroup(t *testing.T) {

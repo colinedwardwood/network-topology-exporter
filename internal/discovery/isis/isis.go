@@ -38,7 +38,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"strconv"
 	"strings"
 	"time"
 
@@ -52,7 +51,6 @@ const (
 	oidISISAdjState    = "1.3.6.1.2.1.138.1.6.1.1.2"
 	oidISISAdjIPAddr   = "1.3.6.1.2.1.138.1.6.2.1.2"
 	oidISISCircIfIndex = "1.3.6.1.2.1.138.1.4.1.1.3"
-	oidIfDescr         = "1.3.6.1.2.1.2.2.1.2"
 	// precedenceRank 5: IS-IS ranked above OSPF (6) because it is more commonly
 	// the primary IGP on service-provider networks and carries richer TE data.
 	// Ladder: LLDP=2, CDP=3, FDB=4, IS-IS=5, OSPF=6, BGP=7, MPLS-TE=8.
@@ -91,58 +89,21 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 }
 
 func walkAdjStates(ctx context.Context, client *gsnmp.GoSNMP) (map[string]int, error) {
-	pdus, err := snmputil.BulkWalk(ctx, client, oidISISAdjState)
-	if err != nil {
-		return nil, err
-	}
-	const prefix = "." + oidISISAdjState + "."
-	states := make(map[string]int, len(pdus))
-	for _, pdu := range pdus {
-		adjKey, ok := snmputil.TrimOIDPrefix(pdu.Name, prefix)
-		if !ok {
-			continue
-		}
-		states[adjKey] = snmputil.PDUInt(pdu)
-	}
-	return states, nil
+	return snmputil.WalkToIntMap(ctx, client, oidISISAdjState)
 }
 
 // walkCircuitIfNames returns a map from "{sysInst}.{circIdx}" to the interface
 // name string, built by joining isisISCircIfIndex (circuit → ifIndex) with
 // ifDescr (ifIndex → interface name).
 func walkCircuitIfNames(ctx context.Context, client *gsnmp.GoSNMP) (map[string]string, error) {
-	circPDUs, err := snmputil.BulkWalk(ctx, client, oidISISCircIfIndex)
+	circIfIndex, err := snmputil.WalkToIntMap(ctx, client, oidISISCircIfIndex)
 	if err != nil {
 		return nil, err
 	}
-	const circPrefix = "." + oidISISCircIfIndex + "."
-	circIfIndex := make(map[string]int, len(circPDUs))
-	for _, pdu := range circPDUs {
-		key, ok := snmputil.TrimOIDPrefix(pdu.Name, circPrefix)
-		if !ok {
-			continue
-		}
-		circIfIndex[key] = snmputil.PDUInt(pdu)
-	}
-
-	descrPDUs, err := snmputil.BulkWalk(ctx, client, oidIfDescr)
+	ifNames, err := snmputil.WalkIfDescr(ctx, client)
 	if err != nil {
 		return nil, err
 	}
-	const descrPrefix = "." + oidIfDescr + "."
-	ifNames := make(map[int]string, len(descrPDUs))
-	for _, pdu := range descrPDUs {
-		idxStr, ok := snmputil.TrimOIDPrefix(pdu.Name, descrPrefix)
-		if !ok {
-			continue
-		}
-		idx, err := strconv.Atoi(idxStr)
-		if err != nil {
-			continue
-		}
-		ifNames[idx] = snmputil.PDUString(pdu)
-	}
-
 	result := make(map[string]string, len(circIfIndex))
 	for key, ifIdx := range circIfIndex {
 		if name, ok := ifNames[ifIdx]; ok {
