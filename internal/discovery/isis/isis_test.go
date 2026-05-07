@@ -339,6 +339,91 @@ func TestWalkAdjStateDecodeFailureIsHardFail(t *testing.T) {
 	}
 }
 
+// Walk: mixed valid+invalid adjacency state rows below threshold degrades but still emits edges.
+func TestWalkAdjStatePartialDecodeDegraded(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: adjStateBase + "0.1.1", Type: gsnmp.Integer, Value: isisAdjStateUp},
+		{Name: adjStateBase + "0.1.2", Type: gsnmp.OctetString, Value: []byte("bad")},
+		{Name: adjIPBase + "0.1.1.1.4.192.0.2.1", Type: gsnmp.OctetString, Value: []byte{192, 0, 2, 1}},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+
+	edges, _, err := Walk(context.Background(), p, "router-a", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(edges))
+	}
+	if edges[0].Metadata == nil || edges[0].Metadata["network.topology.degraded"] != "true" {
+		t.Fatalf("expected degraded metadata, got %+v", edges[0].Metadata)
+	}
+	if edges[0].Metadata["network.topology.degraded_reason"] != "required_table_partial_decode" {
+		t.Errorf("degraded_reason = %q, want required_table_partial_decode", edges[0].Metadata["network.topology.degraded_reason"])
+	}
+}
+
+// Walk: required-table invalid ratio above threshold hard-fails.
+func TestWalkAdjStateInvalidRatioExceededHardFail(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: adjStateBase + "0.1.1", Type: gsnmp.Integer, Value: isisAdjStateUp},
+		{Name: adjStateBase + "0.1.2", Type: gsnmp.OctetString, Value: []byte("bad")},
+		{Name: adjStateBase + "0.1.3", Type: gsnmp.OctetString, Value: []byte("bad")},
+		{Name: adjIPBase + "0.1.1.1.4.192.0.2.1", Type: gsnmp.OctetString, Value: []byte{192, 0, 2, 1}},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+
+	_, _, err := Walk(context.Background(), p, "router-a", nil)
+	if err == nil {
+		t.Fatal("expected hard-fail error for invalid ratio exceeded, got nil")
+	}
+}
+
+// Walk: deterministic behavior across noisy cycles (degraded -> hard-fail -> recover).
+func TestWalkAdjStateNoisyCyclesDeterministic(t *testing.T) {
+	run := func(pdus []gsnmp.SnmpPDU) error {
+		addr := snmptest.Start(t, "public", pdus)
+		ip, port := snmptest.ParseAddr(addr)
+		p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+		_, _, err := Walk(context.Background(), p, "router-a", nil)
+		return err
+	}
+
+	// Cycle 1: partial decode anomaly below threshold => no hard-fail.
+	err := run([]gsnmp.SnmpPDU{
+		{Name: adjStateBase + "0.1.1", Type: gsnmp.Integer, Value: isisAdjStateUp},
+		{Name: adjStateBase + "0.1.2", Type: gsnmp.OctetString, Value: []byte("bad")},
+		{Name: adjIPBase + "0.1.1.1.4.192.0.2.1", Type: gsnmp.OctetString, Value: []byte{192, 0, 2, 1}},
+	})
+	if err != nil {
+		t.Fatalf("cycle1 unexpected error: %v", err)
+	}
+
+	// Cycle 2: invalid ratio exceeds threshold => hard-fail.
+	err = run([]gsnmp.SnmpPDU{
+		{Name: adjStateBase + "0.1.1", Type: gsnmp.Integer, Value: isisAdjStateUp},
+		{Name: adjStateBase + "0.1.2", Type: gsnmp.OctetString, Value: []byte("bad")},
+		{Name: adjStateBase + "0.1.3", Type: gsnmp.OctetString, Value: []byte("bad")},
+		{Name: adjIPBase + "0.1.1.1.4.192.0.2.1", Type: gsnmp.OctetString, Value: []byte{192, 0, 2, 1}},
+	})
+	if err == nil {
+		t.Fatal("cycle2 expected hard-fail error, got nil")
+	}
+
+	// Cycle 3: clean data => no hard-fail.
+	err = run([]gsnmp.SnmpPDU{
+		{Name: adjStateBase + "0.1.1", Type: gsnmp.Integer, Value: isisAdjStateUp},
+		{Name: adjIPBase + "0.1.1.1.4.192.0.2.1", Type: gsnmp.OctetString, Value: []byte{192, 0, 2, 1}},
+	})
+	if err != nil {
+		t.Fatalf("cycle3 unexpected recovery error: %v", err)
+	}
+}
+
 // Walk: Open fails when the connection cannot be established.
 func TestWalkOpenFails(t *testing.T) {
 	p := snmputil.Params{

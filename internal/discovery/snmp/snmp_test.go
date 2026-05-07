@@ -196,10 +196,8 @@ func TestWalkToIntMapStrictDecodeFailures(t *testing.T) {
 	defer func() { _ = client.Conn.Close() }()
 
 	var gotIssue DecodeIssue
-	SetDecodeIssueObserver(func(issue DecodeIssue) { gotIssue = issue })
-	defer SetDecodeIssueObserver(nil)
-
-	m, stats, err := WalkToIntMapStrict(context.Background(), client, "isis", oid)
+	ctx := ContextWithDecodeIssueReporter(context.Background(), func(issue DecodeIssue) { gotIssue = issue })
+	m, stats, err := WalkToIntMapStrict(ctx, client, "isis", oid)
 	if err != nil {
 		t.Fatalf("WalkToIntMapStrict: %v", err)
 	}
@@ -212,8 +210,57 @@ func TestWalkToIntMapStrictDecodeFailures(t *testing.T) {
 	if stats.DecodeFailures != 1 {
 		t.Errorf("DecodeFailures = %d, want 1", stats.DecodeFailures)
 	}
+	if stats.TotalRows != 2 || stats.ValidRows != 1 || stats.InvalidRows != 1 {
+		t.Errorf("stats rows = %+v, want total=2 valid=1 invalid=1", stats)
+	}
+	if stats.InvalidRatio <= 0 || stats.InvalidRatio >= 1 {
+		t.Errorf("InvalidRatio = %f, want in (0,1)", stats.InvalidRatio)
+	}
 	if gotIssue.Module != "isis" || gotIssue.OID != oid || gotIssue.Reason != "invalid_type" || gotIssue.Count != 1 {
 		t.Errorf("DecodeIssue = %+v, want module=isis oid=%s reason=invalid_type count=1", gotIssue, oid)
+	}
+}
+
+func TestEvaluateRequiredTablePolicy(t *testing.T) {
+	policy := RequiredTablePolicy{MinValidRows: 1, MaxInvalidRatio: 0.5}
+	cases := []struct {
+		name       string
+		stats      IntMapDecodeStats
+		wantDegrad bool
+		wantFail   string
+	}{
+		{
+			name:       "clean table",
+			stats:      IntMapDecodeStats{TotalRows: 10, ValidRows: 10, InvalidRows: 0, InvalidRatio: 0},
+			wantDegrad: false,
+			wantFail:   "",
+		},
+		{
+			name:       "partial anomalies below threshold",
+			stats:      IntMapDecodeStats{TotalRows: 10, ValidRows: 8, InvalidRows: 2, InvalidRatio: 0.2},
+			wantDegrad: true,
+			wantFail:   "",
+		},
+		{
+			name:       "no valid rows",
+			stats:      IntMapDecodeStats{TotalRows: 2, ValidRows: 0, InvalidRows: 2, InvalidRatio: 1.0},
+			wantDegrad: false,
+			wantFail:   "required_table_no_valid_rows",
+		},
+		{
+			name:       "invalid ratio exceeded",
+			stats:      IntMapDecodeStats{TotalRows: 3, ValidRows: 1, InvalidRows: 2, InvalidRatio: 0.666},
+			wantDegrad: false,
+			wantFail:   "required_table_invalid_ratio_exceeded",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotDegrad, gotFail := EvaluateRequiredTablePolicy(tc.stats, policy)
+			if gotDegrad != tc.wantDegrad || gotFail != tc.wantFail {
+				t.Errorf("EvaluateRequiredTablePolicy(%+v) = (%v,%q), want (%v,%q)", tc.stats, gotDegrad, gotFail, tc.wantDegrad, tc.wantFail)
+			}
+		})
 	}
 }
 
