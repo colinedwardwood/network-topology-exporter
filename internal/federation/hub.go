@@ -279,6 +279,40 @@ func (h *Hub) buildCombinedGraph(spokes map[string]spokeEntry) discovery.Graph {
 		proto         string
 	}
 	oosIndex := make(map[oosKey][]oosVal)
+
+	// Detection pass: build canonical→[]raw maps to warn when distinct raw names
+	// collide on the same canonical name (e.g. "core-sw-01.dc1" and
+	// "core-sw-01.dc2" both normalise to "core-sw-01"). Logged at most once per
+	// canonical name per merge cycle via the warnedNames guard.
+	rawNamesForCanonical := make(map[string]map[string]struct{})
+	for _, entry := range spokes {
+		for _, n := range entry.payload.OutOfScope {
+			for _, raw := range []string{n.ReportingDevice, n.NeighbourHint} {
+				canon := normalizeDeviceName(raw)
+				if rawNamesForCanonical[canon] == nil {
+					rawNamesForCanonical[canon] = make(map[string]struct{})
+				}
+				rawNamesForCanonical[canon][raw] = struct{}{}
+			}
+		}
+	}
+	warnedNames := make(map[string]bool)
+	for canon, rawSet := range rawNamesForCanonical {
+		if len(rawSet) > 1 {
+			if !warnedNames[canon] {
+				warnedNames[canon] = true
+				rawList := make([]string, 0, len(rawSet))
+				for r := range rawSet {
+					rawList = append(rawList, r)
+				}
+				h.logger.Warn("hub: ambiguous device name normalisation — multiple raw names map to the same canonical name; check for FQDN collisions",
+					"canonical", canon,
+					"raw_names", rawList,
+				)
+			}
+		}
+	}
+
 	for _, entry := range spokes {
 		for _, n := range entry.payload.OutOfScope {
 			k := oosKey{normalizeDeviceName(n.ReportingDevice), normalizeDeviceName(n.NeighbourHint)}
@@ -477,9 +511,10 @@ func (h *Hub) writeSnapshotAsync(g discovery.Graph) {
 	}(g)
 }
 
-// normalizeDeviceName lowercases s and strips everything from the first dot
-// onward, converting FQDNs to bare hostnames so OOS matching is robust across
-// heterogeneous deployments ("core-sw-01.corp.internal" → "core-sw-01").
+// normalizeDeviceName lowercases s and strips the domain suffix (everything after
+// the first dot). This allows bare hostnames and FQDNs to match, but will
+// incorrectly merge devices that share a hostname across different domains.
+// A warning is emitted when this ambiguity is detected at merge time.
 func normalizeDeviceName(s string) string {
 	s = strings.ToLower(s)
 	if i := strings.IndexByte(s, '.'); i >= 0 {
