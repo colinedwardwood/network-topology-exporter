@@ -3,8 +3,9 @@ package metrics
 import (
 	"sync/atomic"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 )
 
 // TopologyCollector implements prometheus.Collector. It holds an atomic

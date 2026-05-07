@@ -4,7 +4,7 @@ run:
   timeout: 5m
 
 linters:
-  disable-all: true
+  default: none
   enable:
     - errcheck
     - gocritic
@@ -16,20 +16,20 @@ linters:
     - staticcheck
     - unconvert
     - unused
+  settings:
+    revive:
+      rules:
+        - name: package-comments
+        - name: exported
 
 formatters:
   enable:
     - gofmt
     - goimports
-
-settings:
-  goimports:
-    local-prefixes:
-      - github.com/colinedwardwood/network-topology-exporter
-  revive:
-    rules:
-      - name: package-comments
-      - name: exported
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/colinedwardwood/network-topology-exporter
 
 issues:
   max-issues-per-linter: 0
