@@ -1,26 +1,10 @@
-// Package mpls infers MPLS-TE tunnel topology from the MPLS-TE-MIB.
+// Package mpls infers MPLS-TE tunnel topology from MPLS-TE-MIB tables.
 //
-// # Specification sources
-//
-//   - RFC 3812 — Multiprotocol Label Switching (MPLS) Traffic Engineering
-//     (TE) Management Information Base (MIB). OID base 1.3.6.1.2.1.10.166.3.
-//     mplsTunnelTable (1.3.6.1.2.1.10.166.3.2.2) contains one row per MPLS-TE
-//     tunnel; mplsTunnelOperStatus (.1.17) gives the operational status.
-//     The table index encodes tunnelIndex, tunnelInstance, ingressLSRId, and
-//     egressLSRId; the ingress and egress LSR IDs are IPv4 addresses.
-//
-// # Critical implementation notes
-//
-//  1. Only tunnels with mplsTunnelOperStatus == up(1) are emitted as edges.
-//     Other status values (down, testing, unknown, dormant, notPresent,
-//     lowerLayerDown) indicate the tunnel is not actively forwarding traffic.
-//
-//  2. The OID suffix after the mplsTunnelOperStatus column prefix has exactly
-//     10 dot-separated components: tunnelIdx, tunnelInstance, ig0..ig3, eg0..eg3.
-//     Entries with a different component count are silently skipped.
-//
-//  3. SrcPort encodes the tunnel index as "te-tunnel{idx}" so the graph layer
-//     can distinguish multiple tunnels to the same egress LSR.
+// Invariants:
+// - Only operStatus up(1) emits edges.
+// - operStatus decode errors are hard-fail (required signal).
+// - adminStatus is optional metadata; failures degrade metadata only.
+// - tunnel OID suffix must parse as {idx,inst,ingress4,egress4}.
 package mpls
 
 import (
@@ -41,8 +25,6 @@ const (
 	oidMplsTunnelAdminStatus = "1.3.6.1.2.1.10.166.3.2.2.1.13"
 	mplsTunnelOperUp         = 1
 	metaKeyAdminStatus       = "mpls_te.admin_status"
-	metaKeyDegraded          = "network.topology.degraded"
-	metaKeyDegradedWhy       = "network.topology.degraded_reason"
 	// precedenceRank 8: lowest priority in the graph merge ladder.
 	// Ladder: LLDP=2, CDP=3, FDB=4, IS-IS=5, OSPF=6, BGP=7, MPLS-TE=8.
 	// Higher rank = lower precedence in graph merge.
@@ -108,8 +90,8 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 			metaKeyAdminStatus: mplsAdminStatusString(adminStatus),
 		}
 		if degradedReason != "" {
-			metadata[metaKeyDegraded] = "true"
-			metadata[metaKeyDegradedWhy] = degradedReason
+			metadata[discovery.MetadataKeyDegraded] = "true"
+			metadata[discovery.MetadataKeyDegradedReason] = degradedReason
 		}
 		edges = append(edges, discovery.Edge{
 			SrcDevice:      localDevice,

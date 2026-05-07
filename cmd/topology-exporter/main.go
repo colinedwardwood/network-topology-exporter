@@ -48,11 +48,6 @@ import (
 // waits before declaring an NFS stall and continuing the discovery cycle.
 const snapshotWriteTimeout = 30 * time.Second
 
-const (
-	metaKeyDegraded    = "network.topology.degraded"
-	metaKeyDegradedWhy = "network.topology.degraded_reason"
-)
-
 type cycleStatus struct {
 	LastCycleAt  time.Time
 	DeviceErrors int64
@@ -700,10 +695,10 @@ func runCycle(
 func collectDegradedReasons(edges []discovery.Edge) []string {
 	unique := make(map[string]bool)
 	for _, e := range edges {
-		if e.Metadata == nil || e.Metadata[metaKeyDegraded] != "true" {
+		if e.Metadata == nil || e.Metadata[discovery.MetadataKeyDegraded] != "true" {
 			continue
 		}
-		reason := e.Metadata[metaKeyDegradedWhy]
+		reason := e.Metadata[discovery.MetadataKeyDegradedReason]
 		if reason == "" {
 			reason = "unknown"
 		}

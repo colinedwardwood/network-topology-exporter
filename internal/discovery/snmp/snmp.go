@@ -1,35 +1,10 @@
-// Package snmp walks the SNMP SYSTEM group to anchor the device inventory.
+// Package snmp walks SNMP SYSTEM-group data and shared table helpers.
 //
-// # Specification sources
-//
-//   - RFC 3418 — Management Information Base (MIB) for the Simple Network
-//     Management Protocol (SNMP). Defines the SNMPv2-MIB SYSTEM group:
-//     sysDescr (.1.3.6.1.2.1.1.1.0), sysObjectID (.1.3.6.1.2.1.1.2.0),
-//     sysUpTime (.1.3.6.1.2.1.1.3.0), sysName (.1.3.6.1.2.1.1.5.0).
-//     RFC 3418 obsoletes RFC 1907 and RFC 1213 for these objects.
-//   - IANA Enterprise Numbers registry (https://www.iana.org/assignments/
-//     enterprise-numbers) — the sysObjectID prefix encodes the vendor's
-//     IANA-assigned enterprise number. Matching the prefix identifies the
-//     vendor without requiring a full MIB database at runtime.
-//
-// # Design references
-//
-//   - prometheus/snmp_exporter (Apache 2.0) — the "separate scalar GET from
-//     table BulkWalk" pattern. Scalar OIDs ending in .0 are fetched via a
-//     single SNMP GET request; table subtrees are walked via BulkWalkAll.
-//     This avoids traversing large tables to retrieve four scalar values.
-//     Source: https://github.com/prometheus/snmp_exporter
-//   - kentik/ktranslate (Apache 2.0) — the BulkWalkAll → WalkAll → sleep +
-//     WalkAll fallback chain for resilience against devices that reject Bulk
-//     PDUs or are temporarily overloaded. Pattern reference only, no code
-//     copied. Source: https://github.com/kentik/ktranslate
-//
-// # SNMP client library
-//
-//   - github.com/gosnmp/gosnmp (BSD-2-Clause) — used by both snmp_exporter
-//     and ktranslate; the de-facto standard Go SNMP client. GoSNMP is not
-//     goroutine-safe for concurrent use on the same instance: each worker
-//     goroutine must own its own *gosnmp.GoSNMP struct and connection.
+// Invariants:
+// - Scalar SYSTEM OIDs are fetched via GET; table data uses BulkWalk/Walk fallback.
+// - Context cancellation must interrupt blocked SNMP reads via connection deadlines.
+// - Each goroutine owns its own GoSNMP session (client instances are not shared).
+// - sysObjectID vendor mapping uses IANA enterprise prefixes only.
 package snmp
 
 import (
