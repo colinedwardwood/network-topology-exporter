@@ -99,9 +99,6 @@ func walkAdjIPAddrs(ctx context.Context, client *gsnmp.GoSNMP, localDevice strin
 		if !ok {
 			continue
 		}
-		// Split suffix into components to safely extract the adjKey head.
-		// Tail is always: addrType(1) + addrLen(4) + 4 addr octets = 6 components.
-		// Using LastIndex is unsafe when adjIdx==4 and IP starts with 1.4.x.x.
 		parts := strings.Split(suffix, ".")
 		const ipv4TailLen = 6
 		if len(parts) <= ipv4TailLen || parts[len(parts)-ipv4TailLen] != "1" || parts[len(parts)-ipv4TailLen+1] != "4" {

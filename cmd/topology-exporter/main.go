@@ -260,6 +260,8 @@ func run(ctx context.Context, args []string) int {
 	return 0
 }
 
+const otlpPushTimeout = 10 * time.Second
+
 type loopConfig struct {
 	cancel  context.CancelFunc
 	logger  *slog.Logger
@@ -269,6 +271,19 @@ type loopConfig struct {
 	ready   *atomic.Bool
 	spoke   *federation.Spoke
 	otlpExp *otlp.Exporter
+}
+
+func (lc loopConfig) otlpPush(ctx context.Context, fn func(context.Context) error, warnMsg string) {
+	go func() {
+		pushCtx, cancel := context.WithTimeout(ctx, otlpPushTimeout)
+		defer cancel()
+		if err := fn(pushCtx); err != nil {
+			lc.logger.Warn(warnMsg, "error", err)
+			lc.m.OTLPPushTotal.WithLabelValues("error").Inc()
+		} else {
+			lc.m.OTLPPushTotal.WithLabelValues("ok").Inc()
+		}
+	}()
 }
 
 // runDiscoveryLoop is the main discovery scheduler. It loads the LD-13
@@ -349,16 +364,10 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 				lc.m.TopologyChangeTotal.WithLabelValues(string(c.Kind), proto).Inc()
 			}
 			if lc.otlpExp != nil {
-				go func(ch []graph.EdgeChange) {
-					pushCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-					defer cancel()
-					if err := lc.otlpExp.PushChanges(pushCtx, ch); err != nil {
-						lc.logger.Warn("otlp push changes failed", "error", err)
-						lc.m.OTLPPushTotal.WithLabelValues("error").Inc()
-					} else {
-						lc.m.OTLPPushTotal.WithLabelValues("ok").Inc()
-					}
-				}(changes)
+				ch := changes
+				lc.otlpPush(ctx, func(ctx context.Context) error {
+					return lc.otlpExp.PushChanges(ctx, ch)
+				}, "otlp push changes failed")
 			}
 		}
 		if len(conflicts) > 0 {
@@ -370,37 +379,29 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 		prevGraph = newGraph
 		ages = newAges
 		lc.m.Topology.Update(newGraph)
-		if lc.otlpExp != nil {
-			pushGraph := len(changes) > 0 || cycleNum%lc.cfg.Output.OTLP.HeartbeatCycles == 0
-			if pushGraph {
-				go func(g discovery.Graph) {
-					pushCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-					defer cancel()
-					if err := lc.otlpExp.PushGraph(pushCtx, g); err != nil {
-						lc.logger.Warn("otlp push failed", "error", err)
-						lc.m.OTLPPushTotal.WithLabelValues("error").Inc()
-					} else {
-						lc.m.OTLPPushTotal.WithLabelValues("ok").Inc()
-					}
-				}(newGraph)
-			}
+		if lc.otlpExp != nil && (len(changes) > 0 || cycleNum%lc.cfg.Output.OTLP.HeartbeatCycles == 0) {
+			g := newGraph
+			lc.otlpPush(ctx, func(ctx context.Context) error {
+				return lc.otlpExp.PushGraph(ctx, g)
+			}, "otlp push failed")
 		}
 		lc.m.GraphStale.Set(0)
 		if lc.ready != nil {
-			lc.ready.Store(true)
+			lc.ready.CompareAndSwap(false, true)
 		}
 		lc.m.DiscoveryCycleDuration.Observe(time.Since(start).Seconds())
 
 		// LD-13: write snapshot in a goroutine with a timeout so an NFS stall
 		// cannot block the discovery cycle. f is passed by value so the next
 		// cycle cannot mutate the data while the write is in progress.
+		ageMap := graph.EdgeKeysToAges(ages)
 		credCache := resolver.SnapshotCache()
 		f := snapshot.File{
 			Devices:         newGraph.Devices,
 			Edges:           newGraph.Edges,
 			OutOfScope:      newGraph.OutOfScope,
 			CredentialCache: credCache,
-			UnconfirmedAges: graph.EdgeKeysToAges(ages),
+			UnconfirmedAges: ageMap,
 		}
 		go func(f snapshot.File) {
 			done := make(chan error, 1)
@@ -425,7 +426,7 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 				Devices:    newGraph.Devices,
 				Edges:      newGraph.Edges,
 				OutOfScope: newGraph.OutOfScope,
-				Ages:       graph.EdgeKeysToAges(ages),
+				Ages:       ageMap,
 			}
 			if err := lc.spoke.Push(ctx, payload); err != nil && ctx.Err() == nil {
 				lc.logger.Warn("spoke push failed", "error", err)
