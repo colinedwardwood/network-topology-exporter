@@ -1,16 +1,6 @@
-# v1.4 — open
+# v1.4 — SHIPPED 2026-05-07
 
-## P1 — snmputil generic walk helpers
-
-Three callers (isis `walkCircuitIfNames`, isis `walkAdjStates`, mpls admin-status) share the identical pattern:
-
-```
-BulkWalk → TrimOIDPrefix loop → PDUInt/PDUString → map
-```
-
-Extract `WalkToIntMap(ctx, client, oid) (map[string]int, error)` and
-`WalkToStringMap(ctx, client, oid) (map[string]string, error)` in
-`internal/discovery/snmp/`. Move `oidIfDescr` into snmputil alongside `oidIfNameTable`.
+- **P1** — `WalkToIntMap` and `WalkIfDescr` helpers in `internal/discovery/snmp`; `WalkIfNames` refactored to share `walkIntIndexedStrings`; `OIDIfDescr` exported alongside `oidIfNameTable`. Three callers simplified: `isis.walkAdjStates` (10 → 1 line), `isis.walkCircuitIfNames` (25 → 8 lines), `mpls` admin-status block (10 → 3 lines).
 
 ---
 
