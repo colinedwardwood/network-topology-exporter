@@ -144,6 +144,42 @@ federation:
 
 Static entries are injected as rank-0 (highest precedence) confirmed bidirectional edges regardless of what automatic matching produces.
 
+## Certificate rotation
+
+Rotating certificates without topology downtime requires overlapping validity windows. The hub's `spoke_timeout` provides the safety buffer: as long as spokes keep pushing during the rotation window, no topology data is lost.
+
+### Procedure
+
+1. **Issue replacement certificates** from the same CA. Set `NotBefore` to now and `NotAfter` to at least the current validity end plus one rotation window.
+
+2. **Rotate the hub server certificate first.** The hub serves the new cert; existing spokes are already trusted via the CA and continue pushing without interruption.
+
+   ```sh
+   # Generate new hub server cert (same CA, new validity window)
+   openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+     -keyout hub-new.key -subj "/CN=hub" \
+     -addext "subjectAltName=IP:$(hub_ip),DNS:hub.example.com" \
+   | openssl x509 -req -CA ca.pem -CAkey ca.key -CAcreateserial \
+     -days 365 -out hub-new.crt
+   ```
+
+   Replace `hub.tls_cert` and `hub.tls_key` in the hub config and restart the hub.
+
+3. **Rotate spoke client certificates one at a time.** For each spoke: replace its `tls_cert` and `tls_key`, restart the spoke, verify `network_topology_federation_spoke_up{spoke_id="..."}` returns to 1 before moving to the next spoke. Allow at least one full push interval between spokes.
+
+4. **Rotate the CA only if necessary** (compromise or expiry). CA rotation requires rotating all leaf certificates simultaneously, which is a topology-disrupting operation. Mitigate by running dual CA pools: add the new CA to the hub's `tls_ca_cert` (PEM-concatenated) before rotating leaf certs, then remove the old CA once all spokes present new-CA-signed certs.
+
+### Verifying a rotated spoke
+
+```sh
+curl -v --cacert /etc/topo-exporter/pki/ca.pem \
+  --cert /etc/topo-exporter/pki/spoke-new.crt \
+  --key /etc/topo-exporter/pki/spoke-new.key \
+  https://hub.example.com:9101/healthz
+```
+
+A 200 response confirms the new cert is accepted. A 403 means the spoke_id in the cert CN does not match `federation.spoke.spoke_id` in the spoke config (LD-21 binding).
+
 ## Tuning spoke_timeout
 
 `spoke_timeout` controls how long the hub keeps a spoke's graph in the edge store after the spoke stops pushing. A spoke that misses more than one push window is likely down or partitioned; keeping its stale data in the graph for too long produces phantom edges.

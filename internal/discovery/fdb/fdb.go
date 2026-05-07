@@ -63,6 +63,11 @@
 //     devices do not populate STP state for all ports (access ports on
 //     non-STP VLANs, management ports). Absence of an STP entry is not a
 //     signal of blocking.
+//
+// Precedence rank: 4. Ranked below LLDP(2), CDP(3) and above OSPF(5), BGP(6).
+// FDB edges carry no protocol-verified identity (only MACs), so they are
+// treated as weaker evidence than control-plane adjacencies. When LLDP or CDP
+// reports the same link, their edge wins.
 package fdb
 
 import (
