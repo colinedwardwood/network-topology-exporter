@@ -34,6 +34,9 @@ All metrics use the `network_` prefix. No metric uses a raw IP address or free-f
 | `network_topology_discovery_cycle_duration_seconds` | histogram | (none) | Buckets: 0.5s–256s (exponential, factor 2). Alert when p99 approaches `discovery.interval`. |
 | `network_topology_discovery_module_duration_seconds` | histogram | `module` | Per-module time within a cycle. Valid values: snmp, lldp, cdp, bgp, ospf, fdb, isis, mpls_te. |
 | `network_topology_snmp_walks_total` | counter | `status` (ok\|timeout\|error) | Aggregate across all devices. |
+| `network_topology_discovery_decode_issues_total` | counter | `module`, `oid`, `reason` | SNMP decode anomalies (for example, invalid integer type in a walked column). Non-zero sustained rate indicates schema/vendor drift or corrupt agent responses. |
+| `network_topology_discovery_degraded_total` | counter | `module`, `reason` | Module runs that completed in degraded mode (for example, missing optional metadata table). |
+| `network_topology_discovery_hard_fail_total` | counter | `module`, `stage` | Hard failures where required discovery signals were unusable. |
 | `network_topology_credential_trials_total` | counter | `status` (ok\|failed) | Under the LD-12 rate limiter. A sustained `failed` rate on a fresh deployment may indicate auth lockout. |
 
 ## Cardinality budget
@@ -77,6 +80,15 @@ time() - network_topology_snapshot_last_written_unix > 300
 
 # Sustained credential failures (possible lockout)
 increase(network_topology_credential_trials_total{status="failed"}[10m]) > 20
+
+# SNMP decode anomalies (schema drift or bad agent data)
+increase(network_topology_discovery_decode_issues_total[10m]) > 0
+
+# Discovery degraded mode entered
+increase(network_topology_discovery_degraded_total[10m]) > 0
+
+# Hard failures in required discovery stages
+increase(network_topology_discovery_hard_fail_total[10m]) > 0
 
 # Federation spoke not pushing (hub mode)
 network_topology_federation_spoke_up == 0

@@ -339,3 +339,50 @@ func TestWalkAdminStatusMissingIsUnknown(t *testing.T) {
 		t.Errorf("Metadata[mpls_te.admin_status] = %q, want %q", got, "unknown")
 	}
 }
+
+// Walk: invalid admin status PDU type degrades metadata but keeps edge.
+func TestWalkAdminStatusDecodeFailureIsDegraded(t *testing.T) {
+	operOID := tunnelOID("1", "1", "10.0.0.1", "192.0.2.1")
+	adminOID := ".1.3.6.1.2.1.10.166.3.2.2.1.13.1.1.10.0.0.1.192.0.2.1"
+	pdus := []gsnmp.SnmpPDU{
+		{Name: operOID, Type: gsnmp.Integer, Value: mplsTunnelOperUp},
+		{Name: adminOID, Type: gsnmp.OctetString, Value: []byte("bad")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	edges, _, err := Walk(context.Background(), p, "router-a", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(edges))
+	}
+	e := edges[0]
+	if e.Metadata["mpls_te.admin_status"] != "unknown" {
+		t.Errorf("Metadata[mpls_te.admin_status] = %q, want unknown", e.Metadata["mpls_te.admin_status"])
+	}
+	if e.Metadata["network.topology.degraded"] != "true" {
+		t.Errorf("Metadata[network.topology.degraded] = %q, want true", e.Metadata["network.topology.degraded"])
+	}
+	if e.Metadata["network.topology.degraded_reason"] != "invalid_admin_status_decode" {
+		t.Errorf("Metadata[network.topology.degraded_reason] = %q, want invalid_admin_status_decode", e.Metadata["network.topology.degraded_reason"])
+	}
+}
+
+// Walk: invalid oper status PDU type is a hard failure.
+func TestWalkOperStatusDecodeFailureIsHardFail(t *testing.T) {
+	oid := tunnelOID("1", "1", "10.0.0.1", "192.0.2.1")
+	pdus := []gsnmp.SnmpPDU{
+		{Name: oid, Type: gsnmp.OctetString, Value: []byte("bad")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	_, _, err := Walk(context.Background(), p, "router-a", nil)
+	if err == nil {
+		t.Fatal("expected hard-fail error for oper status decode failure, got nil")
+	}
+}

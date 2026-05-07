@@ -48,6 +48,30 @@ func TestPDUInt(t *testing.T) {
 	}
 }
 
+// PDUIntStrict: returns ok=false for unsupported value types.
+func TestPDUIntStrict(t *testing.T) {
+	cases := []struct {
+		val    any
+		want   int
+		wantOK bool
+	}{
+		{int(5), 5, true},
+		{int32(3), 3, true},
+		{uint(9), 9, true},
+		{uint32(7), 7, true},
+		{int64(11), 11, true},
+		{uint64(13), 13, true},
+		{float64(1.0), 0, false},
+		{"7", 0, false},
+	}
+	for _, c := range cases {
+		got, ok := PDUIntStrict(gsnmp.SnmpPDU{Value: c.val})
+		if got != c.want || ok != c.wantOK {
+			t.Errorf("PDUIntStrict(%v) = (%d,%v), want (%d,%v)", c.val, got, ok, c.want, c.wantOK)
+		}
+	}
+}
+
 // PDUBytes: handles []byte and string, returns nil for other types.
 func TestPDUBytes(t *testing.T) {
 	if got := PDUBytes(gsnmp.SnmpPDU{Value: []byte{1, 2}}); string(got) != string([]byte{1, 2}) {
@@ -153,6 +177,43 @@ func TestWalkToIntMap(t *testing.T) {
 	}
 	if m["0.1.1"] != 3 || m["0.1.2"] != 1 {
 		t.Errorf("WalkToIntMap = %v, want {0.1.1:3, 0.1.2:1}", m)
+	}
+}
+
+// WalkToIntMapStrict: invalid types are excluded and reported.
+func TestWalkToIntMapStrictDecodeFailures(t *testing.T) {
+	const oid = "1.3.6.1.2.1.138.1.6.1.1.2"
+	pdus := []gsnmp.SnmpPDU{
+		{Name: "." + oid + ".0.1.1", Type: gsnmp.Integer, Value: 3},
+		{Name: "." + oid + ".0.1.2", Type: gsnmp.OctetString, Value: []byte("bad")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+	client, err := Open(Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = client.Conn.Close() }()
+
+	var gotIssue DecodeIssue
+	SetDecodeIssueObserver(func(issue DecodeIssue) { gotIssue = issue })
+	defer SetDecodeIssueObserver(nil)
+
+	m, stats, err := WalkToIntMapStrict(context.Background(), client, "isis", oid)
+	if err != nil {
+		t.Fatalf("WalkToIntMapStrict: %v", err)
+	}
+	if m["0.1.1"] != 3 {
+		t.Errorf("WalkToIntMapStrict map = %v, want key 0.1.1=3", m)
+	}
+	if _, ok := m["0.1.2"]; ok {
+		t.Errorf("WalkToIntMapStrict map unexpectedly included decode-failed key: %v", m)
+	}
+	if stats.DecodeFailures != 1 {
+		t.Errorf("DecodeFailures = %d, want 1", stats.DecodeFailures)
+	}
+	if gotIssue.Module != "isis" || gotIssue.OID != oid || gotIssue.Reason != "invalid_type" || gotIssue.Count != 1 {
+		t.Errorf("DecodeIssue = %+v, want module=isis oid=%s reason=invalid_type count=1", gotIssue, oid)
 	}
 }
 

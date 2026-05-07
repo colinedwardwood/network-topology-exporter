@@ -51,6 +51,8 @@ const (
 	oidISISAdjState    = "1.3.6.1.2.1.138.1.6.1.1.2"
 	oidISISAdjIPAddr   = "1.3.6.1.2.1.138.1.6.2.1.2"
 	oidISISCircIfIndex = "1.3.6.1.2.1.138.1.4.1.1.3"
+	metaKeyDegraded    = "network.topology.degraded"
+	metaKeyDegradedWhy = "network.topology.degraded_reason"
 	// precedenceRank 5: IS-IS ranked above OSPF (6) because it is more commonly
 	// the primary IGP on service-provider networks and carries richer TE data.
 	// Ladder: LLDP=2, CDP=3, FDB=4, IS-IS=5, OSPF=6, BGP=7, MPLS-TE=8.
@@ -74,14 +76,16 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	}
 
 	var circIfNames map[string]string
+	var degradedReason string
 	if len(states) > 0 {
 		circIfNames, err = walkCircuitIfNames(ctx, client)
 		if err != nil {
 			slog.Debug("isis: circuit ifName walk failed; SrcPort will be empty", "device", p.IP, "err", err)
+			degradedReason = "missing_srcport_mapping"
 		}
 	}
 
-	edges, oos, err := walkAdjIPAddrs(ctx, client, localDevice, states, circIfNames, allowedNets)
+	edges, oos, err := walkAdjIPAddrs(ctx, client, localDevice, states, circIfNames, degradedReason, allowedNets)
 	if err != nil {
 		return nil, nil, fmt.Errorf("isis adjIPAddr %s: %w", p.IP, err)
 	}
@@ -89,16 +93,26 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 }
 
 func walkAdjStates(ctx context.Context, client *gsnmp.GoSNMP) (map[string]int, error) {
-	return snmputil.WalkToIntMap(ctx, client, oidISISAdjState)
+	states, stats, err := snmputil.WalkToIntMapStrict(ctx, client, "isis", oidISISAdjState)
+	if err != nil {
+		return nil, err
+	}
+	if stats.DecodeFailures > 0 || stats.TrimFailures > 0 {
+		return nil, fmt.Errorf("strict decode failed for isis adjacency state (decode=%d trim=%d)", stats.DecodeFailures, stats.TrimFailures)
+	}
+	return states, nil
 }
 
 // walkCircuitIfNames returns a map from "{sysInst}.{circIdx}" to the interface
 // name string, built by joining isisISCircIfIndex (circuit → ifIndex) with
 // ifDescr (ifIndex → interface name).
 func walkCircuitIfNames(ctx context.Context, client *gsnmp.GoSNMP) (map[string]string, error) {
-	circIfIndex, err := snmputil.WalkToIntMap(ctx, client, oidISISCircIfIndex)
+	circIfIndex, stats, err := snmputil.WalkToIntMapStrict(ctx, client, "isis", oidISISCircIfIndex)
 	if err != nil {
 		return nil, err
+	}
+	if stats.DecodeFailures > 0 || stats.TrimFailures > 0 {
+		return nil, fmt.Errorf("strict decode failed for isis circuit ifIndex map (decode=%d trim=%d)", stats.DecodeFailures, stats.TrimFailures)
 	}
 	ifNames, err := snmputil.WalkIfDescr(ctx, client)
 	if err != nil {
@@ -113,7 +127,7 @@ func walkCircuitIfNames(ctx context.Context, client *gsnmp.GoSNMP) (map[string]s
 	return result, nil
 }
 
-func walkAdjIPAddrs(ctx context.Context, client *gsnmp.GoSNMP, localDevice string, states map[string]int, circIfNames map[string]string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
+func walkAdjIPAddrs(ctx context.Context, client *gsnmp.GoSNMP, localDevice string, states map[string]int, circIfNames map[string]string, degradedReason string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
 	pdus, err := snmputil.BulkWalk(ctx, client, oidISISAdjIPAddr)
 	if err != nil {
 		return nil, nil, err
@@ -150,6 +164,10 @@ func walkAdjIPAddrs(ctx context.Context, client *gsnmp.GoSNMP, localDevice strin
 			circKey = adjParts[0] + "." + adjParts[1]
 		}
 		ifName := circIfNames[circKey]
+		edgeDegradedReason := degradedReason
+		if edgeDegradedReason == "" && circKey != "" && ifName == "" {
+			edgeDegradedReason = "missing_srcport_mapping"
+		}
 		if len(allowedNets) > 0 && !snmputil.IPInNets(ip, allowedNets) {
 			oos = append(oos, discovery.OutOfScopeNeighbour{
 				ReportingDevice: localDevice,
@@ -169,7 +187,18 @@ func walkAdjIPAddrs(ctx context.Context, client *gsnmp.GoSNMP, localDevice strin
 			PrecedenceRank: precedenceRank,
 			LinkKind:       "ip",
 			ObservedAt:     now,
+			Metadata:       isisMetadata(edgeDegradedReason),
 		})
 	}
 	return edges, oos, nil
+}
+
+func isisMetadata(degradedReason string) map[string]string {
+	if degradedReason == "" {
+		return nil
+	}
+	return map[string]string{
+		metaKeyDegraded:    "true",
+		metaKeyDegradedWhy: degradedReason,
+	}
 }

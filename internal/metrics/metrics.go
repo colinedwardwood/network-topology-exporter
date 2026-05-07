@@ -40,6 +40,9 @@ type Metrics struct {
 	DiscoveryCycleDuration  prometheus.Histogram
 	DiscoveryModuleDuration *prometheus.HistogramVec
 	SNMPWalksTotal          *prometheus.CounterVec
+	DiscoveryDecodeIssues   *prometheus.CounterVec
+	DiscoveryDegradedTotal  *prometheus.CounterVec
+	DiscoveryHardFailTotal  *prometheus.CounterVec
 	CredentialTrialsTotal   *prometheus.CounterVec
 	OTLPPushTotal           *prometheus.CounterVec
 
@@ -107,6 +110,18 @@ func New(emitBoundaryObs bool) *Metrics {
 			Name: "network_topology_snmp_walks_total",
 			Help: "SNMP walk attempts, partitioned by terminal status.",
 		}, []string{"status"}), // ok | timeout | error
+		DiscoveryDecodeIssues: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "network_topology_discovery_decode_issues_total",
+			Help: "SNMP decode anomalies by module, OID, and reason.",
+		}, []string{"module", "oid", "reason"}),
+		DiscoveryDegradedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "network_topology_discovery_degraded_total",
+			Help: "Discovery module runs that completed in degraded mode by reason.",
+		}, []string{"module", "reason"}),
+		DiscoveryHardFailTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "network_topology_discovery_hard_fail_total",
+			Help: "Discovery hard failures by module and stage.",
+		}, []string{"module", "stage"}),
 		CredentialTrialsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "network_topology_credential_trials_total",
 			Help: "Credential trial attempts under the LD-12 rate limiter.",
@@ -144,6 +159,9 @@ func New(emitBoundaryObs bool) *Metrics {
 		m.DiscoveryCycleDuration,
 		m.DiscoveryModuleDuration,
 		m.SNMPWalksTotal,
+		m.DiscoveryDecodeIssues,
+		m.DiscoveryDegradedTotal,
+		m.DiscoveryHardFailTotal,
 		m.CredentialTrialsTotal,
 		m.OTLPPushTotal,
 		m.FederationSpokeUp,
