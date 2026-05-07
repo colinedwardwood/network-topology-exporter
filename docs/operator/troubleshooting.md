@@ -326,3 +326,16 @@ snapshot: version mismatch; quarantining  path=/var/lib/network-topology-exporte
 ```
 
 Once the first live discovery cycle completes, the exporter writes a fresh snapshot and metrics will appear normally. No operator action is required unless the quarantined `.bad` file needs to be removed for disk space reasons.
+
+---
+
+## OTLP push saturation
+
+**Symptom**: `network_topology_otlp_push_total{status="dropped"}` is non-zero.
+
+**Cause**: More than `maxOTLPPushConcurrency` (4) push goroutines were in-flight simultaneously. This happens when the OTLP receiver is slow and the discovery cycle is short.
+
+**Remediation**:
+- Increase `output.otlp.timeout` so pushes complete faster relative to the cycle interval.
+- Reduce `discovery.interval` churn (longer interval → fewer push triggers).
+- Check OTLP receiver health.

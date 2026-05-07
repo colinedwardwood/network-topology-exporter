@@ -34,13 +34,18 @@ func init() {
 
 func newTestSpokeFor(t *testing.T, hubURL string) *Spoke {
 	t.Helper()
+	pushURL, err := buildSpokeURL(hubURL)
+	if err != nil {
+		t.Fatalf("buildSpokeURL(%q): %v", hubURL, err)
+	}
 	return &Spoke{
 		cfg: config.FederationConfig{
 			Spoke: config.FederationSpokeConfig{HubURL: hubURL},
 		},
-		client: &http.Client{Timeout: 5 * time.Second},
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		m:      metrics.New(false),
+		pushURL: pushURL,
+		client:  &http.Client{Timeout: 5 * time.Second},
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		m:       metrics.New(false),
 	}
 }
 
@@ -111,20 +116,32 @@ func TestSpokePushContextCancelledBeforeFirstAttempt(t *testing.T) {
 	}
 }
 
-// TestSpokePostInvalidURL verifies that post returns an error when the hub URL
-// cannot be used to construct a valid HTTP request.
-func TestSpokePostInvalidURL(t *testing.T) {
-	s := &Spoke{
-		cfg: config.FederationConfig{
-			Spoke: config.FederationSpokeConfig{HubURL: "://invalid-url"},
-		},
-		client: &http.Client{},
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		m:      metrics.New(false),
-	}
-	err := s.post(context.Background(), []byte("{}"))
+// TestBuildSpokeURLInvalidURL verifies that buildSpokeURL rejects a malformed base URL.
+func TestBuildSpokeURLInvalidURL(t *testing.T) {
+	_, err := buildSpokeURL("://invalid-url")
 	if err == nil {
-		t.Fatal("expected error for invalid URL, got nil")
+		t.Fatal("buildSpokeURL: expected error for invalid URL, got nil")
+	}
+}
+
+func TestBuildSpokeURL(t *testing.T) {
+	tests := []struct {
+		base string
+		want string
+	}{
+		{"https://hub:9101", "https://hub:9101/spoke/push"},
+		{"https://hub:9101/", "https://hub:9101/spoke/push"},
+		{"https://hub:9101/base", "https://hub:9101/base/spoke/push"},
+	}
+	for _, tc := range tests {
+		got, err := buildSpokeURL(tc.base)
+		if err != nil {
+			t.Errorf("buildSpokeURL(%q): %v", tc.base, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("buildSpokeURL(%q) = %q, want %q", tc.base, got, tc.want)
+		}
 	}
 }
 

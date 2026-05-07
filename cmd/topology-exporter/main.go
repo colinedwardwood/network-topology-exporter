@@ -215,6 +215,11 @@ func run(ctx context.Context, args []string) int {
 			})
 		}
 
+		var otlpSem chan struct{}
+		if cfg.Output.OTLP.Enabled {
+			otlpSem = make(chan struct{}, maxOTLPPushConcurrency)
+		}
+
 		workerDone.Add(1)
 		go func() {
 			defer workerDone.Done()
@@ -227,6 +232,7 @@ func run(ctx context.Context, args []string) int {
 				ready:   &ready,
 				spoke:   spoke,
 				otlpExp: otlpExp,
+				otlpSem: otlpSem,
 			})
 		}()
 	}
@@ -260,7 +266,10 @@ func run(ctx context.Context, args []string) int {
 	return 0
 }
 
-const otlpPushTimeout = 10 * time.Second
+const (
+	otlpPushTimeout        = 10 * time.Second
+	maxOTLPPushConcurrency = 4
+)
 
 type loopConfig struct {
 	cancel  context.CancelFunc
@@ -271,10 +280,23 @@ type loopConfig struct {
 	ready   *atomic.Bool
 	spoke   *federation.Spoke
 	otlpExp *otlp.Exporter
+	otlpSem chan struct{} // semaphore bounding concurrent OTLP pushes; nil when OTLP disabled
 }
 
 func (lc loopConfig) otlpPush(ctx context.Context, fn func(context.Context) error, warnMsg string) {
+	if lc.otlpSem != nil {
+		select {
+		case lc.otlpSem <- struct{}{}:
+		default:
+			lc.logger.Warn("otlp push dropped: concurrent limit reached")
+			lc.m.OTLPPushTotal.WithLabelValues("dropped").Inc()
+			return
+		}
+	}
 	go func() {
+		if lc.otlpSem != nil {
+			defer func() { <-lc.otlpSem }()
+		}
 		pushCtx, cancel := context.WithTimeout(ctx, otlpPushTimeout)
 		defer cancel()
 		if err := fn(pushCtx); err != nil {
