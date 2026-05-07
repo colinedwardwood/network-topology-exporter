@@ -18,6 +18,7 @@ import (
 
 // Config is the top-level exporter configuration.
 type Config struct {
+	Listen      ListenConfig      `yaml:"listen"`
 	Discovery   DiscoveryConfig   `yaml:"discovery"`
 	Modules     ModulesConfig     `yaml:"modules"`
 	Credentials CredentialsConfig `yaml:"credentials"`
@@ -25,6 +26,14 @@ type Config struct {
 	Federation  FederationConfig  `yaml:"federation"`
 	Output      OutputConfig      `yaml:"output"`
 	Targets     []TargetConfig    `yaml:"targets"`
+}
+
+// ListenConfig holds the HTTP/HTTPS listen address and optional TLS files.
+// When TLSCertFile and TLSKeyFile are both empty the server uses plain HTTP.
+type ListenConfig struct {
+	Addr        string `yaml:"addr"`          // default ":9100"
+	TLSCertFile string `yaml:"tls_cert_file"` // leave empty for plain HTTP
+	TLSKeyFile  string `yaml:"tls_key_file"`
 }
 
 // OutputConfig holds optional push-mode output paths.
@@ -243,6 +252,9 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) applyDefaults() {
+	if c.Listen.Addr == "" {
+		c.Listen.Addr = ":9100"
+	}
 	if c.Discovery.Interval == 0 {
 		c.Discovery.Interval = 60 * time.Second
 	}
@@ -291,7 +303,27 @@ func (c *Config) applyDefaults() {
 	}
 }
 
+func (c *Config) validateListen() error {
+	certSet := c.Listen.TLSCertFile != ""
+	keySet := c.Listen.TLSKeyFile != ""
+	if certSet != keySet {
+		return errors.New("listen.tls_cert_file and listen.tls_key_file must both be set or both be empty")
+	}
+	if certSet {
+		if _, err := os.Stat(c.Listen.TLSCertFile); err != nil {
+			return fmt.Errorf("listen.tls_cert_file %q: %w", c.Listen.TLSCertFile, err)
+		}
+		if _, err := os.Stat(c.Listen.TLSKeyFile); err != nil {
+			return fmt.Errorf("listen.tls_key_file %q: %w", c.Listen.TLSKeyFile, err)
+		}
+	}
+	return nil
+}
+
 func (c *Config) validate() error {
+	if err := c.validateListen(); err != nil {
+		return err
+	}
 	if c.Discovery.Parallelism < 1 {
 		return errors.New("discovery.parallelism must be >= 1")
 	}
