@@ -1,36 +1,10 @@
-// Package isis infers L3 topology from IS-IS adjacencies.
+// Package isis infers L3 topology from IS-IS adjacency tables.
 //
-// # Specification sources
-//
-//   - RFC 4444 — Management Information Base for Intermediate System to
-//     Intermediate System (IS-IS). OID base 1.3.6.1.2.1.138. The adjacency
-//     table (isisISAdjTable, 1.3.6.1.2.1.138.1.6.1) holds one row per IS-IS
-//     adjacency; isisISAdjState (.2) gives the adjacency state. The adjacency
-//     IP address table (isisISAdjIPAddrTable, 1.3.6.1.2.1.138.1.6.2) holds
-//     the IP addresses associated with each adjacency. The circuit table
-//     (isisISCircTable, 1.3.6.1.2.1.138.1.4.1) maps circuit indexes to
-//     interface indexes; isisISCircIfIndex (.3) is the column used here.
-//   - RFC 2863 — IF-MIB. ifDescr (1.3.6.1.2.1.2.2.1.2) maps ifIndex to the
-//     human-readable interface name (e.g. "GigabitEthernet0/0").
-//
-// # Critical implementation notes
-//
-//  1. Only adjacencies in state up(3) are emitted as edges. States down(1),
-//     initializing(2), and failed(4) represent incomplete or stale adjacencies
-//     and are filtered before edge construction.
-//
-//  2. IPv6 adjacency IP entries use addrType=2; this implementation only
-//     handles addrType=1 (IPv4, addrLen=4). IPv6 entries are silently skipped.
-//
-//  3. The OID suffix for isisISAdjIPAddrEntry has the form
-//     {sysInst}.{circIdx}.{adjIdx}.{addrType}.{addrLen}.{addr octets}.
-//     The adjKey is extracted by splitting on "." and dropping the last 6
-//     tail components (addrType + addrLen + 4 octets). Using LastIndex(".1.4.")
-//     is unsafe when adjIdx==4 and the IP starts with 1.4.x.x.
-//
-//  4. SrcPort is populated by joining isisISCircIfIndex and ifDescr: the
-//     circuit key "{sysInst}.{circIdx}" is the first two components of adjKey.
-//     If the circuit walk fails, SrcPort is left empty (degraded mode).
+// Invariants:
+// - Only adjacency state up(3) emits edges.
+// - adjKey is derived by dropping the IPv4 tail from isisISAdjIPAddr OID suffix.
+// - adjState decode errors are hard-fail (required signal).
+// - circuit/ifDescr joins are optional; failures degrade SrcPort enrichment.
 package isis
 
 import (
@@ -51,8 +25,6 @@ const (
 	oidISISAdjState    = "1.3.6.1.2.1.138.1.6.1.1.2"
 	oidISISAdjIPAddr   = "1.3.6.1.2.1.138.1.6.2.1.2"
 	oidISISCircIfIndex = "1.3.6.1.2.1.138.1.4.1.1.3"
-	metaKeyDegraded    = "network.topology.degraded"
-	metaKeyDegradedWhy = "network.topology.degraded_reason"
 	// precedenceRank 5: IS-IS ranked above OSPF (6) because it is more commonly
 	// the primary IGP on service-provider networks and carries richer TE data.
 	// Ladder: LLDP=2, CDP=3, FDB=4, IS-IS=5, OSPF=6, BGP=7, MPLS-TE=8.
@@ -198,7 +170,7 @@ func isisMetadata(degradedReason string) map[string]string {
 		return nil
 	}
 	return map[string]string{
-		metaKeyDegraded:    "true",
-		metaKeyDegradedWhy: degradedReason,
+		discovery.MetadataKeyDegraded:       "true",
+		discovery.MetadataKeyDegradedReason: degradedReason,
 	}
 }

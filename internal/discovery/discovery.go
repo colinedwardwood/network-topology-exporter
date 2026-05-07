@@ -33,6 +33,13 @@ import (
 	"time"
 )
 
+const (
+	// MetadataKeyDegraded marks an edge emitted in degraded mode.
+	MetadataKeyDegraded = "network.topology.degraded"
+	// MetadataKeyDegradedReason carries the degraded-mode reason code.
+	MetadataKeyDegradedReason = "network.topology.degraded_reason"
+)
+
 // Device is the inventory record for one network node.
 type Device struct {
 	ID        string // sysName (normalised lowercase); fallback: management IP
