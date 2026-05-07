@@ -499,6 +499,7 @@ func runCycle(
 		device     *discovery.Device
 		edges      []discovery.Edge
 		outOfScope []discovery.OutOfScopeNeighbour
+		mgmtIP     string
 	}
 
 	results := make([]probeResult, 0, len(cfg.Targets))
@@ -617,7 +618,7 @@ func runCycle(
 			}
 
 			mu.Lock()
-			results = append(results, probeResult{device: dev, edges: allEdges, outOfScope: allOOS})
+			results = append(results, probeResult{device: dev, edges: allEdges, outOfScope: allOOS, mgmtIP: ip.String()})
 			okCount++
 			mu.Unlock()
 		}()
@@ -630,13 +631,18 @@ func runCycle(
 	var devices []discovery.Device
 	var rawEdges []discovery.Edge
 	var allOOS []discovery.OutOfScopeNeighbour
+	ipToID := make(map[string]string, len(results))
 	for _, r := range results {
 		if r.device != nil {
 			devices = append(devices, *r.device)
+			if r.mgmtIP != "" {
+				ipToID[r.mgmtIP] = r.device.ID
+			}
 		}
 		rawEdges = append(rawEdges, r.edges...)
 		allOOS = append(allOOS, r.outOfScope...)
 	}
+	resolveEdgeDstDevices(rawEdges, ipToID)
 
 	reconciledEdges, conflicts := graph.Reconcile(rawEdges)
 
@@ -662,6 +668,21 @@ func runCycle(
 		Edges:      reconciledEdges,
 		OutOfScope: allOOS,
 	}, ages, conflicts, int(failCount)
+}
+
+// resolveEdgeDstDevices replaces IP-valued DstDevice fields with the
+// canonical device ID (sysName) from the discovered inventory when available.
+// BGP/OSPF/IS-IS walks report peer IPs as DstDevice; LLDP reports sysNames.
+// Resolving to sysName allows graph.Reconcile to deduplicate edges that
+// represent the same physical link reported by different protocols.
+func resolveEdgeDstDevices(edges []discovery.Edge, ipToID map[string]string) {
+	for i := range edges {
+		if net.ParseIP(edges[i].DstDevice) != nil {
+			if id, ok := ipToID[edges[i].DstDevice]; ok {
+				edges[i].DstDevice = id
+			}
+		}
+	}
 }
 
 type credentialCandidate struct {
