@@ -426,3 +426,31 @@ func TestServiceResourceAttributes(t *testing.T) {
 		t.Error("service.instance.id attribute missing from resource")
 	}
 }
+
+// TestSchemaURLPresent verifies that the serialised OTLP metrics payload
+// includes a schemaUrl field set to the OpenTelemetry 1.21.0 schema URL.
+func TestSchemaURLPresent(t *testing.T) {
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody = decodeBody(t, r)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+
+	if err := exp.PushGraph(context.Background(), discovery.Graph{}); err != nil {
+		t.Fatalf("PushGraph: %v", err)
+	}
+
+	rm := gotBody["resourceMetrics"].([]any)[0].(map[string]any)
+	schemaURL, ok := rm["schemaUrl"].(string)
+	if !ok || schemaURL == "" {
+		t.Fatalf("schemaUrl missing or empty in resourceMetrics[0]; got %v", rm["schemaUrl"])
+	}
+	const wantURL = "https://opentelemetry.io/schemas/1.21.0"
+	if schemaURL != wantURL {
+		t.Errorf("schemaUrl = %q, want %q", schemaURL, wantURL)
+	}
+}

@@ -95,6 +95,7 @@ type scopeMetrics struct {
 }
 
 type resourceMetrics struct {
+	SchemaUrl    string         `json:"schemaUrl,omitempty"`
 	Resource     resource       `json:"resource"`
 	ScopeMetrics []scopeMetrics `json:"scopeMetrics"`
 }
@@ -121,6 +122,7 @@ type scopeLogs struct {
 }
 
 type resourceLogs struct {
+	SchemaUrl string      `json:"schemaUrl,omitempty"`
 	Resource  resource    `json:"resource"`
 	ScopeLogs []scopeLogs `json:"scopeLogs"`
 }
@@ -130,10 +132,11 @@ type logsPayload struct {
 }
 
 const (
-	serviceName  = "network-topology-exporter"
-	scopeName    = "github.com/colinedwardwood/network-topology-exporter"
-	severityInfo = 9
-	severityWarn = 13
+	serviceName   = "network-topology-exporter"
+	scopeName     = "github.com/colinedwardwood/network-topology-exporter"
+	severityInfo  = 9
+	severityWarn  = 13
+	otlpSchemaURL = "https://opentelemetry.io/schemas/1.21.0"
 )
 
 var serviceRes resource
@@ -156,15 +159,19 @@ func (e *Exporter) PushGraph(ctx context.Context, g discovery.Graph) error {
 
 	edgePoints := make([]dataPoint, 0, len(g.Edges))
 	for _, edge := range g.Edges {
+		attrs := []kv{
+			{Key: "src_device", Value: kvValue{StringValue: edge.SrcDevice}},
+			{Key: "src_port", Value: kvValue{StringValue: edge.SrcPort}},
+			{Key: "dst_device", Value: kvValue{StringValue: edge.DstDevice}},
+			{Key: "dst_port", Value: kvValue{StringValue: edge.DstPort}},
+			{Key: "proto", Value: kvValue{StringValue: edge.DiscoveryProto}},
+			{Key: "link_kind", Value: kvValue{StringValue: edge.LinkKind}},
+		}
+		for k, v := range edge.Metadata {
+			attrs = append(attrs, kv{Key: "network.topology." + k, Value: kvValue{StringValue: v}})
+		}
 		edgePoints = append(edgePoints, dataPoint{
-			Attributes: []kv{
-				{Key: "src_device", Value: kvValue{StringValue: edge.SrcDevice}},
-				{Key: "src_port", Value: kvValue{StringValue: edge.SrcPort}},
-				{Key: "dst_device", Value: kvValue{StringValue: edge.DstDevice}},
-				{Key: "dst_port", Value: kvValue{StringValue: edge.DstPort}},
-				{Key: "proto", Value: kvValue{StringValue: edge.DiscoveryProto}},
-				{Key: "link_kind", Value: kvValue{StringValue: edge.LinkKind}},
-			},
+			Attributes:   attrs,
 			AsDouble:     1.0,
 			TimeUnixNano: now,
 		})
@@ -184,7 +191,8 @@ func (e *Exporter) PushGraph(ctx context.Context, g discovery.Graph) error {
 	payload := metricsPayload{
 		ResourceMetrics: []resourceMetrics{
 			{
-				Resource: serviceRes,
+				SchemaUrl: otlpSchemaURL,
+				Resource:  serviceRes,
 				ScopeMetrics: []scopeMetrics{
 					{
 						Scope: scope{Name: scopeName},
@@ -265,7 +273,8 @@ func (e *Exporter) PushChanges(ctx context.Context, changes []graph.EdgeChange) 
 	payload := logsPayload{
 		ResourceLogs: []resourceLogs{
 			{
-				Resource: serviceRes,
+				SchemaUrl: otlpSchemaURL,
+				Resource:  serviceRes,
 				ScopeLogs: []scopeLogs{
 					{
 						Scope:      scope{Name: scopeName},

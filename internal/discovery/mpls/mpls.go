@@ -36,8 +36,9 @@ import (
 )
 
 const (
-	oidMplsTunnelOperStatus = "1.3.6.1.2.1.10.166.3.2.2.1.17"
-	mplsTunnelOperUp        = 1
+	oidMplsTunnelOperStatus  = "1.3.6.1.2.1.10.166.3.2.2.1.17"
+	oidMplsTunnelAdminStatus = "1.3.6.1.2.1.10.166.3.2.2.1.13"
+	mplsTunnelOperUp         = 1
 	// precedenceRank 8: lowest priority in the graph merge ladder.
 	// Ladder: LLDP=2, CDP=3, FDB=4, IS-IS=5, OSPF=6, BGP=7, MPLS-TE=8.
 	// Higher rank = lower precedence in graph merge.
@@ -57,6 +58,21 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	pdus, err := snmputil.BulkWalk(ctx, client, oidMplsTunnelOperStatus)
 	if err != nil {
 		return nil, nil, fmt.Errorf("mpls_te tunnel table %s: %w", p.IP, err)
+	}
+
+	adminPDUs, err := snmputil.BulkWalk(ctx, client, oidMplsTunnelAdminStatus)
+	if err != nil {
+		return nil, nil, fmt.Errorf("mpls_te admin status table %s: %w", p.IP, err)
+	}
+
+	const adminPrefix = "." + oidMplsTunnelAdminStatus + "."
+	adminStatuses := make(map[string]int, len(adminPDUs))
+	for _, pdu := range adminPDUs {
+		suffix, ok := snmputil.TrimOIDPrefix(pdu.Name, adminPrefix)
+		if !ok {
+			continue
+		}
+		adminStatuses[suffix] = snmputil.PDUInt(pdu)
 	}
 
 	const prefix = "." + oidMplsTunnelOperStatus + "."
@@ -84,6 +100,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 			})
 			continue
 		}
+		adminStatus := adminStatuses[suffix] // 0 if not found
 		edges = append(edges, discovery.Edge{
 			SrcDevice:      localDevice,
 			SrcPort:        fmt.Sprintf("te-tunnel%d", tunnelIdx),
@@ -95,9 +112,28 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 			PrecedenceRank: precedenceRank,
 			LinkKind:       "mpls-te",
 			ObservedAt:     now,
+			Metadata: map[string]string{
+				"mpls_te.admin_status": mplsAdminStatusString(adminStatus),
+			},
 		})
 	}
 	return edges, oos, nil
+}
+
+// mplsAdminStatusString converts a mplsTunnelAdminStatus integer value to a
+// human-readable string. Values are defined in RFC 3812: up(1), down(2),
+// testing(3). Zero indicates the value was absent from the SNMP walk.
+func mplsAdminStatusString(v int) string {
+	switch v {
+	case 1:
+		return "up"
+	case 2:
+		return "down"
+	case 3:
+		return "testing"
+	default:
+		return "unknown"
+	}
 }
 
 // parseTunnelSuffix parses the OID suffix that follows the mplsTunnelOperStatus

@@ -114,6 +114,10 @@ type Edge struct {
 	// in a row. The discovery module fills ObservedAt and leaves the counter
 	// at zero — the counter is graph-layer state, not per-cycle state.
 	ObservedAt time.Time
+
+	// Metadata holds protocol-specific attributes that don't fit the core schema.
+	// Keys and values are free-form strings. Nil when no extra metadata is present.
+	Metadata map[string]string
 }
 
 // OutOfScopeNeighbour is the LD-11 surface for neighbours discovered via
