@@ -62,19 +62,10 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 		return nil, nil, fmt.Errorf("mpls_te tunnel table %s: %w", p.IP, err)
 	}
 
-	adminPDUs, adminErr := snmputil.BulkWalk(ctx, client, oidMplsTunnelAdminStatus)
+	adminStatuses, adminErr := snmputil.WalkToIntMap(ctx, client, oidMplsTunnelAdminStatus)
 	if adminErr != nil {
 		slog.Debug("mpls_te: admin status walk failed; admin_status will be unknown", "device", p.IP, "err", adminErr)
-	}
-
-	const adminPrefix = "." + oidMplsTunnelAdminStatus + "."
-	adminStatuses := make(map[string]int, len(adminPDUs))
-	for _, pdu := range adminPDUs {
-		suffix, ok := snmputil.TrimOIDPrefix(pdu.Name, adminPrefix)
-		if !ok {
-			continue
-		}
-		adminStatuses[suffix] = snmputil.PDUInt(pdu)
+		adminStatuses = nil
 	}
 
 	const prefix = "." + oidMplsTunnelOperStatus + "."
