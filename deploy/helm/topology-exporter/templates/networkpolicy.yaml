@@ -1,0 +1,33 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "topology-exporter.fullname" . }}
+  labels:
+    {{- include "topology-exporter.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "topology-exporter.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow Prometheus scraping on the metrics port from anywhere.
+    - ports:
+        - port: {{ .Values.service.port | default 9100 }}
+          protocol: TCP
+    {{- if .Values.service.hubEnabled }}
+    # Allow spoke push on the hub federation port only from pods matching spokeSelector.
+    - from:
+        {{- if .Values.networkPolicy.spokeSelector }}
+        - podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.spokeSelector | nindent 14 }}
+        {{- else }}
+        - podSelector: {}
+        {{- end }}
+      ports:
+        - port: {{ .Values.service.hubPort | default 9101 }}
+          protocol: TCP
+    {{- end }}
+{{- end }}
