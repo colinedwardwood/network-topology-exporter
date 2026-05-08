@@ -44,14 +44,14 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	}
 	defer func() { _ = client.Conn.Close() }()
 
-	states, stateStats, err := walkAdjStates(ctx, client)
+	states, stateDegraded, err := walkAdjStates(ctx, client)
 	if err != nil {
 		return nil, nil, fmt.Errorf("isis adjState %s: %w", p.IP, err)
 	}
 
 	var circIfNames map[string]string
 	var degradedReasons []string
-	if stateStats.InvalidRows > 0 {
+	if stateDegraded {
 		degradedReasons = append(degradedReasons, discovery.DegradedReasonRequiredTablePartialDecode)
 	}
 	if len(states) > 0 {
@@ -65,31 +65,30 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 		}
 	}
 
-	edges, oos, err := walkAdjIPAddrs(ctx, client, localDevice, states, circIfNames, joinReasons(degradedReasons), allowedNets)
+	edges, oos, err := walkAdjIPAddrs(ctx, client, localDevice, states, circIfNames, discovery.JoinReasonCodes(degradedReasons), allowedNets)
 	if err != nil {
 		return nil, nil, fmt.Errorf("isis adjIPAddr %s: %w", p.IP, err)
 	}
 	return edges, oos, nil
 }
 
-func walkAdjStates(ctx context.Context, client *gsnmp.GoSNMP) (map[string]int, snmputil.IntMapDecodeStats, error) {
+func walkAdjStates(ctx context.Context, client *gsnmp.GoSNMP) (map[string]int, bool, error) {
 	states, stats, err := snmputil.WalkToIntMapStrict(ctx, client, "isis", oidISISAdjState)
 	if err != nil {
-		return nil, stats, err
+		return nil, false, err
 	}
 	degraded, hardFailReason := snmputil.EvaluateRequiredTablePolicy(stats, snmputil.RequiredTablePolicy{
 		MinValidRows:    requiredMinValidRows,
 		MaxInvalidRatio: requiredMaxInvalidRatio,
 	})
-	_ = degraded
 	if hardFailReason != "" {
-		return nil, stats, &discovery.PolicyError{
+		return nil, false, &discovery.PolicyError{
 			Module: "isis",
 			Reason: hardFailReason,
 			Err:    fmt.Errorf("adjState stats: valid=%d total=%d invalid=%d ratio=%.3f", stats.ValidRows, stats.TotalRows, stats.InvalidRows, stats.InvalidRatio),
 		}
 	}
-	return states, stats, nil
+	return states, degraded, nil
 }
 
 // walkCircuitIfNames returns a map from "{sysInst}.{circIdx}" to the interface
@@ -191,20 +190,4 @@ func isisMetadata(degradedReason string) map[string]string {
 		discovery.MetadataKeyDegraded:       "true",
 		discovery.MetadataKeyDegradedReason: degradedReason,
 	}
-}
-
-func joinReasons(reasons []string) string {
-	if len(reasons) == 0 {
-		return ""
-	}
-	seen := make(map[string]bool)
-	ordered := make([]string, 0, len(reasons))
-	for _, reason := range reasons {
-		if reason == "" || seen[reason] {
-			continue
-		}
-		seen[reason] = true
-		ordered = append(ordered, reason)
-	}
-	return strings.Join(ordered, ",")
 }

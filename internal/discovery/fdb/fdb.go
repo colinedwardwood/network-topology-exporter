@@ -138,7 +138,9 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, _ []*net.I
 	}
 	// Q-BRIDGE walk failures are non-fatal: devices that implement only B-MIB
 	// return an empty result or a no-such-object error, both of which are fine.
-	_ = walkQBridgeFdbTable(ctx, client, entries)
+	if err := walkQBridgeFdbTable(ctx, client, entries); err != nil {
+		slog.Debug("fdb: Q-BRIDGE walk failed; using B-MIB only", "device", p.IP, "err", err)
+	}
 	maxVlans := p.MaxVlans
 	if maxVlans <= 0 {
 		maxVlans = 100 // default when not set by caller
@@ -323,7 +325,9 @@ func walkVlanCommunityFdbs(ctx context.Context, p snmputil.Params, client *gsnmp
 			continue
 		}
 		vlanEntries := make(map[string]*fdbEntry)
-		_ = walkFdbTableInto(ctx, vlanClient, vlanEntries)
+		if err := walkFdbTableInto(ctx, vlanClient, vlanEntries); err != nil {
+			slog.Debug("fdb: VLAN community walk incomplete", "device", vp.IP, "vlan", vlanID, "err", err)
+		}
 		_ = vlanClient.Conn.Close()
 		for key, e := range vlanEntries {
 			if _, exists := entries[key]; !exists {
@@ -420,27 +424,27 @@ func buildEdges(localDevice string, entries map[string]*fdbEntry, bridgePorts ma
 			localPort = strconv.Itoa(ifIdx)
 		}
 
-		adjacency := discovery.AdjacencyDirect
-		confidence := discovery.ConfidenceMedium
-		if len(macs) > 1 {
-			adjacency = discovery.AdjacencyIndirect
-			confidence = discovery.ConfidenceLow
+		// AdjacencyIndirect ports (len(macs) > 1) are downstream switch trunks or
+		// access ports with many hosts. Emitting one edge per MAC would create an
+		// unbounded number of Prometheus series on large switches (cardinality bomb).
+		// Without L3 ARP correlation the MAC cannot be mapped to a device identity
+		// anyway, so these edges would be misleading. Suppress them entirely.
+		if len(macs) != 1 {
+			continue
 		}
 
-		for _, mac := range macs {
-			edges = append(edges, discovery.Edge{
-				SrcDevice:      localDevice,
-				SrcPort:        localPort,
-				DstDevice:      mac.String(),
-				DiscoveryProto: "fdb",
-				Direction:      discovery.DirectionUnidirectional,
-				Confidence:     confidence,
-				Adjacency:      adjacency,
-				PrecedenceRank: precedenceRank,
-				LinkKind:       "ethernet",
-				ObservedAt:     now,
-			})
-		}
+		edges = append(edges, discovery.Edge{
+			SrcDevice:      localDevice,
+			SrcPort:        localPort,
+			DstDevice:      macs[0].String(),
+			DiscoveryProto: "fdb",
+			Direction:      discovery.DirectionUnidirectional,
+			Confidence:     discovery.ConfidenceMedium,
+			Adjacency:      discovery.AdjacencyDirect,
+			PrecedenceRank: precedenceRank,
+			LinkKind:       "ethernet",
+			ObservedAt:     now,
+		})
 	}
 	return edges
 }

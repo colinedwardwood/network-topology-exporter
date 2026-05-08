@@ -389,6 +389,30 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 	// Parse CIDR allow-list once; the config is immutable at runtime.
 	allowedNets := snmpwalk.ParseCIDRs(lc.cfg.Discovery.Scope.CIDRAllowList)
 
+	// LD-13: single bounded snapshot writer goroutine. A capacity-1 channel
+	// ensures at most one write is queued at a time; a full channel drops the
+	// new snapshot rather than accumulating blocked goroutines under NFS stall.
+	var snapshotCh chan snapshot.File
+	if lc.cfg.Snapshot.Path != "" {
+		snapshotCh = make(chan snapshot.File, 1)
+		go func() {
+			for f := range snapshotCh {
+				done := make(chan error, 1)
+				go func(f snapshot.File) { done <- snapshot.Write(lc.cfg.Snapshot.Path, f) }(f)
+				select {
+				case err := <-done:
+					if err != nil {
+						lc.logger.Error("snapshot write failed", "error", err)
+					} else {
+						lc.m.SnapshotLastWrittenUnix.Set(float64(time.Now().Unix()))
+					}
+				case <-time.After(snapshotWriteTimeout):
+					lc.logger.Warn("snapshot write timed out (NFS stall?); discovery continues", "timeout", snapshotWriteTimeout)
+				}
+			}
+		}()
+	}
+
 	var cycleNum int
 	cycle := func() {
 		cycleNum++
@@ -441,9 +465,9 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 		}
 		lc.m.DiscoveryCycleDuration.Observe(time.Since(start).Seconds())
 
-		// LD-13: write snapshot in a goroutine with a timeout so an NFS stall
-		// cannot block the discovery cycle. f is passed by value so the next
-		// cycle cannot mutate the data while the write is in progress.
+		// LD-13: write snapshot via the bounded writer channel so an NFS stall
+		// cannot accumulate goroutines across cycles. f is passed by value so the
+		// next cycle cannot mutate the data while the write is in progress.
 		ageMap := graph.EdgeKeysToAges(ages)
 		credCache := resolver.SnapshotCache()
 		f := snapshot.File{
@@ -453,20 +477,13 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 			CredentialCache: credCache,
 			UnconfirmedAges: ageMap,
 		}
-		go func(f snapshot.File) {
-			done := make(chan error, 1)
-			go func() { done <- snapshot.Write(lc.cfg.Snapshot.Path, f) }()
+		if snapshotCh != nil {
 			select {
-			case err := <-done:
-				if err != nil {
-					lc.logger.Error("snapshot write failed", "error", err)
-				} else {
-					lc.m.SnapshotLastWrittenUnix.Set(float64(time.Now().Unix()))
-				}
-			case <-time.After(snapshotWriteTimeout):
-				lc.logger.Warn("snapshot write timed out (NFS stall?); discovery continues", "timeout", snapshotWriteTimeout)
+			case snapshotCh <- f:
+			default:
+				lc.logger.Warn("snapshot write queue full; dropping (previous write still in flight)")
 			}
-		}(f)
+		}
 
 		// LD-16/LD-17: spoke mode — push pre-reconciled graph to hub.
 		if lc.spoke != nil {
@@ -490,6 +507,9 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 	for {
 		select {
 		case <-ctx.Done():
+			if snapshotCh != nil {
+				close(snapshotCh)
+			}
 			return
 		case <-tick.C:
 			cycle()

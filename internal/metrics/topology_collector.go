@@ -1,12 +1,30 @@
 package metrics
 
 import (
+	"strings"
 	"sync/atomic"
+	"time"
+	"unicode"
 
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 )
+
+const maxLabelLen = 128
+
+func sanitizeLabel(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsPrint(r) {
+			return r
+		}
+		return -1
+	}, s)
+	if len(s) > maxLabelLen {
+		return s[:maxLabelLen]
+	}
+	return s
+}
 
 // TopologyCollector implements prometheus.Collector. It holds an atomic
 // pointer to the current discovery.Graph and generates ConstMetrics at
@@ -21,11 +39,16 @@ type TopologyCollector struct {
 	edgeInfoDesc     *prometheus.Desc
 	oosCountDesc     *prometheus.Desc
 	boundaryObsDesc  *prometheus.Desc
+
+	scrapeDuration prometheus.Gauge
+	scrapeSamples  prometheus.Gauge
 }
 
-func newTopologyCollector(emitBoundaryObs bool) *TopologyCollector {
+func newTopologyCollector(emitBoundaryObs bool, scrapeDuration, scrapeSamples prometheus.Gauge) *TopologyCollector {
 	c := &TopologyCollector{
 		emitBoundaryObs: emitBoundaryObs,
+		scrapeDuration:  scrapeDuration,
+		scrapeSamples:   scrapeSamples,
 		deviceInfoDesc: prometheus.NewDesc(
 			"network_device_info",
 			"One series per discovered device. Value is always 1; inventory data is in the labels.",
@@ -83,39 +106,59 @@ func (c *TopologyCollector) Describe(ch chan<- *prometheus.Desc) {
 // concurrently by the Prometheus HTTP handler; safe because snap is an
 // atomic pointer and ConstMetrics are immutable.
 func (c *TopologyCollector) Collect(ch chan<- prometheus.Metric) {
+	start := time.Now()
 	g := c.snap.Load()
 
+	samples := 0
 	for _, d := range g.Devices {
 		ch <- prometheus.MustNewConstMetric(
 			c.deviceInfoDesc, prometheus.GaugeValue, 1,
-			d.ID, d.Vendor, d.Model, d.OSVersion, d.Site,
+			sanitizeLabel(d.ID), sanitizeLabel(d.Vendor), sanitizeLabel(d.Model),
+			sanitizeLabel(d.OSVersion), sanitizeLabel(d.Site),
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.deviceUptimeDesc, prometheus.GaugeValue, d.Uptime.Seconds(),
-			d.ID,
+			sanitizeLabel(d.ID),
 		)
+		samples += 2
 	}
 
 	for _, e := range g.Edges {
 		ch <- prometheus.MustNewConstMetric(
 			c.edgeInfoDesc, prometheus.GaugeValue, 1,
-			e.SrcDevice, e.SrcPort, e.DstDevice, e.DstPort,
+			sanitizeLabel(e.SrcDevice), sanitizeLabel(e.SrcPort),
+			sanitizeLabel(e.DstDevice), sanitizeLabel(e.DstPort),
 			e.DiscoveryProto, e.LinkKind, string(e.Direction),
 		)
+		samples++
 	}
 
 	ch <- prometheus.MustNewConstMetric(
 		c.oosCountDesc, prometheus.GaugeValue, float64(len(g.OutOfScope)),
 	)
+	samples++
 
 	if c.emitBoundaryObs {
 		for _, n := range g.OutOfScope {
-			peerA, peerB := canonicalPair(n.ReportingDevice, n.NeighbourHint)
+			peerA, peerB := canonicalPair(
+				sanitizeLabel(n.ReportingDevice),
+				sanitizeLabel(n.NeighbourHint),
+			)
 			ch <- prometheus.MustNewConstMetric(
 				c.boundaryObsDesc, prometheus.GaugeValue, 1,
-				peerA, peerB, n.ReportingDevice, n.ReportingPort, n.Proto,
+				peerA, peerB,
+				sanitizeLabel(n.ReportingDevice), sanitizeLabel(n.ReportingPort),
+				n.Proto,
 			)
+			samples++
 		}
+	}
+
+	if c.scrapeDuration != nil {
+		c.scrapeDuration.Set(time.Since(start).Seconds())
+	}
+	if c.scrapeSamples != nil {
+		c.scrapeSamples.Set(float64(samples))
 	}
 }
 

@@ -52,6 +52,9 @@ func TestBuildEdgesDirectAdjacency(t *testing.T) {
 
 // buildEdges: multiple MACs on a port → AdjacencyIndirect, ConfidenceLow.
 func TestBuildEdgesIndirectAdjacency(t *testing.T) {
+	// Two MACs on the same port → AdjacencyIndirect. These are suppressed to
+	// avoid a cardinality bomb: without L3 ARP correlation the MAC cannot be
+	// mapped to a device identity, so no edges are emitted.
 	entries := map[string]*fdbEntry{
 		"0.1.2.3.4.5": {mac: []byte{0, 1, 2, 3, 4, 5}, port: 1, status: fdbStatusLearned},
 		"0.1.2.3.4.6": {mac: []byte{0, 1, 2, 3, 4, 6}, port: 1, status: fdbStatusLearned},
@@ -60,16 +63,8 @@ func TestBuildEdgesIndirectAdjacency(t *testing.T) {
 	ifNames := map[int]string{3: "Ethernet1/1"}
 
 	edges := buildEdges("sw-01", entries, bridgePorts, ifNames, nil)
-	if len(edges) != 2 {
-		t.Fatalf("expected 2 edges, got %d", len(edges))
-	}
-	for _, e := range edges {
-		if e.Adjacency != discovery.AdjacencyIndirect {
-			t.Errorf("Adjacency = %q, want indirect", e.Adjacency)
-		}
-		if e.Confidence != discovery.ConfidenceLow {
-			t.Errorf("Confidence = %q, want low", e.Confidence)
-		}
+	if len(edges) != 0 {
+		t.Fatalf("expected 0 edges for indirect port, got %d", len(edges))
 	}
 }
 
@@ -1122,13 +1117,15 @@ func TestWalkStpPortStatesPortStrEmpty(t *testing.T) {
 	}
 }
 
-// buildQBridgeAgentPDUs builds PDUs with one B-MIB entry and one Q-BRIDGE entry.
+// buildQBridgeAgentPDUs builds PDUs with one B-MIB entry and one Q-BRIDGE entry
+// on distinct bridge ports so that each port carries exactly one MAC
+// (AdjacencyDirect) and both produce an edge.
 //
 // dot1dTpFdbTable: MAC 00:0a:bb:cc:dd:ee on bridge port 1 (learned)
-// dot1qTpFdbTable: MAC 00:aa:bb:cc:dd:01 on bridge port 1, VLAN FDB ID 10 (learned)
-// dot1dBasePortTable: bridge port 1 → ifIndex 2
-// dot1dStpPortTable: bridge port 1 → forwarding(5)
-// ifXTable.ifName: ifIndex 2 → "GigabitEthernet0/1"
+// dot1qTpFdbTable: MAC 00:aa:bb:cc:dd:01 on bridge port 2, VLAN FDB ID 10 (learned)
+// dot1dBasePortTable: bridge port 1 → ifIndex 2, bridge port 2 → ifIndex 3
+// dot1dStpPortTable: bridge port 1 → forwarding(5), bridge port 2 → forwarding(5)
+// ifXTable.ifName: ifIndex 2 → "GigabitEthernet0/1", ifIndex 3 → "GigabitEthernet0/2"
 func buildQBridgeAgentPDUs() []gsnmp.SnmpPDU {
 	fdbBase := ".1.3.6.1.2.1.17.4.3.1."
 	qBridgeBase := ".1.3.6.1.2.1.17.7.1.2.2."
@@ -1141,23 +1138,26 @@ func buildQBridgeAgentPDUs() []gsnmp.SnmpPDU {
 	qSuffix := "10.0.170.187.204.221.1"
 
 	return []gsnmp.SnmpPDU{
-		// dot1dTpFdbTable: MAC 00:0a:bb:cc:dd:ee
+		// dot1dTpFdbTable: MAC 00:0a:bb:cc:dd:ee on bridge port 1
 		{Name: fdbBase + "1." + bmibSuffix, Type: gsnmp.OctetString, Value: []byte{0, 10, 187, 204, 221, 238}},
 		{Name: fdbBase + "2." + bmibSuffix, Type: gsnmp.Integer, Value: 1},
 		{Name: fdbBase + "3." + bmibSuffix, Type: gsnmp.Integer, Value: fdbStatusLearned},
 
-		// dot1qTpFdbTable: MAC 00:aa:bb:cc:dd:01, VLAN FDB ID 10
-		{Name: qBridgeBase + "2." + qSuffix, Type: gsnmp.Integer, Value: 1},
+		// dot1qTpFdbTable: MAC 00:aa:bb:cc:dd:01 on bridge port 2, VLAN FDB ID 10
+		{Name: qBridgeBase + "2." + qSuffix, Type: gsnmp.Integer, Value: 2},
 		{Name: qBridgeBase + "3." + qSuffix, Type: gsnmp.Integer, Value: fdbStatusLearned},
 
-		// dot1dBasePortTable: bridge port 1 → ifIndex 2
+		// dot1dBasePortTable: bridge port 1 → ifIndex 2, bridge port 2 → ifIndex 3
 		{Name: basePortBase + "2.1", Type: gsnmp.Integer, Value: 2},
+		{Name: basePortBase + "2.2", Type: gsnmp.Integer, Value: 3},
 
-		// dot1dStpPortTable: bridge port 1 → forwarding(5)
+		// dot1dStpPortTable: bridge ports 1 and 2 → forwarding(5)
 		{Name: stpPortBase + "3.1", Type: gsnmp.Integer, Value: stpStateForwarding},
+		{Name: stpPortBase + "3.2", Type: gsnmp.Integer, Value: stpStateForwarding},
 
-		// ifXTable.ifName: ifIndex 2 → "GigabitEthernet0/1"
+		// ifXTable.ifName: ifIndex 2 → "GigabitEthernet0/1", ifIndex 3 → "GigabitEthernet0/2"
 		{Name: ifNameBase + "2", Type: gsnmp.OctetString, Value: []byte("GigabitEthernet0/1")},
+		{Name: ifNameBase + "3", Type: gsnmp.OctetString, Value: []byte("GigabitEthernet0/2")},
 	}
 }
 

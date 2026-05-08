@@ -60,7 +60,10 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 
 	adminStatuses, adminStats, adminErr := snmputil.WalkToIntMapStrict(ctx, client, "mpls_te", oidMplsTunnelAdminStatus)
 	degradedReasons := make([]string, 0, 2)
-	if operStats.InvalidRows > 0 {
+	if degraded, _ := snmputil.EvaluateRequiredTablePolicy(operStats, snmputil.RequiredTablePolicy{
+		MinValidRows:    requiredMinValidRows,
+		MaxInvalidRatio: requiredMaxInvalidRatio,
+	}); degraded {
 		degradedReasons = append(degradedReasons, discovery.DegradedReasonRequiredTablePartialDecode)
 	}
 	if adminErr != nil {
@@ -76,7 +79,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 		)
 		degradedReasons = append(degradedReasons, discovery.DegradedReasonInvalidAdminStatusDecode)
 	}
-	degradedReason := joinReasons(degradedReasons)
+	degradedReason := discovery.JoinReasonCodes(degradedReasons)
 
 	now := time.Now()
 	var edges []discovery.Edge
@@ -121,22 +124,6 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 		})
 	}
 	return edges, oos, nil
-}
-
-func joinReasons(reasons []string) string {
-	if len(reasons) == 0 {
-		return ""
-	}
-	seen := make(map[string]bool)
-	ordered := make([]string, 0, len(reasons))
-	for _, reason := range reasons {
-		if reason == "" || seen[reason] {
-			continue
-		}
-		seen[reason] = true
-		ordered = append(ordered, reason)
-	}
-	return strings.Join(ordered, ",")
 }
 
 // mplsAdminStatusString converts a mplsTunnelAdminStatus integer value to a
