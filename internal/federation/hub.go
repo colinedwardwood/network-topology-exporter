@@ -43,6 +43,7 @@ type Hub struct {
 	m                    *metrics.Metrics
 	logger               *slog.Logger
 	snapshotPath         string
+	snapshotCh           chan discovery.Graph
 	firstLive            atomic.Bool // set to true on the first live publishMetrics call
 	snapshotWriteFn      func(string, snapshot.File) error
 	snapshotWriteTimeout time.Duration
@@ -56,7 +57,7 @@ func NewHub(cfg config.FederationConfig, m *metrics.Metrics, logger *slog.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Hub{
+	h := &Hub{
 		cfg:                  cfg,
 		spokes:               make(map[string]spokeEntry),
 		m:                    m,
@@ -65,6 +66,10 @@ func NewHub(cfg config.FederationConfig, m *metrics.Metrics, logger *slog.Logger
 		snapshotWriteFn:      snapshot.Write,
 		snapshotWriteTimeout: 30 * time.Second,
 	}
+	if snapshotPath != "" {
+		h.snapshotCh = make(chan discovery.Graph, 1)
+	}
+	return h
 }
 
 // RestoreGraph populates hub metrics from a snapshot loaded at startup so the
@@ -117,6 +122,9 @@ func (h *Hub) Serve(ctx context.Context) error {
 	tlsLn := tls.NewListener(ln, tlsCfg)
 
 	go h.runEviction(ctx)
+	if h.snapshotCh != nil {
+		go h.runSnapshotWriter(ctx)
+	}
 
 	go func() { //nolint:gosec
 		<-ctx.Done()
@@ -524,24 +532,43 @@ func (h *Hub) writeSnapshot(g discovery.Graph) {
 	h.m.SnapshotLastWrittenUnix.Set(float64(time.Now().Unix()))
 }
 
-// writeSnapshotAsync runs writeSnapshot in a background goroutine with a
-// timeout so an NFS stall cannot block handlePush or evictSilentSpokes.
+// runSnapshotWriter is the single bounded snapshot writer goroutine for the
+// hub. It drains h.snapshotCh one graph at a time, so an NFS stall cannot
+// accumulate goroutines across spoke pushes.
+func (h *Hub) runSnapshotWriter(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case g := <-h.snapshotCh:
+			done := make(chan struct{}, 1)
+			go func(g discovery.Graph) {
+				h.writeSnapshot(g)
+				close(done)
+			}(g)
+			select {
+			case <-done:
+			case <-time.After(h.snapshotWriteTimeout):
+				h.logger.Warn("hub: snapshot write timed out (NFS stall?)", "timeout", h.snapshotWriteTimeout)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+// writeSnapshotAsync enqueues g for writing by the bounded runSnapshotWriter
+// goroutine. If the channel is full (previous write still in flight), the new
+// snapshot is dropped rather than spawning an additional goroutine.
 func (h *Hub) writeSnapshotAsync(g discovery.Graph) {
-	if h.snapshotPath == "" {
+	if h.snapshotCh == nil {
 		return
 	}
-	go func(g discovery.Graph) {
-		done := make(chan struct{}, 1)
-		go func() {
-			h.writeSnapshot(g)
-			done <- struct{}{}
-		}()
-		select {
-		case <-done:
-		case <-time.After(h.snapshotWriteTimeout):
-			h.logger.Warn("hub: snapshot write timed out (NFS stall?)", "timeout", h.snapshotWriteTimeout)
-		}
-	}(g)
+	select {
+	case h.snapshotCh <- g:
+	default:
+		h.logger.Warn("hub: snapshot write queue full; dropping (NFS stall?)")
+	}
 }
 
 // normalizeDeviceName lowercases s and strips the domain suffix (everything after

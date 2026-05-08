@@ -182,7 +182,7 @@ network_topology_edge_info{direction="bidirectional",discovery_proto="lldp",dst_
 // sends exactly 5 descriptors regardless of the emitBoundaryObs flag.
 func TestTopologyCollectorDescribeAllFiveDescriptors(t *testing.T) {
 	for _, emit := range []bool{false, true} {
-		c := newTopologyCollector(emit)
+		c := newTopologyCollector(emit, nil, nil)
 		ch := make(chan *prometheus.Desc, 16)
 		c.Describe(ch)
 		close(ch)

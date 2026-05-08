@@ -60,6 +60,10 @@ type Metrics struct {
 	// Hub OOS matching health: non-zero means cross-domain auto-detection is
 	// partially failing; operators should add known_inter_domain_links entries.
 	HubOOSUnmatchedTotal prometheus.Gauge
+
+	// Scrape-time SLO signals — updated by TopologyCollector on every scrape.
+	TopologyLastScrapeDurationSeconds prometheus.Gauge
+	TopologyLastScrapeSamplesTotal     prometheus.Gauge
 }
 
 // New builds and registers the exporter's metric set. emitBoundaryObs should
@@ -72,7 +76,6 @@ func New(emitBoundaryObs bool) *Metrics {
 
 	m := &Metrics{
 		registry: reg,
-		Topology: newTopologyCollector(emitBoundaryObs),
 		TopologyChangeTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "network_topology_change_total",
 			Help: "Topology mutations between discovery cycles. Resets on restart; use increase() not rate().",
@@ -151,7 +154,16 @@ func New(emitBoundaryObs bool) *Metrics {
 			Name: "network_topology_hub_oos_unmatched_total",
 			Help: "Count of OOS neighbour observations with no reverse match in the last hub graph rebuild. Non-zero means cross-domain auto-detection is partially failing; add known_inter_domain_links entries.",
 		}),
+		TopologyLastScrapeDurationSeconds: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "network_topology_last_scrape_duration_seconds",
+			Help: "Time taken to render all topology metrics at the last Prometheus scrape.",
+		}),
+		TopologyLastScrapeSamplesTotal: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "network_topology_last_scrape_samples_total",
+			Help: "Number of metric samples emitted at the last Prometheus scrape. Alert when this approaches scrape_timeout capacity.",
+		}),
 	}
+	m.Topology = newTopologyCollector(emitBoundaryObs, m.TopologyLastScrapeDurationSeconds, m.TopologyLastScrapeSamplesTotal)
 
 	reg.MustRegister(
 		m.Topology,
@@ -174,6 +186,8 @@ func New(emitBoundaryObs bool) *Metrics {
 		m.FederationSpokeLastPushUnix,
 		m.FederationSpokePushFailuresTotal,
 		m.HubOOSUnmatchedTotal,
+		m.TopologyLastScrapeDurationSeconds,
+		m.TopologyLastScrapeSamplesTotal,
 	)
 
 	return m
