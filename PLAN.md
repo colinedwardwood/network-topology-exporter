@@ -4,9 +4,8 @@
 The exporter is not public-release ready for enterprise use because it can still collapse under predictable scale conditions (especially FDB cardinality and long discovery cycles), and several implementation choices contradict its own hardening claims. The project has strong intent and good module boundaries, but today it is one adversarial topology or one large campus core away from becoming operationally expensive and publicly embarrassing.
 
 ## 2. Immediate Remediation (High Priority)
-- [ ] **Remove Edge-Per-MAC Topology Explosion**: Stop emitting one topology edge per learned host MAC in FDB mode; only emit candidate infrastructure links after identity correlation and confidence gating.
-  **Rationale**: Current behavior creates a deterministic Prometheus cardinality bomb and makes topology semantics wrong (hosts are treated as network devices).
-  **File**: `internal/discovery/fdb/fdb.go` (around `buildEdges` loop, lines 390-445).
+- [x] **Remove Edge-Per-MAC Topology Explosion**: Indirect ports (multi-MAC) suppressed entirely; only direct ports (single MAC) emit edges.
+  **File**: `internal/discovery/fdb/fdb.go`.
 
 - [x] **Kill Insecure `public` Community Fallback**: Remove the automatic fallback to SNMP community `public` when profile/env is missing; fail closed at startup.
   **Rationale**: Default-accepting weak credentials is indefensible under public scrutiny and invites accidental insecure deployments.
@@ -16,17 +15,14 @@ The exporter is not public-release ready for enterprise use because it can still
   **Rationale**: Public users will call this a broken observability contract; dashboards and alerts will silently fail.
   **File**: `README.md` (metrics table, lines 53-56), `internal/metrics/metrics.go` (metric declaration, lines 96-99).
 
-- [ ] **Bound Snapshot Writer Concurrency**: Replace per-cycle detached snapshot goroutines with a single bounded writer queue and backpressure/drop policy.
-  **Rationale**: Repeated NFS stalls can accumulate blocked goroutines and memory pressure over long runtimes.
-  **File**: `cmd/topology-exporter/main.go` (snapshot async write, lines 444-469), `internal/federation/hub.go` (snapshot async write, lines 494-511).
+- [x] **Bound Snapshot Writer Concurrency**: Single bounded writer goroutine + capacity-1 channel; excess writes dropped with Warn log.
+  **File**: `cmd/topology-exporter/main.go`, `internal/federation/hub.go`.
 
-- [ ] **Stop Silent Error Suppression in Discovery**: Replace `_ = ...` non-fatal walks with explicit degraded counters and structured warnings that include module/OID reason.
-  **Rationale**: Silent failure paths look like AI slop and make root-cause analysis impossible in production.
-  **File**: `internal/discovery/fdb/fdb.go` (Q-BRIDGE and VLAN community paths, lines 139-147 and 326-327).
+- [x] **Stop Silent Error Suppression in Discovery**: Q-BRIDGE and VLAN community walk failures now logged at Debug.
+  **File**: `internal/discovery/fdb/fdb.go`.
 
-- [ ] **Harden Label Input Surface**: Enforce normalization, max length, and allowed charset for `device_id`, `src_port`, `dst_port`, and neighbor-derived fields before they become labels.
-  **Rationale**: Malformed SNMP payloads can create unbounded label churn and memory DoS.
-  **File**: `internal/metrics/topology_collector.go` (label emission in `Collect`, lines 88-117), `internal/discovery/lldp/lldp.go`, `internal/discovery/cdp/cdp.go`.
+- [x] **Harden Label Input Surface**: `sanitizeLabel()` strips non-printable runes and caps at 128 chars on all SNMP-derived label values in `Collect()`.
+  **File**: `internal/metrics/topology_collector.go`.
 
 ### Additional fixes shipped (from adversarial review, not in original plan)
 - [x] **Hub publishMetrics lost-update race**: Added generation counter + CAS-based `tryPublishMetrics` so a slow goroutine starting from an older spoke snapshot cannot overwrite a newer combined graph.
