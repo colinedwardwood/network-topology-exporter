@@ -46,6 +46,8 @@ type Hub struct {
 	firstLive            atomic.Bool // set to true on the first live publishMetrics call
 	snapshotWriteFn      func(string, snapshot.File) error
 	snapshotWriteTimeout time.Duration
+	publishGen           atomic.Uint64
+	lastPublishedGen     atomic.Uint64
 }
 
 // NewHub constructs a Hub ready to accept spoke pushes. snapshotPath enables
@@ -204,6 +206,7 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	h.spokes[payload.SpokeID] = spokeEntry{payload: payload, lastSeen: now}
 	spokes := h.spokesSnapshot()
+	gen := h.publishGen.Add(1)
 	h.mu.Unlock()
 	combined := h.buildCombinedGraph(spokes)
 
@@ -211,7 +214,7 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 	h.m.FederationSpokeLastPushUnix.WithLabelValues(payload.SpokeID).Set(float64(now.Unix()))
 	// LD-13: clear GraphStale atomically inside publishMu on the first live push
 	// so a concurrent scrape never sees fresh edges alongside GraphStale=1.
-	h.publishMetrics(combined, !h.firstLive.Swap(true))
+	h.tryPublishMetrics(gen, combined, !h.firstLive.Swap(true))
 	h.writeSnapshotAsync(combined)
 
 	h.logger.Info("hub: spoke push accepted",
@@ -246,10 +249,16 @@ func (h *Hub) combinedGraphLocked() discovery.Graph {
 // lock first, then release h.mu before calling this function.
 func (h *Hub) buildCombinedGraph(spokes map[string]spokeEntry) discovery.Graph {
 	var allDevices []discovery.Device
+	seenDevices := make(map[string]bool)
 	var allEdges []discovery.Edge
 
 	for _, entry := range spokes {
-		allDevices = append(allDevices, entry.payload.Devices...)
+		for _, dev := range entry.payload.Devices {
+			if !seenDevices[dev.ID] {
+				seenDevices[dev.ID] = true
+				allDevices = append(allDevices, dev)
+			}
+		}
 		for _, e := range entry.payload.Edges {
 			allEdges = append(allEdges, e)
 			// A bidirectional edge in the spoke's pre-reconciled graph means
@@ -447,9 +456,10 @@ func (h *Hub) evictSilentSpokes() {
 	if len(evicted) > 0 {
 		h.mu.Lock()
 		spokes := h.spokesSnapshot()
+		gen := h.publishGen.Add(1)
 		h.mu.Unlock()
 		combined := h.buildCombinedGraph(spokes)
-		h.publishMetrics(combined, false)
+		h.tryPublishMetrics(gen, combined, false)
 		h.writeSnapshotAsync(combined)
 	}
 }
@@ -462,6 +472,29 @@ func (h *Hub) publishMetrics(g discovery.Graph, clearStale bool) {
 	h.m.Topology.Update(g)
 	if clearStale {
 		h.m.GraphStale.Set(0)
+	}
+}
+
+// tryPublishMetrics publishes g only when gen is strictly greater than the last
+// published generation, preventing a slow concurrent goroutine from overwriting
+// a newer combined graph with an older snapshot. It uses a CAS loop so that two
+// concurrent callers with equal gen do not both publish.
+func (h *Hub) tryPublishMetrics(gen uint64, g discovery.Graph, clearStale bool) {
+	for {
+		last := h.lastPublishedGen.Load()
+		if gen <= last {
+			if clearStale {
+				h.m.GraphStale.Set(0)
+			}
+			return
+		}
+		if h.lastPublishedGen.CompareAndSwap(last, gen) {
+			h.m.Topology.Update(g)
+			if clearStale {
+				h.m.GraphStale.Set(0)
+			}
+			return
+		}
 	}
 }
 

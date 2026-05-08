@@ -1,156 +1,63 @@
-# v1.6 — SHIPPED 2026-05-07
+# Engineering Improvement Plan: Network Topology Exporter
 
-## Goal
+## 1. Executive Summary
+The exporter is not public-release ready for enterprise use because it can still collapse under predictable scale conditions (especially FDB cardinality and long discovery cycles), and several implementation choices contradict its own hardening claims. The project has strong intent and good module boundaries, but today it is one adversarial topology or one large campus core away from becoming operationally expensive and publicly embarrassing.
 
-Preserve strict decode correctness while eliminating brittle module-level hard
-failures caused by sparse/mixed malformed SNMP rows in heterogeneous fleets.
-Move from binary failure semantics to thresholded, evidence-based degradation.
+## 2. Immediate Remediation (High Priority)
+- [ ] **Remove Edge-Per-MAC Topology Explosion**: Stop emitting one topology edge per learned host MAC in FDB mode; only emit candidate infrastructure links after identity correlation and confidence gating.
+  **Rationale**: Current behavior creates a deterministic Prometheus cardinality bomb and makes topology semantics wrong (hosts are treated as network devices).
+  **File**: `internal/discovery/fdb/fdb.go` (around `buildEdges` loop, lines 390-445).
 
----
+- [x] **Kill Insecure `public` Community Fallback**: Remove the automatic fallback to SNMP community `public` when profile/env is missing; fail closed at startup.
+  **Rationale**: Default-accepting weak credentials is indefensible under public scrutiny and invites accidental insecure deployments.
+  **File**: `cmd/topology-exporter/main.go` (legacy fallback path in `credentialCandidates`, lines 763-778).
 
-## P1 — Row-level quarantine for required tables
+- [x] **Fix Metric Contract Drift**: Reconcile metric name mismatch between docs and implementation (`network_topology_discovery_devices_total` vs `network_topology_discovery_devices`), and lock with tests.
+  **Rationale**: Public users will call this a broken observability contract; dashboards and alerts will silently fail.
+  **File**: `README.md` (metrics table, lines 53-56), `internal/metrics/metrics.go` (metric declaration, lines 96-99).
 
-### Scope
+- [ ] **Bound Snapshot Writer Concurrency**: Replace per-cycle detached snapshot goroutines with a single bounded writer queue and backpressure/drop policy.
+  **Rationale**: Repeated NFS stalls can accumulate blocked goroutines and memory pressure over long runtimes.
+  **File**: `cmd/topology-exporter/main.go` (snapshot async write, lines 444-469), `internal/federation/hub.go` (snapshot async write, lines 494-511).
 
-Change required-table handling (`isis adjState`, `mpls operStatus`) from
-"any anomaly hard-fails module" to "invalid rows are quarantined; valid rows
-continue."
+- [ ] **Stop Silent Error Suppression in Discovery**: Replace `_ = ...` non-fatal walks with explicit degraded counters and structured warnings that include module/OID reason.
+  **Rationale**: Silent failure paths look like AI slop and make root-cause analysis impossible in production.
+  **File**: `internal/discovery/fdb/fdb.go` (Q-BRIDGE and VLAN community paths, lines 139-147 and 326-327).
 
-### Tasks
+- [ ] **Harden Label Input Surface**: Enforce normalization, max length, and allowed charset for `device_id`, `src_port`, `dst_port`, and neighbor-derived fields before they become labels.
+  **Rationale**: Malformed SNMP payloads can create unbounded label churn and memory DoS.
+  **File**: `internal/metrics/topology_collector.go` (label emission in `Collect`, lines 88-117), `internal/discovery/lldp/lldp.go`, `internal/discovery/cdp/cdp.go`.
 
-- Extend strict walk output to expose:
-  - total rows,
-  - valid rows,
-  - invalid row count,
-  - invalid ratio.
-- Update IS-IS and MPLS required-table consumers to:
-  - drop invalid rows,
-  - keep processing valid rows.
-- Keep existing decode issue emission for every anomaly category.
+### Additional fixes shipped (from adversarial review, not in original plan)
+- [x] **Hub publishMetrics lost-update race**: Added generation counter + CAS-based `tryPublishMetrics` so a slow goroutine starting from an older spoke snapshot cannot overwrite a newer combined graph.
+  **File**: `internal/federation/hub.go`
+- [x] **OTLP metadata double-prefix**: `MetadataKeyDegraded`/`MetadataKeyDegradedReason` bare keys now (`"degraded"`, `"degraded_reason"`); OTLP exporter adds `"network.topology."` prefix once.
+  **File**: `internal/discovery/discovery.go`
+- [x] **Hub device dedup absent**: `buildCombinedGraph` now deduplicates devices by ID; prevents duplicate `network_device_info` Prometheus series when spokes share border routers.
+  **File**: `internal/federation/hub.go`
 
-### Acceptance criteria
+## 3. Architectural & Scaling Overhaul
+- [ ] **Introduce Discovery Budget Controller**: Add cycle budget enforcement (`max_cycle_fraction`), per-module budget, and adaptive target throttling when projected runtime exceeds interval.
+  **Reference**: Queueing stability principle (`service_time < inter-arrival_time`) and Prometheus scrape SLO design.
 
-- A single malformed row no longer aborts a module run.
-- Valid rows still produce edges in the same cycle.
-- Invalid rows are excluded from graph output.
+- [ ] **Two-Phase Graph Assembly**: Separate raw observation ingest from canonical link synthesis (identity resolution, dedupe, confidence arbitration, and suppression of endpoint noise).
+  **Reference**: NetInventory reconciliation model and RFC 8345 logical separation of nodes/links.
 
----
+- [ ] **Replace Global Fan-Out with Work-Stealing + Deadline Partitioning**: Keep fixed workers, but assign per-target module deadlines to prevent one slow module from consuming full `timeout_per_device`.
+  **Reference**: Tail-latency control (deadline partitioning) and bounded-concurrency scheduler design.
 
-## P2 — Thresholded hard-fail policy for required signals
+- [ ] **Add Cardinality Budget Enforcement in CI**: Create hard fail tests that cap worst-case series count for synthetic 500/1000-device datasets.
+  **Reference**: Prometheus instrumentation best practice: cardinality budgets as testable contracts.
 
-### Scope
+- [ ] **Add Memory Residency Guardrails**: Track and alarm on graph size, edge churn, snapshot queue depth, and stale goroutine counts; refuse updates when over budget.
+  **Reference**: Backpressure-first design for long-running collectors.
 
-Introduce explicit hard-fail thresholds so required-table failures are
-deterministic and production-safe.
+## 4. Standards & Compliance Checklist
+- [ ] **IEEE 802.1AB Compliance**: Add explicit LLDP row validity checks covering mandatory semantics (Chassis ID, Port ID, TTL interpretation/liveness policy), and reject malformed subtype/address encodings with audited counters.
+- [ ] **RFC 2922/1213 Compliance**: Add a standards matrix documenting implemented MIB objects vs missing Physical Topology MIB coverage; either implement RFC 2922 object support or clearly declare non-support and fallback strategy. Verify MIB-II/IF-MIB object handling and type enforcement in integration tests.
 
-### Tasks
-
-- Add policy constants/config (module-specific):
-  - minimum required valid rows (for example, `min_valid_rows`),
-  - maximum invalid ratio before hard fail (for example, `max_invalid_ratio`).
-- Hard-fail only when threshold policy is violated.
-- Add structured failure reasons:
-  - `required_table_no_valid_rows`,
-  - `required_table_invalid_ratio_exceeded`,
-  - `required_table_walk_error`.
-
-### Acceptance criteria
-
-- Hard-fail outcomes are policy-driven, not incidental.
-- Failure reason is unambiguous in logs/metrics.
-- Behavior is stable across mixed vendor data quality.
-
----
-
-## P3 — Degraded-state semantics and telemetry expansion
-
-### Scope
-
-Differentiate "partial required-table degradation" from "optional enrichment
-degradation" to improve operator actionability.
-
-### Tasks
-
-- Add degraded reason codes for partial required-table quarantine (for example:
-  `required_table_partial_decode`).
-- Keep hard-fail counter for threshold violations.
-- Add metric dimensions or companion counters for:
-  - row quarantine counts by module+oid,
-  - threshold-triggered hard fails by module+reason.
-- Update alert guidance to distinguish:
-  - noisy-but-healthy (quarantine below threshold),
-  - outage-risk (threshold exceeded).
-
-### Acceptance criteria
-
-- Operators can distinguish degraded-but-serving vs hard-failed modules.
-- Alerts can route to "investigate vendor drift" vs "incident now" classes.
-- Metric cardinality remains bounded.
-
----
-
-## P4 — Soak/chaos test matrix for noisy agents
-
-### Scope
-
-Validate resilience under intermittent malformed PDUs and mixed valid/invalid
-table rows over repeated cycles.
-
-### Tasks
-
-- Add table-driven tests for required-table policies:
-  - 1 invalid / many valid rows,
-  - many invalid / few valid rows,
-  - all invalid rows,
-  - invalid ratio edge at threshold boundary.
-- Add multi-cycle tests ensuring:
-  - transient anomalies do not flap module hard-fail state,
-  - sustained anomaly breaches trigger hard-fail deterministically.
-- Add randomized fuzz-like row-mix tests for strict walker stats stability.
-
-### Acceptance criteria
-
-- Tests prove module continuity under sparse anomalies.
-- Tests prove deterministic hard-fail under sustained bad data.
-- No regression in existing strict decode and degraded metadata tests.
-
----
-
-## P5 — Observer coupling hardening
-
-### Scope
-
-Reduce global-callback coupling in decode issue reporting.
-
-### Tasks
-
-- Replace process-global decode observer with explicit dependency injection path
-  (or scoped registry object) used by discovery runtime.
-- Ensure tests can run in parallel without shared global observer state.
-- Keep external behavior/metrics unchanged.
-
-### Acceptance criteria
-
-- No process-global mutable observer dependency in normal runtime path.
-- Decode issue reporting remains functionally equivalent.
-- Tests remain deterministic under parallel execution.
-
----
-
-## Execution order
-
-1. **P1** row-level quarantine primitives and consumer updates.
-2. **P2** thresholded hard-fail policy wiring.
-3. **P3** telemetry/alert semantics split.
-4. **P4** soak/chaos matrix and boundary tests.
-5. **P5** observer coupling refactor.
-
----
-
-## Definition of done (full remediation gate)
-
-- [x] Required-table modules continue on partial row anomalies.
-- [x] Hard-fail triggers only when explicit threshold policy is breached.
-- [x] Quarantine/hard-fail reasons are separately observable in metrics/logs.
-- [x] Multi-cycle noisy-agent tests validate continuity and deterministic failover.
-- [x] Decode reporting path no longer depends on process-global mutable observer state.
+## 5. Prometheus & Observability Polish
+- [ ] **Enforce Stable Metric Schema**: Align implementation/docs, add promtool schema tests, and add a changelog gate requiring explicit migration notes for any metric rename/removal.
+- [ ] **Reduce High-Risk Labels**: Remove or bucket labels with uncontrolled value domains; where identity is unavoidable, provide hashed surrogate labels and emit raw values only in logs.
+- [ ] **Publish Scrape-Time SLOs**: Add exporter self-metrics for render duration and sample count per scrape and alert when approaching scrape timeout.
+- [ ] **Add Degraded-State Truthfulness**: For every suppressed or partial module result, emit one explicit status metric (`module_status{state="degraded|failed|ok"}`) so operators can trust edge absence.

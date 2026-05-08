@@ -363,11 +363,11 @@ func TestWalkAdminStatusDecodeFailureIsDegraded(t *testing.T) {
 	if e.Metadata["mpls_te.admin_status"] != "unknown" {
 		t.Errorf("Metadata[mpls_te.admin_status] = %q, want unknown", e.Metadata["mpls_te.admin_status"])
 	}
-	if e.Metadata["network.topology.degraded"] != "true" {
-		t.Errorf("Metadata[network.topology.degraded] = %q, want true", e.Metadata["network.topology.degraded"])
+	if e.Metadata[discovery.MetadataKeyDegraded] != "true" {
+		t.Errorf("Metadata[%s] = %q, want true", discovery.MetadataKeyDegraded, e.Metadata[discovery.MetadataKeyDegraded])
 	}
-	if e.Metadata["network.topology.degraded_reason"] != "invalid_admin_status_decode" {
-		t.Errorf("Metadata[network.topology.degraded_reason] = %q, want invalid_admin_status_decode", e.Metadata["network.topology.degraded_reason"])
+	if e.Metadata[discovery.MetadataKeyDegradedReason] != discovery.DegradedReasonInvalidAdminStatusDecode {
+		t.Errorf("Metadata[%s] = %q, want %s", discovery.MetadataKeyDegradedReason, e.Metadata[discovery.MetadataKeyDegradedReason], discovery.DegradedReasonInvalidAdminStatusDecode)
 	}
 }
 
@@ -406,11 +406,11 @@ func TestWalkOperStatusPartialDecodeDegraded(t *testing.T) {
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d", len(edges))
 	}
-	if edges[0].Metadata["network.topology.degraded"] != "true" {
+	if edges[0].Metadata[discovery.MetadataKeyDegraded] != "true" {
 		t.Fatalf("expected degraded metadata, got %+v", edges[0].Metadata)
 	}
-	if edges[0].Metadata["network.topology.degraded_reason"] != "required_table_partial_decode" {
-		t.Errorf("degraded_reason = %q, want required_table_partial_decode", edges[0].Metadata["network.topology.degraded_reason"])
+	if edges[0].Metadata[discovery.MetadataKeyDegradedReason] != discovery.DegradedReasonRequiredTablePartialDecode {
+		t.Errorf("degraded_reason = %q, want %s", edges[0].Metadata[discovery.MetadataKeyDegradedReason], discovery.DegradedReasonRequiredTablePartialDecode)
 	}
 }
 
