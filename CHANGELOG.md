@@ -28,7 +28,7 @@
 
 - **D12** — OTLP resource now includes `service.version` and `service.instance.id` alongside `service.name`.
 - **D19** — `network_topology_snapshot_last_written_unix` initialised to `time.Now()` at startup; prevents the `GraphStale` alert from firing on fresh pods.
-- **D20** — Prometheus metric renamed: `network_topology_discovery_devices_total` → `network_topology_discovery_devices` (was a GaugeVec, not a counter; `_total` suffix was incorrect).
+- **D20** — Prometheus metric name corrected: `network_topology_discovery_devices` → `network_topology_discovery_devices_total` to match documented name and README.
 
 ### Configuration
 

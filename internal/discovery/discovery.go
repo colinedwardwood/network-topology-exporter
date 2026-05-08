@@ -31,14 +31,17 @@ package discovery
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
 const (
 	// MetadataKeyDegraded marks an edge emitted in degraded mode.
-	MetadataKeyDegraded = "network.topology.degraded"
+	// The OTLP exporter prepends "network.topology." when emitting attributes,
+	// so this bare key avoids double-prefixing (e.g. "network.topology.network.topology.degraded").
+	MetadataKeyDegraded = "degraded"
 	// MetadataKeyDegradedReason carries the degraded-mode reason code.
-	MetadataKeyDegradedReason = "network.topology.degraded_reason"
+	MetadataKeyDegradedReason = "degraded_reason"
 
 	DegradedReasonRequiredTablePartialDecode = "required_table_partial_decode"
 	DegradedReasonMissingSrcPortMapping      = "missing_srcport_mapping"
@@ -61,6 +64,23 @@ func (e *PolicyError) Error() string {
 }
 
 func (e *PolicyError) Unwrap() error { return e.Err }
+
+// JoinReasonCodes canonicalizes a reason slice into a deduplicated comma list.
+func JoinReasonCodes(reasons []string) string {
+	if len(reasons) == 0 {
+		return ""
+	}
+	seen := make(map[string]bool)
+	ordered := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		if reason == "" || seen[reason] {
+			continue
+		}
+		seen[reason] = true
+		ordered = append(ordered, reason)
+	}
+	return strings.Join(ordered, ",")
+}
 
 // Device is the inventory record for one network node.
 type Device struct {

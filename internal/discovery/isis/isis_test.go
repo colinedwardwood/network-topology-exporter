@@ -315,11 +315,11 @@ func TestWalkSrcPortEmptyWhenCircuitMissing(t *testing.T) {
 	if edges[0].Metadata == nil {
 		t.Fatal("Metadata is nil, want degraded metadata")
 	}
-	if edges[0].Metadata["network.topology.degraded"] != "true" {
-		t.Errorf("network.topology.degraded = %q, want true", edges[0].Metadata["network.topology.degraded"])
+	if edges[0].Metadata[discovery.MetadataKeyDegraded] != "true" {
+		t.Errorf("%s = %q, want true", discovery.MetadataKeyDegraded, edges[0].Metadata[discovery.MetadataKeyDegraded])
 	}
-	if edges[0].Metadata["network.topology.degraded_reason"] != "missing_srcport_mapping" {
-		t.Errorf("network.topology.degraded_reason = %q, want missing_srcport_mapping", edges[0].Metadata["network.topology.degraded_reason"])
+	if edges[0].Metadata[discovery.MetadataKeyDegradedReason] != discovery.DegradedReasonMissingSrcPortMapping {
+		t.Errorf("%s = %q, want %s", discovery.MetadataKeyDegradedReason, edges[0].Metadata[discovery.MetadataKeyDegradedReason], discovery.DegradedReasonMissingSrcPortMapping)
 	}
 }
 
@@ -357,11 +357,11 @@ func TestWalkAdjStatePartialDecodeDegraded(t *testing.T) {
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d", len(edges))
 	}
-	if edges[0].Metadata == nil || edges[0].Metadata["network.topology.degraded"] != "true" {
+	if edges[0].Metadata == nil || edges[0].Metadata[discovery.MetadataKeyDegraded] != "true" {
 		t.Fatalf("expected degraded metadata, got %+v", edges[0].Metadata)
 	}
-	if edges[0].Metadata["network.topology.degraded_reason"] != "required_table_partial_decode" {
-		t.Errorf("degraded_reason = %q, want required_table_partial_decode", edges[0].Metadata["network.topology.degraded_reason"])
+	if edges[0].Metadata[discovery.MetadataKeyDegradedReason] != discovery.DegradedReasonRequiredTablePartialDecode {
+		t.Errorf("degraded_reason = %q, want %s", edges[0].Metadata[discovery.MetadataKeyDegradedReason], discovery.DegradedReasonRequiredTablePartialDecode)
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -559,7 +560,7 @@ func runCycle(
 
 			dev, params, profileName, err := walkSystemWithCredentials(ctx, cfg, resolver, ip, target)
 			if err != nil {
-				logger.Debug("snmp walk failed", "target", target.Host, "error", err)
+				logger.Warn("snmp walk failed", "target", target.Host, "error", err)
 				m.DiscoveryHardFailTotal.WithLabelValues("system", "system_group_walk_error").Inc()
 				m.CredentialTrialsTotal.WithLabelValues("failed").Inc()
 				if errors.Is(err, context.DeadlineExceeded) {
@@ -703,11 +704,17 @@ func collectDegradedReasons(edges []discovery.Edge) []string {
 		if e.Metadata == nil || e.Metadata[discovery.MetadataKeyDegraded] != "true" {
 			continue
 		}
-		reason := e.Metadata[discovery.MetadataKeyDegradedReason]
-		if reason == "" {
-			reason = "unknown"
+		reasons := strings.Split(e.Metadata[discovery.MetadataKeyDegradedReason], ",")
+		if len(reasons) == 0 {
+			reasons = []string{"unknown"}
 		}
-		unique[reason] = true
+		for _, reason := range reasons {
+			reason = strings.TrimSpace(reason)
+			if reason == "" {
+				reason = "unknown"
+			}
+			unique[reason] = true
+		}
 	}
 	reasons := make([]string, 0, len(unique))
 	for reason := range unique {
@@ -753,12 +760,12 @@ func credentialCandidates(cfg *config.Config, resolver *credentials.Resolver, ip
 		}
 	}
 
-	// No profiles configured — fall back to legacy single-community from
-	// modules.snmp.community_env for dev-time convenience.
+	// No profiles configured — use single-community from modules.snmp.community_env.
+	// If the env var is unset, return no candidates so the caller fails closed.
 	if len(cfg.Credentials.Profiles) == 0 {
 		community := os.Getenv(cfg.Modules.SNMP.CommunityEnv)
 		if community == "" {
-			community = "public"
+			return candidates
 		}
 		return append(candidates, credentialCandidate{
 			params: snmpwalk.Params{
