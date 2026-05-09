@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"net"
 	"strconv"
 	"strings"
@@ -206,12 +207,58 @@ func walkRemEntries(ctx context.Context, client *gsnmp.GoSNMP) (map[remKey]*remE
 	return entries, nil
 }
 
+// buildEdges converts the raw SNMP walks into topology edges.
+//
+// TTL liveness: lldpRemTable entries are aged out by the agent per RFC 2922 §3.
+// Expired entries (TTL elapsed) are automatically removed from the SNMP table
+// before our walk, so no explicit TTL field check is needed here.
 func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[remKey]*remEntry, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
 	var edges []discovery.Edge
 	var oos []discovery.OutOfScopeNeighbour
 	now := time.Now()
 
 	for k, rem := range remEntries {
+		// IEEE 802.1AB Table 8-2: chassis ID subtypes are 1–7.
+		if rem.chassisSubtype < 1 || rem.chassisSubtype > 7 {
+			slog.Debug("lldp: invalid chassis ID subtype; skipping entry",
+				"device", localDevice, "subtype", rem.chassisSubtype)
+			continue
+		}
+
+		// IEEE 802.1AB Table 8-3: port ID subtypes are 1–7.
+		if rem.portSubtype < 1 || rem.portSubtype > 7 {
+			slog.Debug("lldp: invalid port ID subtype; skipping entry",
+				"device", localDevice, "subtype", rem.portSubtype)
+			continue
+		}
+
+		// MAC chassis ID (subtype 4) must be exactly 6 bytes.
+		if rem.chassisSubtype == chassisSubtypeMACAddress && len(rem.chassisID) != 6 {
+			slog.Debug("lldp: MAC chassis ID wrong length; skipping entry",
+				"device", localDevice, "got", len(rem.chassisID), "want", 6)
+			continue
+		}
+
+		// Network-address chassis ID (subtype 5): first byte is IANA address family
+		// (1=IPv4, 2=IPv6); total length must be 5 (1+4 for IPv4) or 17 (1+16 for IPv6).
+		if rem.chassisSubtype == chassisSubtypeNetworkAddress {
+			if len(rem.chassisID) < 2 ||
+				(rem.chassisID[0] == 1 && len(rem.chassisID) != 5) ||
+				(rem.chassisID[0] == 2 && len(rem.chassisID) != 17) ||
+				(rem.chassisID[0] != 1 && rem.chassisID[0] != 2) {
+				slog.Debug("lldp: malformed network-address chassis ID; skipping entry",
+					"device", localDevice, "family", rem.chassisID[0], "len", len(rem.chassisID))
+				continue
+			}
+		}
+
+		// MAC port ID (subtype 3) must be exactly 6 bytes.
+		if rem.portSubtype == portSubtypeMACAddress && len(rem.portID) != 6 {
+			slog.Debug("lldp: MAC port ID wrong length; skipping entry",
+				"device", localDevice, "got", len(rem.portID), "want", 6)
+			continue
+		}
+
 		if len(rem.chassisID) == 0 || len(rem.portID) == 0 {
 			continue
 		}
