@@ -39,6 +39,8 @@ type TopologyCollector struct {
 	edgeInfoDesc     *prometheus.Desc
 	oosCountDesc     *prometheus.Desc
 	boundaryObsDesc  *prometheus.Desc
+	graphEdgesDesc   *prometheus.Desc
+	graphDevicesDesc *prometheus.Desc
 
 	scrapeDuration prometheus.Gauge
 	scrapeSamples  prometheus.Gauge
@@ -81,6 +83,16 @@ func newTopologyCollector(emitBoundaryObs bool, scrapeDuration, scrapeSamples pr
 			[]string{"peer_a", "peer_b", "reporting_device", "src_port", "proto"},
 			nil,
 		),
+		graphEdgesDesc: prometheus.NewDesc(
+			"network_topology_graph_edges_total",
+			"Current number of reconciled edges in the active topology graph.",
+			nil, nil,
+		),
+		graphDevicesDesc: prometheus.NewDesc(
+			"network_topology_graph_devices_total",
+			"Current number of devices in the active topology graph.",
+			nil, nil,
+		),
 	}
 	empty := discovery.Graph{}
 	c.snap.Store(&empty)
@@ -100,6 +112,8 @@ func (c *TopologyCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.edgeInfoDesc
 	ch <- c.oosCountDesc
 	ch <- c.boundaryObsDesc
+	ch <- c.graphEdgesDesc
+	ch <- c.graphDevicesDesc
 }
 
 // Collect generates metrics from the current snapshot. May be called
@@ -153,6 +167,10 @@ func (c *TopologyCollector) Collect(ch chan<- prometheus.Metric) {
 			samples++
 		}
 	}
+
+	ch <- prometheus.MustNewConstMetric(c.graphEdgesDesc, prometheus.GaugeValue, float64(len(g.Edges)))
+	ch <- prometheus.MustNewConstMetric(c.graphDevicesDesc, prometheus.GaugeValue, float64(len(g.Devices)))
+	samples += 2
 
 	if c.scrapeDuration != nil {
 		c.scrapeDuration.Set(time.Since(start).Seconds())

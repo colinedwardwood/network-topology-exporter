@@ -49,7 +49,7 @@ The exporter is not public-release ready for enterprise use because it can still
 
 ## 4. Standards & Compliance Checklist
 - [x] **IEEE 802.1AB Compliance**: `buildEdges` validates chassis/port subtypes (1–7), MAC lengths (6 bytes), and network-address family prefix. Invalid entries logged at Debug and dropped.
-- [ ] **RFC 2922/1213 Compliance**: Add a standards matrix documenting implemented MIB objects vs missing Physical Topology MIB coverage; either implement RFC 2922 object support or clearly declare non-support and fallback strategy. Verify MIB-II/IF-MIB object handling and type enforcement in integration tests.
+- [x] **RFC 2922/1213 Compliance**: `docs/standards.md` documents all implemented MIB objects and explicitly declares RFC 2922 (PTOPO-MIB) as intentionally not implemented — vendors universally deploy LLDP instead, making PTOPO-MIB polling a no-op on all known production hardware. MIB-II `system` group and IF-MIB usage are documented. IF-MIB/MIB-II type enforcement in integration tests remains an open item.
 
 ## 5. Prometheus & Observability Polish
 - [x] **Enforce Stable Metric Schema**: `schema_test.go` enumerates all 26 expected metric names via `Registry().Describe`; hard-fails on any rename/removal.

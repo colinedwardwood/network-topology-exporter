@@ -18,6 +18,8 @@ var expectedMetricNames = []string{
 	"network_device_uptime_seconds",
 	"network_topology_edge_info",
 	"network_topology_out_of_scope_neighbours_total",
+	"network_topology_graph_edges_total",
+	"network_topology_graph_devices_total",
 	"network_topology_change_total",
 	"network_topology_conflict_total",
 	"network_topology_graph_stale",
