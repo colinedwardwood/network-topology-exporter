@@ -44,6 +44,7 @@ type Metrics struct {
 	DiscoveryQuarantinedRowsTotal *prometheus.CounterVec
 	DiscoveryDegradedTotal        *prometheus.CounterVec
 	DiscoveryHardFailTotal        *prometheus.CounterVec
+	ModuleLastStatus              *prometheus.GaugeVec
 	CredentialTrialsTotal         *prometheus.CounterVec
 	OTLPPushTotal                 *prometheus.CounterVec
 
@@ -130,6 +131,10 @@ func New(emitBoundaryObs bool) *Metrics {
 			Name: "network_topology_discovery_hard_fail_total",
 			Help: "Discovery hard failures by module and policy/runtime reason.",
 		}, []string{"module", "reason"}),
+		ModuleLastStatus: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "network_topology_module_last_status",
+			Help: "Status of each discovery module in the most recent cycle: 0=ok, 1=degraded (partial results), 2=failed (no results).",
+		}, []string{"module"}),
 		CredentialTrialsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "network_topology_credential_trials_total",
 			Help: "Credential trial attempts under the LD-12 rate limiter.",
@@ -180,6 +185,7 @@ func New(emitBoundaryObs bool) *Metrics {
 		m.DiscoveryQuarantinedRowsTotal,
 		m.DiscoveryDegradedTotal,
 		m.DiscoveryHardFailTotal,
+		m.ModuleLastStatus,
 		m.CredentialTrialsTotal,
 		m.OTLPPushTotal,
 		m.FederationSpokeUp,

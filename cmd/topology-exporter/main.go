@@ -530,10 +530,11 @@ func runCycle(
 	prevAges map[graph.EdgeKey]int,
 ) (discovery.Graph, map[graph.EdgeKey]int, []graph.Conflict, int) {
 	type probeResult struct {
-		device     *discovery.Device
-		edges      []discovery.Edge
-		outOfScope []discovery.OutOfScopeNeighbour
-		mgmtIP     string
+		device       *discovery.Device
+		edges        []discovery.Edge
+		outOfScope   []discovery.OutOfScopeNeighbour
+		mgmtIP       string
+		moduleStatus map[string]int // proto -> 0 ok | 1 degraded | 2 failed
 	}
 
 	results := make([]probeResult, 0, len(cfg.Targets))
@@ -629,6 +630,7 @@ func runCycle(
 				{"isis", cfg.Modules.ISIS.Enabled, isis.Walk},
 				{"mpls_te", cfg.Modules.MPLSTE.Enabled, mpls.Walk},
 			}
+			modStatus := map[string]int{}
 			for _, mod := range mods {
 				if !mod.enabled {
 					continue
@@ -649,11 +651,22 @@ func runCycle(
 					} else {
 						m.SNMPWalksTotal.WithLabelValues("error").Inc()
 					}
+					modStatus[mod.proto] = 2
 					continue
 				}
 				m.SNMPWalksTotal.WithLabelValues("ok").Inc()
-				for _, reason := range collectDegradedReasons(edges) {
+				degradedReasons := collectDegradedReasons(edges)
+				for _, reason := range degradedReasons {
 					m.DiscoveryDegradedTotal.WithLabelValues(mod.proto, reason).Inc()
+				}
+				if len(degradedReasons) > 0 {
+					if _, ok := modStatus[mod.proto]; !ok {
+						modStatus[mod.proto] = 1
+					}
+				} else {
+					if _, ok := modStatus[mod.proto]; !ok {
+						modStatus[mod.proto] = 0
+					}
 				}
 				allEdges = append(allEdges, edges...)
 				// Tag each OOS entry with the protocol that reported it so the
@@ -666,7 +679,7 @@ func runCycle(
 			}
 
 			mu.Lock()
-			results = append(results, probeResult{device: dev, edges: allEdges, outOfScope: allOOS, mgmtIP: ip.String()})
+			results = append(results, probeResult{device: dev, edges: allEdges, outOfScope: allOOS, mgmtIP: ip.String(), moduleStatus: modStatus})
 			okCount++
 			mu.Unlock()
 		}()
@@ -675,6 +688,19 @@ func runCycle(
 
 	m.DiscoveryDevicesTotal.WithLabelValues("success").Set(float64(okCount))
 	m.DiscoveryDevicesTotal.WithLabelValues("failed").Set(float64(failCount))
+
+	// Aggregate per-module worst status across all devices and publish.
+	worstStatus := map[string]int{}
+	for _, r := range results {
+		for proto, status := range r.moduleStatus {
+			if status > worstStatus[proto] {
+				worstStatus[proto] = status
+			}
+		}
+	}
+	for proto, status := range worstStatus {
+		m.ModuleLastStatus.WithLabelValues(proto).Set(float64(status))
+	}
 
 	var devices []discovery.Device
 	var rawEdges []discovery.Edge
