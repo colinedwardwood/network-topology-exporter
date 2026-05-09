@@ -124,6 +124,16 @@ type DiscoveryConfig struct {
 	Parallelism              int           `yaml:"parallelism"`
 	Scope                    ScopeConfig   `yaml:"scope"`
 	UnconfirmedLinkTTLCycles int           `yaml:"unconfirmed_link_ttl_cycles"`
+
+	// CycleBudgetFraction caps the discovery cycle at this fraction of Interval.
+	// Goroutines still running when the budget expires are cancelled via context.
+	// Default 0.8 (80% of Interval). Must be in (0, 1].
+	CycleBudgetFraction float64 `yaml:"cycle_budget_fraction"`
+
+	// TimeoutPerModule caps each individual module walk within a device's
+	// per-device timeout. 0 means no additional cap (default). When set, a
+	// slow LLDP walk cannot consume the full timeout_per_device for all modules.
+	TimeoutPerModule time.Duration `yaml:"timeout_per_module"`
 }
 
 // ScopeConfig is the LD-11 polling-scope guard. CIDRAllowList is mandatory
@@ -267,6 +277,9 @@ func (c *Config) applyDefaults() {
 	if c.Discovery.UnconfirmedLinkTTLCycles == 0 {
 		c.Discovery.UnconfirmedLinkTTLCycles = 3
 	}
+	if c.Discovery.CycleBudgetFraction == 0 {
+		c.Discovery.CycleBudgetFraction = 0.8
+	}
 	if c.Modules.SNMP.Version == "" {
 		c.Modules.SNMP.Version = "v2c"
 	}
@@ -329,6 +342,12 @@ func (c *Config) validate() error {
 	}
 	if c.Discovery.UnconfirmedLinkTTLCycles < 1 {
 		return errors.New("discovery.unconfirmed_link_ttl_cycles must be >= 1")
+	}
+	if c.Discovery.CycleBudgetFraction <= 0 || c.Discovery.CycleBudgetFraction > 1 {
+		return errors.New("discovery.cycle_budget_fraction must be in (0, 1]")
+	}
+	if c.Discovery.TimeoutPerModule < 0 {
+		return errors.New("discovery.timeout_per_module must be >= 0")
 	}
 	if c.Discovery.Interval <= 0 {
 		return errors.New("discovery.interval must be > 0")

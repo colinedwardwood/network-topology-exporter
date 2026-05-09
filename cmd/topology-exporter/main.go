@@ -537,6 +537,14 @@ func runCycle(
 		moduleStatus map[string]int // proto -> 0 ok | 1 degraded | 2 failed
 	}
 
+	cycleCtx := ctx
+	cycleCancel := func() {}
+	if cfg.Discovery.CycleBudgetFraction > 0 {
+		cycleDeadline := time.Now().Add(time.Duration(float64(cfg.Discovery.Interval) * cfg.Discovery.CycleBudgetFraction))
+		cycleCtx, cycleCancel = context.WithDeadline(ctx, cycleDeadline)
+	}
+	defer cycleCancel()
+
 	results := make([]probeResult, 0, len(cfg.Targets))
 	var mu sync.Mutex
 	sem := make(chan struct{}, cfg.Discovery.Parallelism)
@@ -550,14 +558,14 @@ func runCycle(
 			defer wg.Done()
 			select {
 			case sem <- struct{}{}:
-			case <-ctx.Done():
+			case <-cycleCtx.Done():
 				return
 			}
 			defer func() { <-sem }()
 
 			ip := net.ParseIP(target.Host)
 			if ip == nil {
-				addrs, err := net.DefaultResolver.LookupHost(ctx, target.Host)
+				addrs, err := net.DefaultResolver.LookupHost(cycleCtx, target.Host)
 				if err != nil || len(addrs) == 0 {
 					logger.Warn("host resolution failed", "host", target.Host, "error", err)
 					mu.Lock()
@@ -579,7 +587,7 @@ func runCycle(
 				return
 			}
 
-			dev, params, profileName, err := walkSystemWithCredentials(ctx, cfg, resolver, ip, target)
+			dev, params, profileName, err := walkSystemWithCredentials(cycleCtx, cfg, resolver, ip, target)
 			if err != nil {
 				logger.Warn("snmp walk failed", "target", target.Host, "error", err)
 				m.DiscoveryHardFailTotal.WithLabelValues("system", "system_group_walk_error").Inc()
@@ -595,7 +603,7 @@ func runCycle(
 				return
 			}
 
-			devCtx, cancel := context.WithTimeout(ctx, cfg.Discovery.TimeoutPerDevice)
+			devCtx, cancel := context.WithTimeout(cycleCtx, cfg.Discovery.TimeoutPerDevice)
 			defer cancel()
 			devCtx = snmpwalk.ContextWithDecodeIssueReporter(devCtx, func(issue snmpwalk.DecodeIssue) {
 				m.DiscoveryDecodeIssues.WithLabelValues(issue.Module, issue.OID, issue.Reason).Add(float64(issue.Count))
@@ -636,7 +644,13 @@ func runCycle(
 					continue
 				}
 				modStart := time.Now()
-				edges, oos, err := mod.walk(devCtx, params, dev.ID, allowedNets)
+				modCtx := devCtx
+				var modCancel context.CancelFunc = func() {}
+				if cfg.Discovery.TimeoutPerModule > 0 {
+					modCtx, modCancel = context.WithTimeout(devCtx, cfg.Discovery.TimeoutPerModule)
+				}
+				edges, oos, err := mod.walk(modCtx, params, dev.ID, allowedNets)
+				modCancel()
 				m.DiscoveryModuleDuration.WithLabelValues(mod.proto).Observe(time.Since(modStart).Seconds())
 				if err != nil {
 					logger.Debug(mod.proto+" walk failed", "target", target.Host, "error", err)

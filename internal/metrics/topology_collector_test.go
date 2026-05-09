@@ -178,9 +178,9 @@ network_topology_edge_info{direction="bidirectional",discovery_proto="lldp",dst_
 	}
 }
 
-// TestTopologyCollectorDescribeAllFiveDescriptors verifies that Describe always
-// sends exactly 5 descriptors regardless of the emitBoundaryObs flag.
-func TestTopologyCollectorDescribeAllFiveDescriptors(t *testing.T) {
+// TestTopologyCollectorDescribeAllDescriptors verifies that Describe always
+// sends exactly 7 descriptors regardless of the emitBoundaryObs flag.
+func TestTopologyCollectorDescribeAllDescriptors(t *testing.T) {
 	for _, emit := range []bool{false, true} {
 		c := newTopologyCollector(emit, nil, nil)
 		ch := make(chan *prometheus.Desc, 16)
@@ -191,8 +191,8 @@ func TestTopologyCollectorDescribeAllFiveDescriptors(t *testing.T) {
 		for range ch {
 			count++
 		}
-		if count != 5 {
-			t.Errorf("emitBoundaryObs=%v: got %d descriptors, want 5", emit, count)
+		if count != 7 {
+			t.Errorf("emitBoundaryObs=%v: got %d descriptors, want 7", emit, count)
 		}
 	}
 }
