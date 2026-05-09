@@ -731,6 +731,176 @@ func TestExtractChassisIPv6WrongLength(t *testing.T) {
 	}
 }
 
+// ---------- buildEdges IEEE 802.1AB validation rejection tests ----------
+
+// buildEdges: chassis subtype 0 (below valid range 1–7) → entry dropped.
+func TestBuildEdgesInvalidChassisSubtypeLow(t *testing.T) {
+	locPorts := map[int]locPort{}
+	remEntries := map[remKey]*remEntry{
+		{1, 1}: {
+			chassisSubtype: 0, // invalid: below range 1–7
+			chassisID:      []byte{0, 1, 2, 3, 4, 5},
+			portSubtype:    portSubtypeInterfaceName,
+			portID:         []byte("Eth0"),
+			sysName:        "peer",
+		},
+	}
+	edges, _, err := buildEdges("me", locPorts, remEntries, nil)
+	if err != nil {
+		t.Fatalf("buildEdges: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for invalid chassis subtype 0, got %d", len(edges))
+	}
+}
+
+// buildEdges: chassis subtype 8 (above valid range 1–7) → entry dropped.
+func TestBuildEdgesInvalidChassisSubtypeHigh(t *testing.T) {
+	locPorts := map[int]locPort{}
+	remEntries := map[remKey]*remEntry{
+		{1, 1}: {
+			chassisSubtype: 8, // invalid: above range 1–7
+			chassisID:      []byte{0, 1, 2, 3, 4, 5},
+			portSubtype:    portSubtypeInterfaceName,
+			portID:         []byte("Eth0"),
+			sysName:        "peer",
+		},
+	}
+	edges, _, err := buildEdges("me", locPorts, remEntries, nil)
+	if err != nil {
+		t.Fatalf("buildEdges: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for invalid chassis subtype 8, got %d", len(edges))
+	}
+}
+
+// buildEdges: port subtype 0 (below valid range 1–7) → entry dropped.
+func TestBuildEdgesInvalidPortSubtypeLow(t *testing.T) {
+	locPorts := map[int]locPort{}
+	remEntries := map[remKey]*remEntry{
+		{1, 1}: {
+			chassisSubtype: chassisSubtypeMACAddress,
+			chassisID:      []byte{0, 1, 2, 3, 4, 5},
+			portSubtype:    0, // invalid: below range 1–7
+			portID:         []byte("Eth0"),
+			sysName:        "peer",
+		},
+	}
+	edges, _, err := buildEdges("me", locPorts, remEntries, nil)
+	if err != nil {
+		t.Fatalf("buildEdges: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for invalid port subtype 0, got %d", len(edges))
+	}
+}
+
+// buildEdges: port subtype 8 (above valid range 1–7) → entry dropped.
+func TestBuildEdgesInvalidPortSubtypeHigh(t *testing.T) {
+	locPorts := map[int]locPort{}
+	remEntries := map[remKey]*remEntry{
+		{1, 1}: {
+			chassisSubtype: chassisSubtypeMACAddress,
+			chassisID:      []byte{0, 1, 2, 3, 4, 5},
+			portSubtype:    8, // invalid: above range 1–7
+			portID:         []byte("Eth0"),
+			sysName:        "peer",
+		},
+	}
+	edges, _, err := buildEdges("me", locPorts, remEntries, nil)
+	if err != nil {
+		t.Fatalf("buildEdges: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for invalid port subtype 8, got %d", len(edges))
+	}
+}
+
+// buildEdges: chassis subtype MAC (4) but chassisID length != 6 → entry dropped.
+func TestBuildEdgesMACChassisIDWrongLength(t *testing.T) {
+	locPorts := map[int]locPort{}
+	remEntries := map[remKey]*remEntry{
+		{1, 1}: {
+			chassisSubtype: chassisSubtypeMACAddress,
+			chassisID:      []byte{0, 1, 2, 3}, // only 4 bytes, not 6
+			portSubtype:    portSubtypeInterfaceName,
+			portID:         []byte("Eth0"),
+			sysName:        "peer",
+		},
+	}
+	edges, _, err := buildEdges("me", locPorts, remEntries, nil)
+	if err != nil {
+		t.Fatalf("buildEdges: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for MAC chassis ID with wrong length, got %d", len(edges))
+	}
+}
+
+// buildEdges: chassis subtype networkAddress (5) with unknown IANA family byte → entry dropped.
+func TestBuildEdgesNetworkAddressChassisIDUnknownFamily(t *testing.T) {
+	locPorts := map[int]locPort{}
+	remEntries := map[remKey]*remEntry{
+		{1, 1}: {
+			chassisSubtype: chassisSubtypeNetworkAddress,
+			chassisID:      []byte{3, 10, 0, 0, 1}, // family byte 3: not IPv4 (1) or IPv6 (2)
+			portSubtype:    portSubtypeInterfaceName,
+			portID:         []byte("Eth0"),
+			sysName:        "peer",
+		},
+	}
+	edges, _, err := buildEdges("me", locPorts, remEntries, nil)
+	if err != nil {
+		t.Fatalf("buildEdges: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for network-address chassis ID with unknown family, got %d", len(edges))
+	}
+}
+
+// buildEdges: chassis subtype networkAddress (5) with IPv4 family but wrong total length → entry dropped.
+func TestBuildEdgesNetworkAddressChassisIDIPv4WrongLength(t *testing.T) {
+	locPorts := map[int]locPort{}
+	remEntries := map[remKey]*remEntry{
+		{1, 1}: {
+			chassisSubtype: chassisSubtypeNetworkAddress,
+			chassisID:      []byte{1, 10, 0, 0}, // family=IPv4 but only 3 IP octets (len=4, not 5)
+			portSubtype:    portSubtypeInterfaceName,
+			portID:         []byte("Eth0"),
+			sysName:        "peer",
+		},
+	}
+	edges, _, err := buildEdges("me", locPorts, remEntries, nil)
+	if err != nil {
+		t.Fatalf("buildEdges: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for network-address chassis ID with IPv4 wrong length, got %d", len(edges))
+	}
+}
+
+// buildEdges: port subtype MAC (3) but portID length != 6 → entry dropped.
+func TestBuildEdgesMACPortIDWrongLength(t *testing.T) {
+	locPorts := map[int]locPort{}
+	remEntries := map[remKey]*remEntry{
+		{1, 1}: {
+			chassisSubtype: chassisSubtypeMACAddress,
+			chassisID:      []byte{0, 1, 2, 3, 4, 5},
+			portSubtype:    portSubtypeMACAddress,
+			portID:         []byte{0, 1, 2, 3}, // only 4 bytes, not 6
+			sysName:        "peer",
+		},
+	}
+	edges, _, err := buildEdges("me", locPorts, remEntries, nil)
+	if err != nil {
+		t.Fatalf("buildEdges: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for MAC port ID with wrong length, got %d", len(edges))
+	}
+}
+
 // ---------- fmtNetAddr tests ----------
 
 // fmtNetAddr: when extractChassisIP returns nil (wrong-length raw), falls back to hex.

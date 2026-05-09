@@ -424,6 +424,117 @@ func TestWalkAdjStateNoisyCyclesDeterministic(t *testing.T) {
 	}
 }
 
+// ---------- walkCircuitIfNames coverage tests ----------
+
+// Walk: isisISCircIfIndex has a non-integer decode failure → walkCircuitIfNames
+// returns a non-empty srcPortDegradedReason, exercising the
+// "else if srcPortDegradedReason != """ branch in Walk.
+func TestWalkCircuitIfNamesCircuitDecodeFailureDegrades(t *testing.T) {
+	// Circuit PDU with OctetString value: decode failure → stats.InvalidRows > 0
+	// → degradedReason = DegradedReasonMissingSrcPortMapping returned from walkCircuitIfNames.
+	const circBase = ".1.3.6.1.2.1.138.1.4.1.1.3."
+	pdus := []gsnmp.SnmpPDU{
+		{Name: adjStateBase + adjKey, Type: gsnmp.Integer, Value: isisAdjStateUp},
+		{Name: adjIPBase + adjKey + ".1.4.192.0.2.1", Type: gsnmp.OctetString, Value: []byte{192, 0, 2, 1}},
+		// Non-integer circuit entry: decode failure triggers degradedReason in walkCircuitIfNames.
+		{Name: circBase + "0.1", Type: gsnmp.OctetString, Value: []byte("bad")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	edges, _, err := Walk(context.Background(), p, "router-a", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge (degraded, not failed), got %d", len(edges))
+	}
+	if edges[0].Metadata == nil {
+		t.Fatal("Metadata is nil, want degraded metadata")
+	}
+	if edges[0].Metadata[discovery.MetadataKeyDegraded] != "true" {
+		t.Errorf("%s = %q, want true", discovery.MetadataKeyDegraded, edges[0].Metadata[discovery.MetadataKeyDegraded])
+	}
+}
+
+// Walk: circuit table has matching ifIndex but ifDescr table is empty → no overlap,
+// SrcPort stays empty, edge is degraded.
+func TestWalkCircuitIfNamesNoIfDescrOverlap(t *testing.T) {
+	const circBase = ".1.3.6.1.2.1.138.1.4.1.1.3."
+	pdus := []gsnmp.SnmpPDU{
+		{Name: adjStateBase + adjKey, Type: gsnmp.Integer, Value: isisAdjStateUp},
+		{Name: adjIPBase + adjKey + ".1.4.192.0.2.1", Type: gsnmp.OctetString, Value: []byte{192, 0, 2, 1}},
+		// Circuit entry: sysInst=0, circIdx=1 → ifIndex=99, but no ifDescr for ifIndex 99.
+		{Name: circBase + "0.1", Type: gsnmp.Integer, Value: 99},
+		// No ifDescr PDUs: join yields nothing, SrcPort = "".
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	edges, _, err := Walk(context.Background(), p, "router-a", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(edges))
+	}
+	if edges[0].SrcPort != "" {
+		t.Errorf("SrcPort = %q, want empty (no ifDescr overlap)", edges[0].SrcPort)
+	}
+}
+
+// walkCircuitIfNames: WalkIfDescr fails (context cancelled after circuit BulkWalk
+// succeeds) → function returns an error, exercising the "err != nil" branch after
+// the WalkIfDescr call. Test calls walkCircuitIfNames directly to avoid the
+// walkAdjIPAddrs BulkWalk also being cancelled.
+func TestWalkCircuitIfNamesIfDescrFails(t *testing.T) {
+	const circBase = ".1.3.6.1.2.1.138.1.4.1.1.3."
+	pdus := []gsnmp.SnmpPDU{
+		{Name: circBase + "0.1", Type: gsnmp.Integer, Value: 3},
+		{Name: ".1.3.6.1.2.1.2.2.1.2.3", Type: gsnmp.OctetString, Value: []byte("GigabitEthernet0/0")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	client, err := snmputil.Open(p)
+	if err != nil {
+		t.Fatalf("snmputil.Open: %v", err)
+	}
+	defer func() { _ = client.Conn.Close() }()
+
+	// isisLazyErrCtx: first ctx.Err() call (circuit BulkWalk) returns nil;
+	// second call (WalkIfDescr BulkWalk) returns Canceled → WalkIfDescr fails.
+	ctx := &isisLazyErrCtx{Context: context.Background(), failAfter: 1}
+
+	result, _, circErr := walkCircuitIfNames(ctx, client)
+	if circErr == nil {
+		t.Fatal("expected error when WalkIfDescr fails, got nil")
+	}
+	if result != nil {
+		t.Errorf("expected nil result on error, got %v", result)
+	}
+}
+
+// isisLazyErrCtx returns nil from Err() for the first failAfter calls, then
+// returns context.Canceled. Used to fail BulkWalk on the Nth call while
+// letting earlier calls succeed.
+type isisLazyErrCtx struct {
+	context.Context
+	calls     int
+	failAfter int
+}
+
+func (c *isisLazyErrCtx) Err() error {
+	c.calls++
+	if c.calls > c.failAfter {
+		return context.Canceled
+	}
+	return nil
+}
+
 // Walk: Open fails when the connection cannot be established.
 func TestWalkOpenFails(t *testing.T) {
 	p := snmputil.Params{

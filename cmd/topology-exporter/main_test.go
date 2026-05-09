@@ -1845,6 +1845,92 @@ func TestResolveEdgeDstDevices(t *testing.T) {
 	}
 }
 
+// TestCollectDegradedReasons covers all branches of collectDegradedReasons:
+// empty input, nil Metadata, non-degraded edges, comma-separated reasons,
+// deduplication across edges, and empty reason → "unknown" substitution.
+func TestCollectDegradedReasons(t *testing.T) {
+	cases := []struct {
+		name  string
+		edges []discovery.Edge
+		// want is a set of expected reasons (order is not guaranteed).
+		want map[string]bool
+	}{
+		{
+			name:  "empty_edge_slice",
+			edges: []discovery.Edge{},
+			want:  map[string]bool{},
+		},
+		{
+			name: "nil_metadata_skipped",
+			edges: []discovery.Edge{
+				{Metadata: nil},
+			},
+			want: map[string]bool{},
+		},
+		{
+			name: "non_degraded_skipped",
+			edges: []discovery.Edge{
+				{Metadata: map[string]string{
+					discovery.MetadataKeyDegraded: "false",
+				}},
+			},
+			want: map[string]bool{},
+		},
+		{
+			name: "comma_separated_reasons",
+			edges: []discovery.Edge{
+				{Metadata: map[string]string{
+					discovery.MetadataKeyDegraded:       "true",
+					discovery.MetadataKeyDegradedReason: "reason_a,reason_b",
+				}},
+			},
+			want: map[string]bool{"reason_a": true, "reason_b": true},
+		},
+		{
+			name: "overlapping_reasons_deduplicated",
+			edges: []discovery.Edge{
+				{Metadata: map[string]string{
+					discovery.MetadataKeyDegraded:       "true",
+					discovery.MetadataKeyDegradedReason: "reason_a",
+				}},
+				{Metadata: map[string]string{
+					discovery.MetadataKeyDegraded:       "true",
+					discovery.MetadataKeyDegradedReason: "reason_a,reason_b",
+				}},
+			},
+			want: map[string]bool{"reason_a": true, "reason_b": true},
+		},
+		{
+			name: "empty_reason_string_becomes_unknown",
+			edges: []discovery.Edge{
+				{Metadata: map[string]string{
+					discovery.MetadataKeyDegraded:       "true",
+					discovery.MetadataKeyDegradedReason: "",
+				}},
+			},
+			want: map[string]bool{"unknown": true},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := collectDegradedReasons(tc.edges)
+			gotSet := make(map[string]bool, len(got))
+			for _, r := range got {
+				gotSet[r] = true
+			}
+			if len(gotSet) != len(tc.want) {
+				t.Fatalf("len(reasons) = %d, want %d; got %v", len(gotSet), len(tc.want), gotSet)
+			}
+			for r := range tc.want {
+				if !gotSet[r] {
+					t.Errorf("expected reason %q in result, not found; got %v", r, gotSet)
+				}
+			}
+		})
+	}
+}
+
 // generateSelfSignedCert generates a self-signed ECDSA certificate valid for
 // localhost and writes cert.pem / key.pem into dir. Returns the paths.
 func generateSelfSignedCert(t *testing.T, dir string) (certFile, keyFile string) {
