@@ -497,6 +497,15 @@ func (h *Hub) tryPublishMetrics(gen uint64, g discovery.Graph, clearStale bool) 
 			return
 		}
 		if h.lastPublishedGen.CompareAndSwap(last, gen) {
+			maxEdges := h.cfg.Hub.MaxGraphEdges
+			maxDevices := h.cfg.Hub.MaxGraphDevices
+			if (maxEdges > 0 && len(g.Edges) > maxEdges) || (maxDevices > 0 && len(g.Devices) > maxDevices) {
+				h.logger.Warn("graph update rejected: exceeds size budget",
+					"edges", len(g.Edges), "max_edges", maxEdges,
+					"devices", len(g.Devices), "max_devices", maxDevices)
+				h.m.GraphUpdatesRejectedTotal.Inc()
+				return
+			}
 			h.m.Topology.Update(g)
 			if clearStale {
 				h.m.GraphStale.Set(0)

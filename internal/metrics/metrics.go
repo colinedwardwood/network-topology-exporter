@@ -58,6 +58,10 @@ type Metrics struct {
 	// are exhausted. Alert on rate > 0 to detect silent channel breakage.
 	FederationSpokePushFailuresTotal prometheus.Counter
 
+	// GraphUpdatesRejectedTotal counts combined-graph updates rejected because
+	// they exceeded the configured size budget (MaxGraphEdges / MaxGraphDevices).
+	GraphUpdatesRejectedTotal prometheus.Counter
+
 	// Hub OOS matching health: non-zero means cross-domain auto-detection is
 	// partially failing; operators should add known_inter_domain_links entries.
 	HubOOSUnmatchedTotal prometheus.Gauge
@@ -155,6 +159,10 @@ func New(emitBoundaryObs bool) *Metrics {
 			Name: "network_topology_federation_spoke_push_failures_total",
 			Help: "Total number of spoke push attempts that failed after all retries. Alert on rate > 0.",
 		}),
+		GraphUpdatesRejectedTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "network_topology_graph_updates_rejected_total",
+			Help: "Combined-graph updates rejected because they exceeded the configured size budget.",
+		}),
 		HubOOSUnmatchedTotal: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "network_topology_hub_oos_unmatched_total",
 			Help: "Count of OOS neighbour observations with no reverse match in the last hub graph rebuild. Non-zero means cross-domain auto-detection is partially failing; add known_inter_domain_links entries.",
@@ -191,6 +199,7 @@ func New(emitBoundaryObs bool) *Metrics {
 		m.FederationSpokeUp,
 		m.FederationSpokeLastPushUnix,
 		m.FederationSpokePushFailuresTotal,
+		m.GraphUpdatesRejectedTotal,
 		m.HubOOSUnmatchedTotal,
 		m.TopologyLastScrapeDurationSeconds,
 		m.TopologyLastScrapeSamplesTotal,

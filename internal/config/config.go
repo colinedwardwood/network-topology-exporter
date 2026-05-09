@@ -84,6 +84,12 @@ type FederationHubConfig struct {
 	TLSCACert  string `yaml:"tls_ca_cert"` // path to PEM CA certificate for spoke client verification
 	TLSCert    string `yaml:"tls_cert"`    // path to PEM server certificate
 	TLSKey     string `yaml:"tls_key"`     // path to PEM server private key
+	// MaxGraphEdges, if > 0, rejects combined-graph updates with more edges than
+	// this limit. Protects scrape latency and memory from runaway topologies.
+	MaxGraphEdges int `yaml:"max_graph_edges"`
+	// MaxGraphDevices, if > 0, rejects combined-graph updates with more devices
+	// than this limit.
+	MaxGraphDevices int `yaml:"max_graph_devices"`
 }
 
 // FederationSpokeConfig holds the spoke's settings.
