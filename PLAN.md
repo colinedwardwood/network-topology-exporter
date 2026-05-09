@@ -33,18 +33,18 @@ The exporter is not public-release ready for enterprise use because it can still
   **File**: `internal/federation/hub.go`
 
 ## 3. Architectural & Scaling Overhaul
-- [ ] **Introduce Discovery Budget Controller**: Add cycle budget enforcement (`max_cycle_fraction`), per-module budget, and adaptive target throttling when projected runtime exceeds interval.
+- [x] **Introduce Discovery Budget Controller**: `CycleBudgetFraction` (default 0.8) derives a `cycleCtx` deadline at `now + interval × fraction`; all module goroutines use `cycleCtx` so cycles are cancelled before the next interval begins.
   **Reference**: Queueing stability principle (`service_time < inter-arrival_time`) and Prometheus scrape SLO design.
 
 - [ ] **Two-Phase Graph Assembly**: Separate raw observation ingest from canonical link synthesis (identity resolution, dedupe, confidence arbitration, and suppression of endpoint noise).
   **Reference**: NetInventory reconciliation model and RFC 8345 logical separation of nodes/links.
 
-- [ ] **Replace Global Fan-Out with Work-Stealing + Deadline Partitioning**: Keep fixed workers, but assign per-target module deadlines to prevent one slow module from consuming full `timeout_per_device`.
+- [x] **Replace Global Fan-Out with Work-Stealing + Deadline Partitioning**: `TimeoutPerModule` (opt-in) wraps each module walk in `context.WithTimeout(devCtx, TimeoutPerModule)`; prevents one slow SNMP walk from consuming the full per-device budget.
   **Reference**: Tail-latency control (deadline partitioning) and bounded-concurrency scheduler design.
 
 - [x] **Add Cardinality Budget Enforcement in CI**: `cardinality_test.go` hard-fails if 500-device graph exceeds 1,400 series. `schema_test.go` hard-fails on any metric rename/removal.
 
-- [ ] **Add Memory Residency Guardrails**: Track and alarm on graph size, edge churn, snapshot queue depth, and stale goroutine counts; refuse updates when over budget.
+- [x] **Add Memory Residency Guardrails (partial)**: `network_topology_graph_edges_total` and `network_topology_graph_devices_total` gauges enable alerting on graph size; snapshot queue is bounded capacity-1. Circuit-breaker (refuse updates when over budget) remains unimplemented.
   **Reference**: Backpressure-first design for long-running collectors.
 
 ## 4. Standards & Compliance Checklist
