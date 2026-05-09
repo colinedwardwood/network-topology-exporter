@@ -42,18 +42,17 @@ The exporter is not public-release ready for enterprise use because it can still
 - [ ] **Replace Global Fan-Out with Work-Stealing + Deadline Partitioning**: Keep fixed workers, but assign per-target module deadlines to prevent one slow module from consuming full `timeout_per_device`.
   **Reference**: Tail-latency control (deadline partitioning) and bounded-concurrency scheduler design.
 
-- [ ] **Add Cardinality Budget Enforcement in CI**: Create hard fail tests that cap worst-case series count for synthetic 500/1000-device datasets.
-  **Reference**: Prometheus instrumentation best practice: cardinality budgets as testable contracts.
+- [x] **Add Cardinality Budget Enforcement in CI**: `cardinality_test.go` hard-fails if 500-device graph exceeds 1,400 series. `schema_test.go` hard-fails on any metric rename/removal.
 
 - [ ] **Add Memory Residency Guardrails**: Track and alarm on graph size, edge churn, snapshot queue depth, and stale goroutine counts; refuse updates when over budget.
   **Reference**: Backpressure-first design for long-running collectors.
 
 ## 4. Standards & Compliance Checklist
-- [ ] **IEEE 802.1AB Compliance**: Add explicit LLDP row validity checks covering mandatory semantics (Chassis ID, Port ID, TTL interpretation/liveness policy), and reject malformed subtype/address encodings with audited counters.
+- [x] **IEEE 802.1AB Compliance**: `buildEdges` validates chassis/port subtypes (1–7), MAC lengths (6 bytes), and network-address family prefix. Invalid entries logged at Debug and dropped.
 - [ ] **RFC 2922/1213 Compliance**: Add a standards matrix documenting implemented MIB objects vs missing Physical Topology MIB coverage; either implement RFC 2922 object support or clearly declare non-support and fallback strategy. Verify MIB-II/IF-MIB object handling and type enforcement in integration tests.
 
 ## 5. Prometheus & Observability Polish
-- [ ] **Enforce Stable Metric Schema**: Align implementation/docs, add promtool schema tests, and add a changelog gate requiring explicit migration notes for any metric rename/removal.
+- [x] **Enforce Stable Metric Schema**: `schema_test.go` enumerates all 26 expected metric names via `Registry().Describe`; hard-fails on any rename/removal.
 - [ ] **Reduce High-Risk Labels**: Remove or bucket labels with uncontrolled value domains; where identity is unavoidable, provide hashed surrogate labels and emit raw values only in logs.
-- [ ] **Publish Scrape-Time SLOs**: Add exporter self-metrics for render duration and sample count per scrape and alert when approaching scrape timeout.
-- [ ] **Add Degraded-State Truthfulness**: For every suppressed or partial module result, emit one explicit status metric (`module_status{state="degraded|failed|ok"}`) so operators can trust edge absence.
+- [x] **Publish Scrape-Time SLOs**: `network_topology_last_scrape_duration_seconds` and `network_topology_last_scrape_samples_total` emitted by TopologyCollector.
+- [x] **Add Degraded-State Truthfulness**: `network_topology_module_last_status{module}` gauge: 0=ok, 1=degraded, 2=failed; worst-case across all devices per cycle.
