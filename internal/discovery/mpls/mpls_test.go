@@ -431,6 +431,93 @@ func TestWalkOperStatusInvalidRatioExceededHardFail(t *testing.T) {
 	}
 }
 
+// ---------- mplsAdminStatusString tests ----------
+
+// mplsAdminStatusString: value 0 → "unknown".
+func TestMplsAdminStatusStringZero(t *testing.T) {
+	got := mplsAdminStatusString(0)
+	if got != "unknown" {
+		t.Errorf("mplsAdminStatusString(0) = %q, want unknown", got)
+	}
+}
+
+// mplsAdminStatusString: value 4 → "unknown" (any value not in 1–3).
+func TestMplsAdminStatusStringOutOfRange(t *testing.T) {
+	got := mplsAdminStatusString(4)
+	if got != "unknown" {
+		t.Errorf("mplsAdminStatusString(4) = %q, want unknown", got)
+	}
+}
+
+// mplsAdminStatusString: value 1 → "up".
+func TestMplsAdminStatusStringUp(t *testing.T) {
+	got := mplsAdminStatusString(1)
+	if got != "up" {
+		t.Errorf("mplsAdminStatusString(1) = %q, want up", got)
+	}
+}
+
+// mplsAdminStatusString: value 2 → "down".
+func TestMplsAdminStatusStringDown(t *testing.T) {
+	got := mplsAdminStatusString(2)
+	if got != "down" {
+		t.Errorf("mplsAdminStatusString(2) = %q, want down", got)
+	}
+}
+
+// mplsAdminStatusString: value 3 → "testing".
+func TestMplsAdminStatusStringTesting(t *testing.T) {
+	got := mplsAdminStatusString(3)
+	if got != "testing" {
+		t.Errorf("mplsAdminStatusString(3) = %q, want testing", got)
+	}
+}
+
+// ---------- parseIPFromParts tests ----------
+
+// parseIPFromParts: non-integer octet → nil, false.
+func TestParseIPFromPartsNonIntegerOctet(t *testing.T) {
+	ip, ok := parseIPFromParts([]string{"192", "168", "1", "x"})
+	if ok || ip != nil {
+		t.Errorf("parseIPFromParts with non-integer octet: got (%v, %v), want (nil, false)", ip, ok)
+	}
+}
+
+// parseIPFromParts: octet value > 255 → nil, false.
+func TestParseIPFromPartsOctetTooLarge(t *testing.T) {
+	ip, ok := parseIPFromParts([]string{"256", "0", "0", "1"})
+	if ok || ip != nil {
+		t.Errorf("parseIPFromParts with octet > 255: got (%v, %v), want (nil, false)", ip, ok)
+	}
+}
+
+// parseIPFromParts: negative octet value → nil, false.
+func TestParseIPFromPartsNegativeOctet(t *testing.T) {
+	ip, ok := parseIPFromParts([]string{"-1", "0", "0", "1"})
+	if ok || ip != nil {
+		t.Errorf("parseIPFromParts with negative octet: got (%v, %v), want (nil, false)", ip, ok)
+	}
+}
+
+// parseIPFromParts: wrong number of parts (3 instead of 4) → nil, false.
+func TestParseIPFromPartsWrongLength(t *testing.T) {
+	ip, ok := parseIPFromParts([]string{"192", "168", "1"})
+	if ok || ip != nil {
+		t.Errorf("parseIPFromParts with 3 parts: got (%v, %v), want (nil, false)", ip, ok)
+	}
+}
+
+// parseIPFromParts: valid 4-octet input → correct IP, true.
+func TestParseIPFromPartsValid(t *testing.T) {
+	ip, ok := parseIPFromParts([]string{"10", "0", "0", "1"})
+	if !ok || ip == nil {
+		t.Fatalf("parseIPFromParts with valid input: got (%v, %v), want (non-nil, true)", ip, ok)
+	}
+	if ip.String() != "10.0.0.1" {
+		t.Errorf("parseIPFromParts = %q, want 10.0.0.1", ip.String())
+	}
+}
+
 // Walk: deterministic behavior across noisy cycles (degraded -> hard-fail -> recover).
 func TestWalkOperStatusNoisyCyclesDeterministic(t *testing.T) {
 	run := func(pdus []gsnmp.SnmpPDU) error {

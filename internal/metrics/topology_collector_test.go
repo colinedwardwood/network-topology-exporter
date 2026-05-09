@@ -178,6 +178,45 @@ network_topology_edge_info{direction="bidirectional",discovery_proto="lldp",dst_
 	}
 }
 
+// TestSanitizeLabel covers the non-printable stripping and truncation branches
+// of sanitizeLabel that were not reached by earlier tests.
+func TestSanitizeLabel(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "non_printable_runes_stripped",
+			input: "\x00hello\x01",
+			want:  "hello",
+		},
+		{
+			name:  "exactly_128_bytes_unchanged",
+			input: strings.Repeat("a", 128),
+			want:  strings.Repeat("a", 128),
+		},
+		{
+			name:  "129_bytes_truncated_to_128",
+			input: strings.Repeat("b", 129),
+			want:  strings.Repeat("b", 128),
+		},
+		{
+			name:  "empty_string",
+			input: "",
+			want:  "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sanitizeLabel(tc.input)
+			if got != tc.want {
+				t.Errorf("sanitizeLabel(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestTopologyCollectorDescribeAllDescriptors verifies that Describe always
 // sends exactly 7 descriptors regardless of the emitBoundaryObs flag.
 func TestTopologyCollectorDescribeAllDescriptors(t *testing.T) {

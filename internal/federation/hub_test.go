@@ -1356,5 +1356,190 @@ func TestHubOOSAmbiguousFQDNNormalisationWarns(t *testing.T) {
 	}
 }
 
+// TestRunSnapshotWriterWritesSnapshot verifies that runSnapshotWriter drains
+// the snapshot channel and invokes snapshotWriteFn when a graph is enqueued
+// via writeSnapshotAsync.
+func TestRunSnapshotWriterWritesSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	m := metrics.New(false)
+	h := NewHub(config.FederationConfig{SpokeTimeout: 5 * time.Minute}, m, nil, filepath.Join(dir, "snap.json"))
+
+	written := make(chan discovery.Graph, 1)
+	h.snapshotWriteFn = func(_ string, f snapshot.File) error {
+		written <- discovery.Graph{Devices: f.Devices, Edges: f.Edges}
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go h.runSnapshotWriter(ctx)
+
+	g := discovery.Graph{
+		Devices: []discovery.Device{{ID: "sw-snap-1"}},
+		Edges:   []discovery.Edge{},
+	}
+	h.writeSnapshotAsync(g)
+
+	select {
+	case got := <-written:
+		if len(got.Devices) != 1 || got.Devices[0].ID != "sw-snap-1" {
+			t.Errorf("snapshot devices = %#v, want [{ID:sw-snap-1}]", got.Devices)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runSnapshotWriter did not invoke snapshotWriteFn within 2s")
+	}
+}
+
+// TestRunSnapshotWriterTimeoutContinues verifies the NFS-stall protection inside
+// runSnapshotWriter: when snapshotWriteFn blocks beyond snapshotWriteTimeout the
+// writer logs a warning and then continues to process the next enqueued graph.
+func TestRunSnapshotWriterTimeoutContinues(t *testing.T) {
+	dir := t.TempDir()
+	m := metrics.New(false)
+	h := NewHub(config.FederationConfig{SpokeTimeout: 5 * time.Minute}, m, nil, filepath.Join(dir, "snap.json"))
+
+	// block gates the first (stalling) write; second signals when the second write runs.
+	// Using separate closed-over channels (no shared mutable variable) avoids the
+	// data race between the stalled goroutine and the second goroutine spawned after
+	// the timeout fires.
+	block := make(chan struct{})
+	started := make(chan struct{}, 1) // first write signals it has started
+	second := make(chan struct{}, 1)  // second write signals completion
+	firstDone := false
+
+	var mu sync.Mutex
+	h.snapshotWriteFn = func(_ string, _ snapshot.File) error {
+		mu.Lock()
+		isFirst := !firstDone
+		if isFirst {
+			firstDone = true
+		}
+		mu.Unlock()
+
+		if isFirst {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-block // stall until the test unblocks us
+			return nil
+		}
+		close(second)
+		return nil
+	}
+	h.snapshotWriteTimeout = 20 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go h.runSnapshotWriter(ctx)
+
+	// Enqueue first (blocking) write. The channel has capacity 1 so this lands immediately.
+	h.writeSnapshotAsync(discovery.Graph{Devices: []discovery.Device{{ID: "stall"}}})
+
+	// Wait for the first write to start before starting the timeout clock.
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first write never started")
+	}
+
+	// Wait for the timeout to fire (20 ms + margin), then unblock the stalled goroutine.
+	time.Sleep(100 * time.Millisecond)
+	close(block)
+
+	// Give runSnapshotWriter a moment to loop back to the select before sending second graph.
+	time.Sleep(20 * time.Millisecond)
+	h.writeSnapshotAsync(discovery.Graph{Devices: []discovery.Device{{ID: "ok"}}})
+
+	select {
+	case <-second:
+		// runSnapshotWriter continued to process after the timeout.
+	case <-time.After(2 * time.Second):
+		t.Fatal("runSnapshotWriter did not process second snapshot after timeout recovery within 2s")
+	}
+}
+
+// TestTryPublishMetricsRejectsOversizedGraphEdges verifies that tryPublishMetrics
+// increments GraphUpdatesRejectedTotal and does NOT update Topology when the
+// combined graph exceeds MaxGraphEdges.
+func TestTryPublishMetricsRejectsOversizedGraphEdges(t *testing.T) {
+	m := metrics.New(false)
+	h := NewHub(
+		config.FederationConfig{
+			Hub: config.FederationHubConfig{MaxGraphEdges: 2},
+		},
+		m, nil, "",
+	)
+
+	g := discovery.Graph{
+		Edges: []discovery.Edge{
+			{SrcDevice: "a", DstDevice: "b", DiscoveryProto: "lldp"},
+			{SrcDevice: "b", DstDevice: "c", DiscoveryProto: "lldp"},
+			{SrcDevice: "c", DstDevice: "d", DiscoveryProto: "lldp"},
+			{SrcDevice: "d", DstDevice: "e", DiscoveryProto: "lldp"},
+			{SrcDevice: "e", DstDevice: "f", DiscoveryProto: "lldp"},
+		},
+	}
+
+	h.tryPublishMetrics(1, g, false)
+
+	if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal); got != 1 {
+		t.Errorf("GraphUpdatesRejectedTotal = %v, want 1", got)
+	}
+
+	// Topology must NOT have been updated — gather metrics and confirm no
+	// network_topology_edge_info series were written.
+	mfs, err := m.Registry().Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() == "network_topology_edge_info" && len(mf.GetMetric()) > 0 {
+			t.Errorf("network_topology_edge_info has %d series after rejected update, want 0",
+				len(mf.GetMetric()))
+		}
+	}
+}
+
+// TestTryPublishMetricsRejectsOversizedGraphDevices verifies that
+// tryPublishMetrics increments GraphUpdatesRejectedTotal and does NOT update
+// Topology when the combined graph exceeds MaxGraphDevices.
+func TestTryPublishMetricsRejectsOversizedGraphDevices(t *testing.T) {
+	m := metrics.New(false)
+	h := NewHub(
+		config.FederationConfig{
+			Hub: config.FederationHubConfig{MaxGraphDevices: 1},
+		},
+		m, nil, "",
+	)
+
+	g := discovery.Graph{
+		Devices: []discovery.Device{
+			{ID: "sw-1"},
+			{ID: "sw-2"},
+			{ID: "sw-3"},
+		},
+	}
+
+	h.tryPublishMetrics(1, g, false)
+
+	if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal); got != 1 {
+		t.Errorf("GraphUpdatesRejectedTotal = %v, want 1", got)
+	}
+
+	// Topology must NOT have been updated — gather metrics and confirm no
+	// network_device_info series were written.
+	mfs, err := m.Registry().Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() == "network_device_info" && len(mf.GetMetric()) > 0 {
+			t.Errorf("network_device_info has %d series after rejected update, want 0",
+				len(mf.GetMetric()))
+		}
+	}
+}
+
 // Ensure unused import is compiled away by the test binary.
 var _ = os.DevNull
