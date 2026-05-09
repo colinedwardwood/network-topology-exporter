@@ -286,6 +286,33 @@ func TestWalkIfDescr(t *testing.T) {
 	}
 }
 
+// WalkIfDescr: a PDU with the wrong type (Integer32) yields an empty string
+// for that index. Valid OctetString rows are unaffected.
+func TestWalkIfDescrWrongType(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: "." + OIDIfDescr + ".1", Type: gsnmp.OctetString, Value: []byte("eth0")},
+		{Name: "." + OIDIfDescr + ".2", Type: gsnmp.Integer, Value: 42},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+	client, err := Open(Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = client.Conn.Close() }()
+	m, err := WalkIfDescr(context.Background(), client)
+	if err != nil {
+		t.Fatalf("WalkIfDescr: %v", err)
+	}
+	if m[1] != "eth0" {
+		t.Errorf("m[1] = %q, want eth0", m[1])
+	}
+	// PDUString returns "" for Integer values; the key is still present.
+	if got, ok := m[2]; !ok || got != "" {
+		t.Errorf("m[2] = %q (present=%v), want \"\" (present=true)", got, ok)
+	}
+}
+
 // Walk: sysName, sysDescr, sysObjectID, and sysUpTime round-trip through a
 // fake agent and come back in the Device record.
 func TestWalkSystemGroup(t *testing.T) {
@@ -326,6 +353,35 @@ func TestWalkSystemGroup(t *testing.T) {
 	}
 	if dev.Uptime != time.Duration(100000)*10*time.Millisecond {
 		t.Errorf("Uptime = %v, want 1000s", dev.Uptime)
+	}
+}
+
+// Walk: sysUpTime PDU with wrong type (OctetString instead of TimeTicks)
+// is silently ignored; the Device.Uptime field remains zero.
+func TestWalkSystemGroupSysUpTimeWrongType(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.1.1.0", Type: gsnmp.OctetString, Value: []byte("Cisco IOS 15.2")},
+		{Name: ".1.3.6.1.2.1.1.2.0", Type: gsnmp.ObjectIdentifier, Value: ".1.3.6.1.4.1.9.1.1"},
+		{Name: ".1.3.6.1.2.1.1.3.0", Type: gsnmp.OctetString, Value: []byte("not-a-timeticks")},
+		{Name: ".1.3.6.1.2.1.1.5.0", Type: gsnmp.OctetString, Value: []byte("core-sw-01")},
+	}
+
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	dev, err := Walk(context.Background(), Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if dev == nil {
+		t.Fatal("Walk returned nil device")
+	}
+	if dev.ID != "core-sw-01" {
+		t.Errorf("ID = %q, want core-sw-01", dev.ID)
+	}
+	// sysUpTime PDU had wrong type; PDUInt returns 0, so Uptime should be zero.
+	if dev.Uptime != 0 {
+		t.Errorf("Uptime = %v, want 0 (wrong-type sysUpTime silently ignored)", dev.Uptime)
 	}
 }
 
@@ -844,6 +900,38 @@ func TestWalkIfNamesNonNumericSuffix(t *testing.T) {
 	// Confirm the two-component-suffix entry was skipped (no spurious keys).
 	if len(names) != 1 {
 		t.Errorf("expected 1 entry, got %d: %v", len(names), names)
+	}
+}
+
+// WalkIfNames: same tolerance as WalkIfDescr — wrong-type PDUs yield "" for
+// that index. Valid OctetString entries are unaffected.
+func TestWalkIfNamesWrongType(t *testing.T) {
+	// ifXTable.ifName = 1.3.6.1.2.1.31.1.1.1.1 (oidIfNameTable)
+	const ifNameOID = "1.3.6.1.2.1.31.1.1.1.1"
+	pdus := []gsnmp.SnmpPDU{
+		{Name: "." + ifNameOID + ".1", Type: gsnmp.OctetString, Value: []byte("eth0")},
+		{Name: "." + ifNameOID + ".2", Type: gsnmp.Integer, Value: 42},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	client, err := Open(p)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = client.Conn.Close() }()
+
+	names, err := WalkIfNames(context.Background(), client)
+	if err != nil {
+		t.Fatalf("WalkIfNames: %v", err)
+	}
+	if names[1] != "eth0" {
+		t.Errorf("names[1] = %q, want eth0", names[1])
+	}
+	// PDUString returns "" for Integer values; the key is still present.
+	if got, ok := names[2]; !ok || got != "" {
+		t.Errorf("names[2] = %q (present=%v), want \"\" (present=true)", got, ok)
 	}
 }
 

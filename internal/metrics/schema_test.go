@@ -38,6 +38,7 @@ var expectedMetricNames = []string{
 	"network_topology_federation_spoke_up",
 	"network_topology_federation_spoke_last_push_unix",
 	"network_topology_federation_spoke_push_failures_total",
+	"network_topology_graph_updates_rejected_total",
 	"network_topology_hub_oos_unmatched_total",
 	"network_topology_last_scrape_duration_seconds",
 	"network_topology_last_scrape_samples_total",
