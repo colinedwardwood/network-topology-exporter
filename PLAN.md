@@ -53,6 +53,6 @@ The exporter is not public-release ready for enterprise use because it can still
 
 ## 5. Prometheus & Observability Polish
 - [x] **Enforce Stable Metric Schema**: `schema_test.go` enumerates all 26 expected metric names via `Registry().Describe`; hard-fails on any rename/removal.
-- [ ] **Reduce High-Risk Labels**: Remove or bucket labels with uncontrolled value domains; where identity is unavoidable, provide hashed surrogate labels and emit raw values only in logs.
+- [x] **Reduce High-Risk Labels**: FDB `dst_device` now emits `mac-<8hex>` SHA-256 surrogate instead of raw MAC string; raw MAC logged at Debug. Other label domains (sysName, ifName) are already controlled.
 - [x] **Publish Scrape-Time SLOs**: `network_topology_last_scrape_duration_seconds` and `network_topology_last_scrape_samples_total` emitted by TopologyCollector.
 - [x] **Add Degraded-State Truthfulness**: `network_topology_module_last_status{module}` gauge: 0=ok, 1=degraded, 2=failed; worst-case across all devices per cycle.
