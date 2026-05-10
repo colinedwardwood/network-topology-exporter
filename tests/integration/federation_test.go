@@ -61,7 +61,10 @@ func generateTestPKI(t *testing.T, dir, spokeID string) testPKI {
 	if err != nil {
 		t.Fatalf("create CA cert: %v", err)
 	}
-	caCert, _ := x509.ParseCertificate(caDER)
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("parse CA cert: %v", err)
+	}
 
 	// Server cert — IP SAN for 127.0.0.1 so the spoke's TLS client can verify it.
 	serverKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
