@@ -82,6 +82,11 @@ type Metrics struct {
 	// SnapshotQueueDepth is the current number of snapshots queued for
 	// writing (0 or 1 for the capacity-1 channel).
 	SnapshotQueueDepth prometheus.Gauge
+
+	// CycleBudgetSkipsTotal counts targets that were never polled in a discovery
+	// cycle because the cycle budget deadline expired before their goroutine could
+	// acquire the parallelism semaphore.
+	CycleBudgetSkipsTotal prometheus.Counter
 }
 
 // New builds and registers the exporter's metric set. emitBoundaryObs should
@@ -200,6 +205,10 @@ func New(emitBoundaryObs bool) *Metrics {
 			Name: "network_topology_snapshot_queue_depth",
 			Help: "Current number of snapshots queued for writing.",
 		}),
+		CycleBudgetSkipsTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "network_topology_cycle_budget_skips_total",
+			Help: "Targets skipped in a discovery cycle because the cycle budget deadline expired before their goroutine could start.",
+		}),
 	}
 	m.Topology = newTopologyCollector(emitBoundaryObs, m.TopologyLastScrapeDurationSeconds, m.TopologyLastScrapeSamplesTotal)
 
@@ -231,6 +240,7 @@ func New(emitBoundaryObs bool) *Metrics {
 		m.FDBSuppressedMACs,
 		m.GoRoutines,
 		m.SnapshotQueueDepth,
+		m.CycleBudgetSkipsTotal,
 	)
 
 	return m

@@ -598,6 +598,7 @@ func runCycle(
 			select {
 			case sem <- struct{}{}:
 			case <-cycleCtx.Done():
+				m.CycleBudgetSkipsTotal.Inc()
 				return
 			}
 			defer func() { <-sem }()

@@ -117,7 +117,7 @@ func TestBuildEdgesMissingBridgePort(t *testing.T) {
 	}
 }
 
-// buildEdges: falls back to ifIndex string when ifName is missing.
+// buildEdges: falls back to "if{ifIndex}" when ifName is missing.
 func TestBuildEdgesFallbackPortName(t *testing.T) {
 	entries := map[string]*fdbEntry{
 		"0.1.2.3.4.5": {mac: []byte{0, 1, 2, 3, 4, 5}, port: 1, status: fdbStatusLearned},
@@ -129,8 +129,8 @@ func TestBuildEdgesFallbackPortName(t *testing.T) {
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d", len(edges))
 	}
-	if edges[0].SrcPort != "7" {
-		t.Errorf("SrcPort = %q, want \"7\" (fallback to ifIndex)", edges[0].SrcPort)
+	if edges[0].SrcPort != "if7" {
+		t.Errorf("SrcPort = %q, want \"if7\" (fallback to if{ifIndex})", edges[0].SrcPort)
 	}
 }
 

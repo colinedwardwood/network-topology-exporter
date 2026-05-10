@@ -61,7 +61,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	}
 	defer func() { _ = client.Conn.Close() }()
 
-	ifNames, err := snmputil.WalkIfNames(ctx, client)
+	ifNames, err := snmputil.WalkIfNamesWithFallback(ctx, client)
 	if err != nil {
 		return nil, nil, fmt.Errorf("cdp ifname %s: %w", p.IP, err)
 	}
@@ -133,7 +133,7 @@ func buildEdges(localDevice string, ifNames map[int]string, entries map[cacheKey
 
 		localPort := ifNames[k.ifIndex]
 		if localPort == "" {
-			localPort = strconv.Itoa(k.ifIndex)
+			localPort = fmt.Sprintf("if%d", k.ifIndex)
 		}
 
 		// LD-11: cdpCacheAddress with addrType 1 (IPv4) gives the neighbor IP.

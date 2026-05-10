@@ -165,6 +165,23 @@ func WalkIfDescr(ctx context.Context, client *g.GoSNMP) (map[int]string, error) 
 	return walkIntIndexedStrings(ctx, client, OIDIfDescr)
 }
 
+// WalkIfNamesWithFallback walks ifXTable.ifName (RFC 2863 §3.1.4). If ifXTable
+// is unavailable, falls back to ifTable.ifDescr (§3.1.2). ifDescr values are
+// not guaranteed to be unique across module boundaries on chassis devices; use
+// the returned values for edge identification only, not as stable identifiers.
+// If both walks fail, returns an empty map and the ifName error.
+func WalkIfNamesWithFallback(ctx context.Context, client *g.GoSNMP) (map[int]string, error) {
+	names, err := WalkIfNames(ctx, client)
+	if err == nil && len(names) > 0 {
+		return names, nil
+	}
+	descr, descrErr := WalkIfDescr(ctx, client)
+	if descrErr == nil && len(descr) > 0 {
+		return descr, nil
+	}
+	return nil, err // return original ifName error
+}
+
 func walkIntIndexedStrings(ctx context.Context, client *g.GoSNMP, oid string) (map[int]string, error) {
 	pdus, err := BulkWalk(ctx, client, oid)
 	if err != nil {

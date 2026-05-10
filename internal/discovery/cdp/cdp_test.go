@@ -127,7 +127,7 @@ func TestBuildEdgesSkipsIncomplete(t *testing.T) {
 	}
 }
 
-// buildEdges: unknown ifIndex falls back to the numeric string.
+// buildEdges: unknown ifIndex falls back to "if{ifIndex}".
 func TestBuildEdgesFallbackIfIndex(t *testing.T) {
 	entries := map[cacheKey]*cacheEntry{
 		{7, 1}: {deviceID: "peer", devPort: "eth0"},
@@ -140,8 +140,27 @@ func TestBuildEdgesFallbackIfIndex(t *testing.T) {
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d", len(edges))
 	}
-	if edges[0].SrcPort != "7" {
-		t.Errorf("SrcPort = %q, want \"7\"", edges[0].SrcPort)
+	if edges[0].SrcPort != "if7" {
+		t.Errorf("SrcPort = %q, want \"if7\"", edges[0].SrcPort)
+	}
+}
+
+// TestBuildEdgesIfNameFallback verifies that when ifNames is empty, the local
+// port name is synthesised as "if{ifIndex}" rather than an empty string.
+func TestBuildEdgesIfNameFallback(t *testing.T) {
+	entries := map[cacheKey]*cacheEntry{
+		{3, 1}: {deviceID: "peer-sw", devPort: "GigabitEthernet0/1"},
+	}
+
+	edges, _, err := buildEdges("local-sw", map[int]string{}, entries, nil)
+	if err != nil {
+		t.Fatalf("buildEdges: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d: %v", len(edges), edges)
+	}
+	if edges[0].SrcPort != "if3" {
+		t.Errorf("SrcPort = %q, want \"if3\"", edges[0].SrcPort)
 	}
 }
 
