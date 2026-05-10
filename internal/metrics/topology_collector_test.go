@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -240,6 +241,84 @@ func TestSanitizeLabelUTF8Boundary(t *testing.T) {
 	if !utf8.ValidString(got) {
 		t.Errorf("sanitizeLabel: result is not valid UTF-8: %q", got)
 	}
+}
+
+// buildSyntheticGraph creates a discovery.Graph with the requested number of
+// edges. Device IDs and port names are generated deterministically so the
+// benchmark is repeatable and allocation-stable across runs.
+func buildSyntheticGraph(numEdges int) discovery.Graph {
+	devices := make([]discovery.Device, 0, numEdges+1)
+	edges := make([]discovery.Edge, 0, numEdges)
+
+	// One fixed source device.
+	devices = append(devices, discovery.Device{
+		ID:        "sw-001",
+		Vendor:    "cisco",
+		Model:     "nexus-9000",
+		OSVersion: "9.3(10)",
+		Site:      "dc1",
+		Uptime:    3600 * time.Second,
+	})
+
+	for i := range numEdges {
+		dstID := fmt.Sprintf("sw-%03d", i+2)
+		devices = append(devices, discovery.Device{
+			ID:        dstID,
+			Vendor:    "arista",
+			Model:     "7050cx3",
+			OSVersion: "4.28.0F",
+			Site:      "dc1",
+			Uptime:    time.Duration(i+1) * time.Second,
+		})
+		edges = append(edges, discovery.Edge{
+			SrcDevice:      "sw-001",
+			SrcPort:        fmt.Sprintf("GigabitEthernet0/%d", i%48),
+			DstDevice:      dstID,
+			DstPort:        "GigabitEthernet0/0",
+			DiscoveryProto: "lldp",
+			LinkKind:       "ethernet",
+			Direction:      discovery.DirectionBidirectional,
+		})
+	}
+
+	return discovery.Graph{Devices: devices, Edges: edges}
+}
+
+func BenchmarkCollect1000Edges(b *testing.B) {
+	tc := newTopologyCollector(false, nil, nil)
+	tc.Update(buildSyntheticGraph(1000))
+
+	ch := make(chan prometheus.Metric, 4096)
+	// Drain goroutine so Collect never blocks on a full channel.
+	go func() {
+		for range ch {
+		}
+	}()
+
+	b.ResetTimer()
+	for b.Loop() {
+		tc.Collect(ch)
+	}
+	b.StopTimer()
+	close(ch)
+}
+
+func BenchmarkCollect10000Edges(b *testing.B) {
+	tc := newTopologyCollector(false, nil, nil)
+	tc.Update(buildSyntheticGraph(10000))
+
+	ch := make(chan prometheus.Metric, 32768)
+	go func() {
+		for range ch {
+		}
+	}()
+
+	b.ResetTimer()
+	for b.Loop() {
+		tc.Collect(ch)
+	}
+	b.StopTimer()
+	close(ch)
 }
 
 // TestTopologyCollectorDescribeAllDescriptors verifies that Describe always
