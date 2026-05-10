@@ -2,6 +2,7 @@ package fdb
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -991,6 +992,101 @@ func TestWalkVlanCommunityFdbsOpenFails(t *testing.T) {
 	entries := make(map[string]*fdbEntry)
 	// Should not panic and should not add any entries.
 	walkVlanCommunityFdbs(context.Background(), p, realClient, entries, 100)
+}
+
+// TestWalkVlanCommunityFdbsParallel verifies that walkVlanCommunityFdbs merges
+// results from all VLANs correctly when walks run concurrently, and that entries
+// from an earlier VLAN are not overwritten by a later one (no-overwrite semantics).
+func TestWalkVlanCommunityFdbsParallel(t *testing.T) {
+	// Four VLANs, each with one unique MAC entry.
+	vlanIDs := []int{10, 20, 30, 40}
+
+	// MAC key format used by walkFdbTableInto: decimal octets joined by "."
+	macs := map[int][]byte{
+		10: {0, 0xAA, 0xBB, 0xCC, 0xDD, 0x10},
+		20: {0, 0xAA, 0xBB, 0xCC, 0xDD, 0x20},
+		30: {0, 0xAA, 0xBB, 0xCC, 0xDD, 0x30},
+		40: {0, 0xAA, 0xBB, 0xCC, 0xDD, 0x40},
+	}
+	macKeys := map[int]string{
+		10: "0.170.187.204.221.16",
+		20: "0.170.187.204.221.32",
+		30: "0.170.187.204.221.48",
+		40: "0.170.187.204.221.64",
+	}
+
+	buildFdbPDUs := func(mac []byte, key string) []gsnmp.SnmpPDU {
+		base := ".1.3.6.1.2.1.17.4.3.1."
+		return []gsnmp.SnmpPDU{
+			{Name: base + "1." + key, Type: gsnmp.OctetString, Value: mac},
+			{Name: base + "2." + key, Type: gsnmp.Integer, Value: 1},
+			{Name: base + "3." + key, Type: gsnmp.Integer, Value: fdbStatusLearned},
+		}
+	}
+
+	// dot1qVlanCurrentTable PDUs for the "public" community.
+	vlanTablePDUs := make([]gsnmp.SnmpPDU, 0, len(vlanIDs))
+	for _, id := range vlanIDs {
+		vlanTablePDUs = append(vlanTablePDUs, gsnmp.SnmpPDU{
+			Name:  fmt.Sprintf(".1.3.6.1.2.1.17.7.1.4.2.3.0.%d", id),
+			Type:  gsnmp.Integer,
+			Value: id,
+		})
+	}
+
+	communities := map[string][]gsnmp.SnmpPDU{
+		"public": vlanTablePDUs,
+	}
+	for _, id := range vlanIDs {
+		comm := fmt.Sprintf("public@%d", id)
+		communities[comm] = buildFdbPDUs(macs[id], macKeys[id])
+	}
+
+	addr := snmptest.StartMultiCommunity(t, communities)
+	ip, port := snmptest.ParseAddr(addr)
+
+	mainClient, err := snmputil.Open(snmputil.Params{
+		IP:        ip,
+		Port:      port,
+		Community: "public",
+		Timeout:   3 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = mainClient.Conn.Close() }()
+
+	p := snmputil.Params{
+		IP:        ip,
+		Port:      port,
+		Community: "public",
+		Timeout:   3 * time.Second,
+	}
+
+	// Seed entries with VLAN 10's MAC already present; it must not be overwritten.
+	preExistingEntry := &fdbEntry{mac: macs[10], port: 99, status: fdbStatusLearned}
+	entries := map[string]*fdbEntry{
+		macKeys[10]: preExistingEntry,
+	}
+
+	walkVlanCommunityFdbs(context.Background(), p, mainClient, entries, 100)
+
+	// All four VLAN entries must be present.
+	for _, id := range vlanIDs {
+		if _, ok := entries[macKeys[id]]; !ok {
+			t.Errorf("expected entry for VLAN %d (key %q) to be present", id, macKeys[id])
+		}
+	}
+
+	// The pre-existing VLAN 10 entry must not have been overwritten.
+	if got := entries[macKeys[10]]; got != preExistingEntry {
+		t.Errorf("VLAN 10 entry was overwritten; want original pointer, got different entry")
+	}
+
+	// No duplicate keys: total entry count must equal 4 (10, 20, 30, 40).
+	if len(entries) != 4 {
+		t.Errorf("expected 4 entries, got %d", len(entries))
+	}
 }
 
 // ---------------------------------------------------------------------------

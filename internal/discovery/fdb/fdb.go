@@ -78,6 +78,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	gsnmp "github.com/gosnmp/gosnmp"
@@ -300,6 +301,11 @@ func discoverVlanIDs(ctx context.Context, client *gsnmp.GoSNMP) []int {
 	return ids
 }
 
+// maxVlanConcurrency is the maximum number of concurrent per-VLAN SNMP sessions
+// opened during a VLAN community FDB walk. Caps resource use on devices with
+// 100+ VLANs while still providing meaningful parallelism.
+const maxVlanConcurrency = 8
+
 // walkVlanCommunityFdbs uses VLAN community-string indexing (community@vlanId)
 // to walk dot1dTpFdbTable for each active VLAN on classic Cisco IOS devices.
 // These devices maintain one BRIDGE-MIB instance per VLAN and expose it only
@@ -307,6 +313,7 @@ func discoverVlanIDs(ctx context.Context, client *gsnmp.GoSNMP) []int {
 // Entries already present in the map (from B-MIB or Q-BRIDGE) are not overwritten.
 // maxVlans caps the number of VLANs iterated; if the discovered VLAN list is
 // longer, a warning is logged and the remaining VLANs are skipped.
+// Per-VLAN walks run in parallel, bounded by maxVlanConcurrency.
 func walkVlanCommunityFdbs(ctx context.Context, p snmputil.Params, client *gsnmp.GoSNMP, entries map[string]*fdbEntry, maxVlans int) {
 	if p.V3 || p.Community == "" {
 		return
@@ -317,19 +324,48 @@ func walkVlanCommunityFdbs(ctx context.Context, p snmputil.Params, client *gsnmp
 			"discovered", len(vlanIDs), "max_vlans", maxVlans)
 		vlanIDs = vlanIDs[:maxVlans]
 	}
-	for _, vlanID := range vlanIDs {
-		vp := p
-		vp.Community = fmt.Sprintf("%s@%d", p.Community, vlanID)
-		vlanClient, err := snmputil.Open(vp)
-		if err != nil {
-			continue
-		}
-		vlanEntries := make(map[string]*fdbEntry)
-		if err := walkFdbTableInto(ctx, vlanClient, vlanEntries); err != nil {
-			slog.Debug("fdb: VLAN community walk incomplete", "device", vp.IP, "vlan", vlanID, "err", err)
-		}
-		_ = vlanClient.Conn.Close()
-		for key, e := range vlanEntries {
+
+	type result struct {
+		vlanEntries map[string]*fdbEntry
+	}
+
+	results := make([]result, len(vlanIDs))
+	sem := make(chan struct{}, maxVlanConcurrency)
+	var wg sync.WaitGroup
+
+	for i, vlanID := range vlanIDs {
+		wg.Add(1)
+		go func(idx, vlan int) {
+			defer wg.Done()
+
+			// Acquire semaphore slot; respect context cancellation while waiting.
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+
+			vp := p
+			vp.Community = fmt.Sprintf("%s@%d", p.Community, vlan)
+			vlanClient, err := snmputil.Open(vp)
+			if err != nil {
+				return
+			}
+			vlanEntries := make(map[string]*fdbEntry)
+			if err := walkFdbTableInto(ctx, vlanClient, vlanEntries); err != nil {
+				slog.Debug("fdb: VLAN community walk incomplete", "device", vp.IP, "vlan", vlan, "err", err)
+			}
+			_ = vlanClient.Conn.Close()
+			results[idx] = result{vlanEntries: vlanEntries}
+		}(i, vlanID)
+	}
+
+	wg.Wait()
+
+	// Merge per-goroutine maps into entries; don't overwrite existing keys.
+	for _, r := range results {
+		for key, e := range r.vlanEntries {
 			if _, exists := entries[key]; !exists {
 				entries[key] = e
 			}
