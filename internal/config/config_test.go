@@ -1552,3 +1552,91 @@ func TestValidateHTTPSEndpointNoHost(t *testing.T) {
 		t.Fatal("expected error for https:///path (empty host), got nil")
 	}
 }
+
+// TestDiscoveryMaxGraphDevicesNegativeFails verifies that a negative
+// discovery.max_graph_devices causes Load to return an error.
+func TestDiscoveryMaxGraphDevicesNegativeFails(t *testing.T) {
+	c := &Config{}
+	c.applyDefaults()
+	c.Discovery.MaxGraphDevices = -1
+	err := c.validate()
+	if err == nil {
+		t.Fatal("expected error for max_graph_devices=-1, got nil")
+	}
+	if !strings.Contains(err.Error(), "max_graph_devices") {
+		t.Errorf("error %q should mention max_graph_devices", err.Error())
+	}
+}
+
+// TestDiscoveryMaxGraphEdgesNegativeFails verifies that a negative
+// discovery.max_graph_edges causes Load to return an error.
+func TestDiscoveryMaxGraphEdgesNegativeFails(t *testing.T) {
+	c := &Config{}
+	c.applyDefaults()
+	c.Discovery.MaxGraphEdges = -1
+	err := c.validate()
+	if err == nil {
+		t.Fatal("expected error for max_graph_edges=-1, got nil")
+	}
+	if !strings.Contains(err.Error(), "max_graph_edges") {
+		t.Errorf("error %q should mention max_graph_edges", err.Error())
+	}
+}
+
+// TestFederationHubMaxGraphDevicesNegativeFails verifies that a negative
+// federation.hub.max_graph_devices causes Load to return an error.
+func TestFederationHubMaxGraphDevicesNegativeFails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+discovery:
+  interval: 60s
+federation:
+  role: hub
+  spoke_timeout: 180s
+  hub:
+    tls_ca_cert: /ca.pem
+    tls_cert: /hub.crt
+    tls_key: /hub.key
+    max_graph_devices: -1
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for federation.hub.max_graph_devices=-1, got nil")
+	}
+	if !strings.Contains(err.Error(), "max_graph_devices") {
+		t.Errorf("error %q should mention max_graph_devices", err.Error())
+	}
+}
+
+// TestFederationHubMaxGraphEdgesNegativeFails verifies that a negative
+// federation.hub.max_graph_edges causes Load to return an error.
+func TestFederationHubMaxGraphEdgesNegativeFails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+discovery:
+  interval: 60s
+federation:
+  role: hub
+  spoke_timeout: 180s
+  hub:
+    tls_ca_cert: /ca.pem
+    tls_cert: /hub.crt
+    tls_key: /hub.key
+    max_graph_edges: -1
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for federation.hub.max_graph_edges=-1, got nil")
+	}
+	if !strings.Contains(err.Error(), "max_graph_edges") {
+		t.Errorf("error %q should mention max_graph_edges", err.Error())
+	}
+}

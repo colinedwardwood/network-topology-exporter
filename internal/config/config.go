@@ -371,6 +371,12 @@ func (c *Config) validate() error {
 	if c.Discovery.TimeoutPerModule < 0 {
 		return errors.New("discovery.timeout_per_module must be >= 0")
 	}
+	if c.Discovery.MaxGraphDevices < 0 {
+		return errors.New("discovery.max_graph_devices must be >= 0 (0 = unlimited)")
+	}
+	if c.Discovery.MaxGraphEdges < 0 {
+		return errors.New("discovery.max_graph_edges must be >= 0 (0 = unlimited)")
+	}
 	if c.Discovery.Interval <= 0 {
 		return errors.New("discovery.interval must be > 0")
 	}
@@ -599,6 +605,12 @@ func (c *Config) validateFederation() error {
 	case "hub":
 		if c.Federation.Hub.TLSCACert == "" || c.Federation.Hub.TLSCert == "" || c.Federation.Hub.TLSKey == "" {
 			return errors.New("federation.hub.tls_ca_cert, tls_cert, and tls_key are all required for hub role (LD-20)")
+		}
+		if c.Federation.Hub.MaxGraphDevices < 0 {
+			return errors.New("federation.hub.max_graph_devices must be >= 0 (0 = unlimited)")
+		}
+		if c.Federation.Hub.MaxGraphEdges < 0 {
+			return errors.New("federation.hub.max_graph_edges must be >= 0 (0 = unlimited)")
 		}
 		// LD-18: spoke_timeout shorter than 2× the discovery interval causes
 		// spokes to be spuriously evicted before they have completed two cycles.
