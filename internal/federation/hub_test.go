@@ -1541,5 +1541,131 @@ func TestTryPublishMetricsRejectsOversizedGraphDevices(t *testing.T) {
 	}
 }
 
+// TestValidateSpokePayload covers the semantic validation rules enforced by
+// validateSpokePayload: empty/overlong/invalid-UTF-8/duplicate device IDs,
+// required edge fields, self-edges, and overlong/invalid-UTF-8 port names.
+func TestValidateSpokePayload(t *testing.T) {
+	validDevice := discovery.Device{ID: "sw-1"}
+	validEdge := discovery.Edge{
+		SrcDevice: "sw-1", SrcPort: "Gi0/1",
+		DstDevice: "sw-2", DstPort: "Gi0/2",
+	}
+
+	cases := []struct {
+		name    string
+		payload SpokePayload
+		wantErr bool
+	}{
+		{
+			name: "empty device ID",
+			payload: SpokePayload{
+				Devices: []discovery.Device{{ID: ""}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "overlong device ID (257 bytes)",
+			payload: SpokePayload{
+				Devices: []discovery.Device{{ID: strings.Repeat("a", 257)}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid UTF-8 device ID",
+			payload: SpokePayload{
+				Devices: []discovery.Device{{ID: "\xff\xfe"}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "duplicate device IDs",
+			payload: SpokePayload{
+				Devices: []discovery.Device{{ID: "sw-dup"}, {ID: "sw-dup"}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty src_device",
+			payload: SpokePayload{
+				Devices: []discovery.Device{validDevice},
+				Edges: []discovery.Edge{
+					{SrcDevice: "", SrcPort: "Gi0/1", DstDevice: "sw-2"},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty src_port",
+			payload: SpokePayload{
+				Devices: []discovery.Device{validDevice},
+				Edges: []discovery.Edge{
+					{SrcDevice: "sw-1", SrcPort: "", DstDevice: "sw-2"},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty dst_device",
+			payload: SpokePayload{
+				Devices: []discovery.Device{validDevice},
+				Edges: []discovery.Edge{
+					{SrcDevice: "sw-1", SrcPort: "Gi0/1", DstDevice: ""},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "self-edge (src_device == dst_device)",
+			payload: SpokePayload{
+				Devices: []discovery.Device{validDevice},
+				Edges: []discovery.Edge{
+					{SrcDevice: "sw-1", SrcPort: "Gi0/1", DstDevice: "sw-1", DstPort: "Gi0/2"},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "overlong src_port",
+			payload: SpokePayload{
+				Devices: []discovery.Device{validDevice},
+				Edges: []discovery.Edge{
+					{SrcDevice: "sw-1", SrcPort: strings.Repeat("p", 257), DstDevice: "sw-2"},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "valid minimal payload (one device, one valid edge)",
+			payload: SpokePayload{
+				Devices: []discovery.Device{validDevice},
+				Edges:   []discovery.Edge{validEdge},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid payload with empty DstPort (DstPort is optional)",
+			payload: SpokePayload{
+				Devices: []discovery.Device{validDevice},
+				Edges: []discovery.Edge{
+					{SrcDevice: "sw-1", SrcPort: "Gi0/1", DstDevice: "sw-2", DstPort: ""},
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateSpokePayload(tc.payload)
+			if tc.wantErr && err == nil {
+				t.Error("validateSpokePayload() = nil, want error")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("validateSpokePayload() = %v, want nil", err)
+			}
+		})
+	}
+}
+
 // Ensure unused import is compiled away by the test binary.
 var _ = os.DevNull

@@ -90,6 +90,12 @@ type FederationHubConfig struct {
 	// MaxGraphDevices, if > 0, rejects combined-graph updates with more devices
 	// than this limit. Protects scrape latency and memory from runaway topologies.
 	MaxGraphDevices int `yaml:"max_graph_devices"`
+	// StrictDeviceNameMatching disables domain-suffix stripping during OOS
+	// neighbour matching. When false (default), "core-sw.dc1.example.com" and
+	// "core-sw.dc2.example.com" both normalise to "core-sw" and can be falsely
+	// matched. Enable in any federation where device hostnames are not unique
+	// across sites.
+	StrictDeviceNameMatching bool `yaml:"strict_device_name_matching"`
 }
 
 // FederationSpokeConfig holds the spoke's settings.

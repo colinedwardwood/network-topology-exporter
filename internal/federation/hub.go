@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
@@ -25,6 +26,9 @@ import (
 const (
 	maxDevicesPerPush = 10_000
 	maxEdgesPerPush   = 50_000
+
+	maxDeviceIDBytes = 256
+	maxPortNameBytes = 256
 )
 
 type spokeEntry struct {
@@ -140,6 +144,48 @@ func (h *Hub) Serve(ctx context.Context) error {
 	return nil
 }
 
+// validateSpokePayload checks semantic invariants that the JSON decoder and size
+// guards cannot catch: empty/duplicate/overlong/non-UTF-8 device IDs, required
+// edge fields, self-edges, and overlong/non-UTF-8 port names.
+func validateSpokePayload(p SpokePayload) error {
+	seen := make(map[string]bool, len(p.Devices))
+	for i, d := range p.Devices {
+		if d.ID == "" {
+			return fmt.Errorf("device[%d]: device_id is empty", i)
+		}
+		if len(d.ID) > maxDeviceIDBytes {
+			return fmt.Errorf("device[%d]: device_id exceeds %d bytes", i, maxDeviceIDBytes)
+		}
+		if !utf8.ValidString(d.ID) {
+			return fmt.Errorf("device[%d]: device_id is not valid UTF-8", i)
+		}
+		if seen[d.ID] {
+			return fmt.Errorf("device[%d]: duplicate device_id %q", i, d.ID)
+		}
+		seen[d.ID] = true
+	}
+	for i, e := range p.Edges {
+		if e.SrcDevice == "" || e.SrcPort == "" || e.DstDevice == "" {
+			return fmt.Errorf("edge[%d]: src_device, src_port, and dst_device are required", i)
+		}
+		if e.SrcDevice == e.DstDevice {
+			return fmt.Errorf("edge[%d]: self-edge (src_device == dst_device == %q)", i, e.SrcDevice)
+		}
+		for _, f := range []struct{ name, val string }{
+			{"src_device", e.SrcDevice}, {"src_port", e.SrcPort},
+			{"dst_device", e.DstDevice}, {"dst_port", e.DstPort},
+		} {
+			if len(f.val) > maxPortNameBytes {
+				return fmt.Errorf("edge[%d]: %s exceeds %d bytes", i, f.name, maxPortNameBytes)
+			}
+			if !utf8.ValidString(f.val) {
+				return fmt.Errorf("edge[%d]: %s is not valid UTF-8", i, f.name)
+			}
+		}
+	}
+	return nil
+}
+
 func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -155,6 +201,12 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(payload.Devices) > maxDevicesPerPush || len(payload.Edges) > maxEdgesPerPush {
 		http.Error(w, fmt.Sprintf("payload exceeds limits (max %d devices, %d edges)", maxDevicesPerPush, maxEdgesPerPush), http.StatusRequestEntityTooLarge)
+		return
+	}
+	if err := validateSpokePayload(payload); err != nil {
+		h.logger.Warn("hub: spoke payload failed semantic validation",
+			"spoke_id", payload.SpokeID, "error", err)
+		http.Error(w, "invalid payload: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	if payload.SpokeID == "" {
@@ -305,7 +357,7 @@ func (h *Hub) buildCombinedGraph(spokes map[string]spokeEntry) discovery.Graph {
 	for _, entry := range spokes {
 		for _, n := range entry.payload.OutOfScope {
 			for _, raw := range []string{n.ReportingDevice, n.NeighbourHint} {
-				canon := normalizeDeviceName(raw)
+				canon := h.canonicalizeDeviceName(raw)
 				if rawNamesForCanonical[canon] == nil {
 					rawNamesForCanonical[canon] = make(map[string]struct{})
 				}
@@ -332,7 +384,7 @@ func (h *Hub) buildCombinedGraph(spokes map[string]spokeEntry) discovery.Graph {
 
 	for _, entry := range spokes {
 		for _, n := range entry.payload.OutOfScope {
-			k := oosKey{normalizeDeviceName(n.ReportingDevice), normalizeDeviceName(n.NeighbourHint)}
+			k := oosKey{h.canonicalizeDeviceName(n.ReportingDevice), h.canonicalizeDeviceName(n.NeighbourHint)}
 			oosIndex[k] = append(oosIndex[k], oosVal{n.ReportingPort, n.Proto})
 		}
 	}
@@ -545,20 +597,33 @@ func (h *Hub) writeSnapshot(g discovery.Graph) {
 // hub. It drains h.snapshotCh one graph at a time, so an NFS stall cannot
 // accumulate goroutines across spoke pushes.
 func (h *Hub) runSnapshotWriter(ctx context.Context) {
+	var writeDone chan struct{} // non-nil while a write goroutine is in flight
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case g := <-h.snapshotCh:
-			done := make(chan struct{}, 1)
-			go func(g discovery.Graph) {
+			// Collect result from any previously timed-out write that has now finished.
+			if writeDone != nil {
+				select {
+				case <-writeDone:
+					writeDone = nil
+				default:
+					h.logger.Warn("hub: snapshot write still in flight; dropping snapshot (NFS stall?)")
+					continue
+				}
+			}
+			writeDone = make(chan struct{}, 1)
+			go func(g discovery.Graph, done chan struct{}) {
 				h.writeSnapshot(g)
 				close(done)
-			}(g)
+			}(g, writeDone)
 			select {
-			case <-done:
+			case <-writeDone:
+				writeDone = nil
 			case <-time.After(h.snapshotWriteTimeout):
 				h.logger.Warn("hub: snapshot write timed out (NFS stall?)", "timeout", h.snapshotWriteTimeout)
+				// writeDone goroutine still running; next iteration will detect this.
 			case <-ctx.Done():
 				return
 			}
@@ -590,6 +655,18 @@ func normalizeDeviceName(s string) string {
 		s = s[:i]
 	}
 	return s
+}
+
+// canonicalizeDeviceName returns the canonical form of a device name for OOS
+// neighbour matching. When StrictDeviceNameMatching is enabled, only
+// case-folding is applied (preserving domain suffixes so "core-sw.dc1" and
+// "core-sw.dc2" remain distinct). Otherwise it delegates to normalizeDeviceName
+// which strips domain suffixes.
+func (h *Hub) canonicalizeDeviceName(s string) string {
+	if h.cfg.Hub.StrictDeviceNameMatching {
+		return strings.ToLower(s)
+	}
+	return normalizeDeviceName(s)
 }
 
 // appendEdgePair appends a forward and reverse discovery.Edge to edges and
