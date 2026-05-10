@@ -155,7 +155,7 @@ type Edge struct {
 	Direction      Direction
 	Confidence     Confidence
 	Adjacency      Adjacency
-	PrecedenceRank int // 1 = highest priority. See LD-10 ladder.
+	PrecedenceRank int // 0 = highest (LD-19 configured overrides); lower rank = higher priority. See LD-10 ladder.
 
 	// LinkKind describes the link's transport semantics, independent of how it
 	// was discovered: "ethernet" for L2 LLDP/CDP/FDB observations, "ibgp" or

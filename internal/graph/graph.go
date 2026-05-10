@@ -253,6 +253,13 @@ func Reconcile(edges []discovery.Edge) ([]discovery.Edge, []Conflict) {
 			}
 		}
 		slices.Sort(sources)
+		// Sort observations by rawSrcPort so that when multiple protocol
+		// encodings exist (e.g. "Gi0/1" vs "GigabitEthernet0/1"), the
+		// lexically-first name is chosen deterministically rather than
+		// whichever map iteration order happened to arrive first.
+		slices.SortFunc(observations, func(a, b portObservation) int {
+			return strings.Compare(a.rawSrcPort, b.rawSrcPort)
+		})
 		// Use the raw port name from the first observation so operators see
 		// the name the protocol actually reported (e.g. "GigabitEthernet0/1"),
 		// not the normalized key form (e.g. "Gi0/1").
