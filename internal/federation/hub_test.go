@@ -1416,6 +1416,7 @@ func TestRunSnapshotWriterTimeoutContinues(t *testing.T) {
 	// the timeout fires.
 	block := make(chan struct{})
 	started := make(chan struct{}, 1) // first write signals it has started
+	firstWriteDone := make(chan struct{}) // closed when the first (stalled) write completes
 	second := make(chan struct{}, 1)  // second write signals completion
 	firstDone := false
 
@@ -1434,6 +1435,7 @@ func TestRunSnapshotWriterTimeoutContinues(t *testing.T) {
 			default:
 			}
 			<-block // stall until the test unblocks us
+			close(firstWriteDone) // signal that the stalled write has completed
 			return nil
 		}
 		close(second)
@@ -1459,8 +1461,15 @@ func TestRunSnapshotWriterTimeoutContinues(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	close(block)
 
-	// Give runSnapshotWriter a moment to loop back to the select before sending second graph.
-	time.Sleep(20 * time.Millisecond)
+	// Wait until the stalled write goroutine has actually finished before sending
+	// the second graph. This replaces the racy fixed sleep: runSnapshotWriter
+	// checks writeDone on the next dequeue, so we must ensure writeDone is closed
+	// first to avoid the "still in flight; dropping" branch.
+	select {
+	case <-firstWriteDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stalled write never completed")
+	}
 	h.writeSnapshotAsync(discovery.Graph{Devices: []discovery.Device{{ID: "ok"}}})
 
 	select {
