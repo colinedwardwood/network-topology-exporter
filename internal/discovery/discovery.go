@@ -42,6 +42,9 @@ const (
 	MetadataKeyDegraded = "degraded"
 	// MetadataKeyDegradedReason carries the degraded-mode reason code.
 	MetadataKeyDegradedReason = "degraded_reason"
+	// MetadataKeyPeerChassisMac is set by the LLDP walker on edges where the peer
+	// advertises a MAC chassis ID and a sysName, enabling FDB MAC→sysName resolution.
+	MetadataKeyPeerChassisMac = "peer_chassis_mac"
 
 	DegradedReasonRequiredTablePartialDecode = "required_table_partial_decode"
 	DegradedReasonMissingSrcPortMapping      = "missing_srcport_mapping"

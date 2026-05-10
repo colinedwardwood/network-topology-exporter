@@ -732,11 +732,11 @@ func runCycle(
 		allOOS = append(allOOS, r.outOfScope...)
 	}
 	// Build MAC→sysName identity index from LLDP observations.
-	// LLDP emits peer_chassis_mac in Metadata when it knows both the MAC and sysName of a peer.
+	// LLDP sets MetadataKeyPeerChassisMac when it knows both the MAC and sysName of a peer.
 	macToID := make(map[string]string)
 	for _, e := range rawEdges {
 		if e.DiscoveryProto == "lldp" {
-			if mac, ok := e.Metadata["peer_chassis_mac"]; ok && e.DstDevice != "" {
+			if mac, ok := e.Metadata[discovery.MetadataKeyPeerChassisMac]; ok && e.DstDevice != "" {
 				macToID[mac] = e.DstDevice
 			}
 		}
