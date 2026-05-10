@@ -1,6 +1,8 @@
 package graph
 
 import (
+	"fmt"
+	"math"
 	"reflect"
 	"slices"
 	"testing"
@@ -877,5 +879,123 @@ func TestReconcileNeighbourDisagreementAcrossEncodings(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected ConflictNeighbourDisagreement for same port naming different neighbors, got %v", conflicts)
+	}
+}
+
+// ── Benchmarks ────────────────────────────────────────────────────────────────
+
+// makeEdges generates n raw (pre-reconciliation) edge observations with
+// bidirectional coverage: for each logical link A→B we emit both the A-side
+// and the B-side observation so that Reconcile has to detect bidirectionality.
+//
+// Device IDs are distributed across ~sqrt(n) devices using modular arithmetic
+// so the result is a realistic mesh rather than a star topology. Port names
+// cycle through GigabitEthernet0/0 … GigabitEthernet0/47.
+func makeEdges(n int) []discovery.Edge {
+	numDevices := int(math.Ceil(math.Sqrt(float64(n))))
+	if numDevices < 2 {
+		numDevices = 2
+	}
+	edges := make([]discovery.Edge, 0, n*2)
+	for i := 0; i < n; i++ {
+		srcIdx := i % numDevices
+		dstIdx := (i + 1) % numDevices
+		if srcIdx == dstIdx {
+			dstIdx = (dstIdx + 1) % numDevices
+		}
+		srcDevice := fmt.Sprintf("sw-%03d", srcIdx)
+		dstDevice := fmt.Sprintf("sw-%03d", dstIdx)
+		srcPort := fmt.Sprintf("GigabitEthernet0/%d", i%48)
+		dstPort := fmt.Sprintf("GigabitEthernet0/%d", (i+1)%48)
+
+		// A-side observation.
+		edges = append(edges, discovery.Edge{
+			SrcDevice:      srcDevice,
+			SrcPort:        srcPort,
+			DstDevice:      dstDevice,
+			DstPort:        dstPort,
+			DiscoveryProto: "lldp",
+			PrecedenceRank: 2,
+		})
+		// B-side observation — lets Reconcile detect bidirectionality.
+		edges = append(edges, discovery.Edge{
+			SrcDevice:      dstDevice,
+			SrcPort:        dstPort,
+			DstDevice:      srcDevice,
+			DstPort:        srcPort,
+			DiscoveryProto: "lldp",
+			PrecedenceRank: 2,
+		})
+	}
+	return edges
+}
+
+func BenchmarkReconcile100Edges(b *testing.B) {
+	edges := makeEdges(100)
+	b.ResetTimer()
+	for b.Loop() {
+		out, _ := Reconcile(edges)
+		_ = out
+	}
+}
+
+func BenchmarkReconcile1000Edges(b *testing.B) {
+	edges := makeEdges(1000)
+	b.ResetTimer()
+	for b.Loop() {
+		out, _ := Reconcile(edges)
+		_ = out
+	}
+}
+
+func BenchmarkReconcile10000Edges(b *testing.B) {
+	edges := makeEdges(10000)
+	b.ResetTimer()
+	for b.Loop() {
+		out, _ := Reconcile(edges)
+		_ = out
+	}
+}
+
+func BenchmarkDiff100Edges(b *testing.B) {
+	raw := makeEdges(100)
+	before, _ := Reconcile(raw)
+
+	// Slightly modified copy: flip the direction of the first edge so Diff
+	// has at least one ChangeUpdated to detect, and drop the last edge so
+	// there is one ChangeRemoved.
+	afterRaw := makeEdges(100)
+	after, _ := Reconcile(afterRaw)
+	if len(after) > 0 {
+		after[0].Direction = discovery.DirectionUnidirectional
+	}
+	if len(after) > 1 {
+		after = after[:len(after)-1]
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		changes := Diff(before, after)
+		_ = changes
+	}
+}
+
+func BenchmarkDiff1000Edges(b *testing.B) {
+	raw := makeEdges(1000)
+	before, _ := Reconcile(raw)
+
+	afterRaw := makeEdges(1000)
+	after, _ := Reconcile(afterRaw)
+	if len(after) > 0 {
+		after[0].Direction = discovery.DirectionUnidirectional
+	}
+	if len(after) > 1 {
+		after = after[:len(after)-1]
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		changes := Diff(before, after)
+		_ = changes
 	}
 }

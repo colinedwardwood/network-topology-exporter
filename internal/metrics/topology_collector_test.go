@@ -321,6 +321,72 @@ func BenchmarkCollect10000Edges(b *testing.B) {
 	close(ch)
 }
 
+// TestCardinalityBudget asserts that the total number of Prometheus samples
+// emitted by TopologyCollector stays within a per-device budget across three
+// scale points (100, 500, and 1000 devices). The budget is 15 samples per
+// device, which is deliberately conservative: each device contributes 2
+// samples (device_info + device_uptime_seconds) and each edge contributes 1
+// sample, plus a handful of scalar metrics. If someone introduces an unbounded
+// label on a per-device metric, this test will fail at the 100-device mark.
+func TestCardinalityBudget(t *testing.T) {
+	for _, numDevices := range []int{100, 500, 1000} {
+		numDevices := numDevices
+		t.Run(fmt.Sprintf("%d_devices", numDevices), func(t *testing.T) {
+			// Build a synthetic graph: numDevices devices, 2 bidirectional edges
+			// per adjacent device pair (i→i+1 and i+1→i as separate observations,
+			// already collapsed to one bidirectional edge after reconciliation in
+			// the graph layer). We construct the graph directly here so the test
+			// is self-contained.
+			devices := make([]discovery.Device, numDevices)
+			for i := range devices {
+				devices[i] = discovery.Device{
+					ID:        fmt.Sprintf("sw-%04d", i),
+					Vendor:    "cisco",
+					Model:     "nexus-9000",
+					OSVersion: "9.3(10)",
+					Site:      "dc1",
+					Uptime:    time.Duration(i+1) * time.Second,
+				}
+			}
+
+			edges := make([]discovery.Edge, numDevices)
+			for i := range edges {
+				srcIdx := i
+				dstIdx := (i + 1) % numDevices
+				edges[i] = discovery.Edge{
+					SrcDevice:      fmt.Sprintf("sw-%04d", srcIdx),
+					SrcPort:        fmt.Sprintf("GigabitEthernet0/%d", i%48),
+					DstDevice:      fmt.Sprintf("sw-%04d", dstIdx),
+					DstPort:        fmt.Sprintf("GigabitEthernet0/%d", (i+1)%48),
+					DiscoveryProto: "lldp",
+					LinkKind:       "ethernet",
+					Direction:      discovery.DirectionBidirectional,
+				}
+			}
+
+			g := discovery.Graph{Devices: devices, Edges: edges}
+
+			reg := prometheus.NewRegistry()
+			tc := newTopologyCollector(false, nil, nil)
+			tc.Update(g)
+			if err := reg.Register(tc); err != nil {
+				t.Fatalf("register collector: %v", err)
+			}
+
+			count, err := testutil.GatherAndCount(reg)
+			if err != nil {
+				t.Fatalf("gather: %v", err)
+			}
+
+			budget := numDevices * 15
+			if count > budget {
+				t.Errorf("cardinality budget exceeded: %d samples for %d devices (budget %d = %d * 15)",
+					count, numDevices, budget, numDevices)
+			}
+		})
+	}
+}
+
 // TestTopologyCollectorDescribeAllDescriptors verifies that Describe always
 // sends exactly 7 descriptors regardless of the emitBoundaryObs flag.
 func TestTopologyCollectorDescribeAllDescriptors(t *testing.T) {
