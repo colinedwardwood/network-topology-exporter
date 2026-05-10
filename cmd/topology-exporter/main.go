@@ -737,13 +737,13 @@ func runCycle(
 			// LLDP-based correlation still works without ARP data.
 			arpClient, arpErr := snmpwalk.Open(params)
 			if arpErr != nil {
-				slog.Debug("fdb: ARP table walk failed; MAC→IP resolution unavailable for this device",
+				logger.Debug("ARP table walk failed; MAC→IP resolution unavailable for this device",
 					"device", dev.ID, "err", arpErr)
 			} else {
 				arpMACToIP, arpErr := snmpwalk.WalkARPTable(devCtx, arpClient)
 				_ = arpClient.Conn.Close()
 				if arpErr != nil {
-					slog.Debug("fdb: ARP table walk failed; MAC→IP resolution unavailable for this device",
+					logger.Debug("ARP table walk failed; MAC→IP resolution unavailable for this device",
 						"device", dev.ID, "err", arpErr)
 				} else {
 					mu.Lock()
