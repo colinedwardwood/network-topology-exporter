@@ -176,9 +176,15 @@ func generateE2EPKI(t *testing.T, dir, spokeID string) e2ePKI {
 	if err != nil {
 		t.Fatalf("create CA cert: %v", err)
 	}
-	caCert, _ := x509.ParseCertificate(caDER)
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("parse CA cert: %v", err)
+	}
 
-	serverKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	serverKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate server key: %v", err)
+	}
 	serverTmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
 		Subject:      pkix.Name{CommonName: "hub"},
@@ -188,9 +194,15 @@ func generateE2EPKI(t *testing.T, dir, spokeID string) e2ePKI {
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
 	}
-	serverDER, _ := x509.CreateCertificate(rand.Reader, serverTmpl, caCert, &serverKey.PublicKey, caKey)
+	serverDER, err := x509.CreateCertificate(rand.Reader, serverTmpl, caCert, &serverKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create server cert: %v", err)
+	}
 
-	clientKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	clientKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate client key: %v", err)
+	}
 	clientTmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(3),
 		Subject:      pkix.Name{CommonName: spokeID},
@@ -199,7 +211,10 @@ func generateE2EPKI(t *testing.T, dir, spokeID string) e2ePKI {
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
-	clientDER, _ := x509.CreateCertificate(rand.Reader, clientTmpl, caCert, &clientKey.PublicKey, caKey)
+	clientDER, err := x509.CreateCertificate(rand.Reader, clientTmpl, caCert, &clientKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create client cert: %v", err)
+	}
 
 	writePEM := func(name string, blocks ...*pem.Block) string {
 		path := dir + "/" + name
@@ -216,8 +231,14 @@ func generateE2EPKI(t *testing.T, dir, spokeID string) e2ePKI {
 		return path
 	}
 
-	serverKeyDER, _ := x509.MarshalECPrivateKey(serverKey)
-	clientKeyDER, _ := x509.MarshalECPrivateKey(clientKey)
+	serverKeyDER, err := x509.MarshalECPrivateKey(serverKey)
+	if err != nil {
+		t.Fatalf("marshal server key: %v", err)
+	}
+	clientKeyDER, err := x509.MarshalECPrivateKey(clientKey)
+	if err != nil {
+		t.Fatalf("marshal client key: %v", err)
+	}
 
 	return e2ePKI{
 		caCertFile:     writePEM("ca.pem", &pem.Block{Type: "CERTIFICATE", Bytes: caDER}),
