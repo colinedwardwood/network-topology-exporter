@@ -1017,6 +1017,43 @@ func TestReconcileScaleBudget(t *testing.T) {
 	}
 }
 
+// TestReconcileConflictSrcPortDeterministic verifies that when multiple
+// observations for the same normalised port key carry different raw SrcPort
+// spellings (e.g. "Gi0/1" from CDP vs "GigabitEthernet0/1" from LLDP), the
+// emitted Conflict.SrcPort is always the lexically-first raw name rather than
+// whichever happened to arrive first from map iteration.
+func TestReconcileConflictSrcPortDeterministic(t *testing.T) {
+	// "Gi0/1" < "GigabitEthernet0/1" lexically, so the conflict must always
+	// report "Gi0/1" regardless of input order.
+	edgesAB := []discovery.Edge{
+		// CDP reports the short-form name for the same physical port.
+		{SrcDevice: "sw-a", SrcPort: "GigabitEthernet0/1",
+			DstDevice: "sw-b", DstPort: "Gi0/1",
+			DiscoveryProto: "lldp", PrecedenceRank: 1},
+		// LLDP reports the long-form name but names a different neighbor → conflict.
+		{SrcDevice: "sw-a", SrcPort: "Gi0/1",
+			DstDevice: "sw-c", DstPort: "Gi0/1",
+			DiscoveryProto: "cdp", PrecedenceRank: 1},
+	}
+	// Also test with the slice reversed to prove order-independence.
+	edgesBA := []discovery.Edge{edgesAB[1], edgesAB[0]}
+
+	for _, edges := range [][]discovery.Edge{edgesAB, edgesBA} {
+		_, conflicts := Reconcile(edges)
+		if len(conflicts) != 1 {
+			t.Fatalf("expected 1 conflict, got %d: %v", len(conflicts), conflicts)
+		}
+		c := conflicts[0]
+		if c.Kind != ConflictNeighbourDisagreement {
+			t.Fatalf("conflict kind = %q, want %q", c.Kind, ConflictNeighbourDisagreement)
+		}
+		// "Gi0/1" < "GigabitEthernet0/1": the lexically-first raw name must win.
+		if c.SrcPort != "Gi0/1" {
+			t.Errorf("Conflict.SrcPort = %q, want Gi0/1 (lexically first raw name)", c.SrcPort)
+		}
+	}
+}
+
 // ── Benchmarks ────────────────────────────────────────────────────────────────
 
 // makeEdges generates n raw (pre-reconciliation) edge observations with
