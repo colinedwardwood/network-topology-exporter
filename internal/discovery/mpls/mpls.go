@@ -157,6 +157,9 @@ func parseTunnelSuffix(suffix string) (tunnelIdx int, egressIP net.IP, ok bool) 
 	if err != nil {
 		return 0, nil, false
 	}
+	if idx <= 0 {
+		return 0, nil, false
+	}
 	ip, ipOK := parseIPFromParts(parts[6:10])
 	if !ipOK {
 		return 0, nil, false

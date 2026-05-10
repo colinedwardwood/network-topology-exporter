@@ -176,5 +176,13 @@ func parseNbrOID(oid, prefix string) (col int, key string, ok bool) {
 	if strings.Count(key, ".") != 4 {
 		return 0, "", false
 	}
+	parts := strings.SplitN(key, ".", 5)
+	// Validate all 4 IP octets are in 0-255.
+	for _, octet := range parts[:4] {
+		v, err := strconv.Atoi(octet)
+		if err != nil || v < 0 || v > 255 {
+			return "", "", false
+		}
+	}
 	return col, key, true
 }
