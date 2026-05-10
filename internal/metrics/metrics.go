@@ -69,6 +69,11 @@ type Metrics struct {
 	// Scrape-time SLO signals — updated by TopologyCollector on every scrape.
 	TopologyLastScrapeDurationSeconds prometheus.Gauge
 	TopologyLastScrapeSamplesTotal     prometheus.Gauge
+
+	// FDBSuppressedMACs counts FDB MAC peers dropped because no LLDP chassis
+	// MAC correlation was found; these were not host MACs that passed the
+	// single-learned-MAC filter.
+	FDBSuppressedMACs prometheus.Counter
 }
 
 // New builds and registers the exporter's metric set. emitBoundaryObs should
@@ -175,6 +180,10 @@ func New(emitBoundaryObs bool) *Metrics {
 			Name: "network_topology_last_scrape_samples_total",
 			Help: "Number of metric samples emitted at the last Prometheus scrape. Alert when this approaches scrape_timeout capacity.",
 		}),
+		FDBSuppressedMACs: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "network_topology_fdb_suppressed_macs_total",
+			Help: "FDB MAC peers dropped because no LLDP chassis MAC correlation was found; these were not host MACs that passed the single-learned-MAC filter.",
+		}),
 	}
 	m.Topology = newTopologyCollector(emitBoundaryObs, m.TopologyLastScrapeDurationSeconds, m.TopologyLastScrapeSamplesTotal)
 
@@ -203,6 +212,7 @@ func New(emitBoundaryObs bool) *Metrics {
 		m.HubOOSUnmatchedTotal,
 		m.TopologyLastScrapeDurationSeconds,
 		m.TopologyLastScrapeSamplesTotal,
+		m.FDBSuppressedMACs,
 	)
 
 	return m

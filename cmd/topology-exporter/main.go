@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
@@ -759,7 +760,7 @@ func runCycle(
 			}
 		}
 	}
-	rawEdges = resolveEdgeDstDevices(rawEdges, ipToID, macToID)
+	rawEdges = resolveEdgeDstDevices(rawEdges, ipToID, macToID, m.FDBSuppressedMACs)
 
 	// Backfill DstPort on FDB edges from LLDP observations with matching endpoints.
 	// After MAC→sysName resolution, LLDP and FDB can agree on all four endpoint
@@ -837,7 +838,8 @@ func collectDegradedReasons(edges []discovery.Edge) []string {
 // IPs are kept (still useful for routing protocol edges).
 // For MAC DstDevices: resolves to sysName via the LLDP identity index; unresolved
 // MACs are suppressed (likely hosts, not infrastructure).
-func resolveEdgeDstDevices(edges []discovery.Edge, ipToID map[string]string, macToID map[string]string) []discovery.Edge {
+// suppressedCounter is incremented for each suppressed MAC; pass nil to skip.
+func resolveEdgeDstDevices(edges []discovery.Edge, ipToID map[string]string, macToID map[string]string, suppressedCounter prometheus.Counter) []discovery.Edge {
 	result := make([]discovery.Edge, 0, len(edges))
 	for i := range edges {
 		e := edges[i]
@@ -856,6 +858,9 @@ func resolveEdgeDstDevices(edges []discovery.Edge, ipToID map[string]string, mac
 				slog.Debug("fdb: suppressing unresolved MAC peer; no LLDP correlation",
 					"src_device", e.SrcDevice, "src_port", e.SrcPort, "mac", dst)
 				_ = hw
+				if suppressedCounter != nil {
+					suppressedCounter.Inc()
+				}
 				continue
 			}
 		}

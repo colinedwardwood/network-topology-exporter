@@ -1840,7 +1840,7 @@ func TestResolveEdgeDstDevices(t *testing.T) {
 		{SrcDevice: "core-sw-01", DstDevice: "00:ff:ee:dd:cc:bb", DiscoveryProto: "fdb"}, // MAC not in index → suppressed
 	}
 
-	got := resolveEdgeDstDevices(edges, ipToID, macToID)
+	got := resolveEdgeDstDevices(edges, ipToID, macToID, nil)
 
 	// Unresolved MAC edge is suppressed; expect 5 edges back (not 6).
 	want := []string{"core-sw-02", "core-sw-01", "core-sw-03", "10.0.1.99", "spine-01"}
