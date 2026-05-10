@@ -1212,6 +1212,40 @@ func TestNormaliseNameCap(t *testing.T) {
 	}
 }
 
+// WalkARPTable: two ipNetToMediaPhysAddress PDUs are decoded to MAC→IP entries.
+func TestWalkARPTable(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{
+			Name:  "." + OIDIPNetToMediaPhysAddr + ".1.10.0.0.1",
+			Type:  gsnmp.OctetString,
+			Value: []byte{0x00, 0x1a, 0x2b, 0x3c, 0x4d, 0x5e},
+		},
+		{
+			Name:  "." + OIDIPNetToMediaPhysAddr + ".2.10.0.0.2",
+			Type:  gsnmp.OctetString,
+			Value: []byte{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff},
+		},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+	client, err := Open(Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = client.Conn.Close() }()
+
+	m, err := WalkARPTable(context.Background(), client)
+	if err != nil {
+		t.Fatalf("WalkARPTable: %v", err)
+	}
+	if got := m["00:1a:2b:3c:4d:5e"]; got != "10.0.0.1" {
+		t.Errorf("m[00:1a:2b:3c:4d:5e] = %q, want 10.0.0.1", got)
+	}
+	if got := m["aa:bb:cc:dd:ee:ff"]; got != "10.0.0.2" {
+		t.Errorf("m[aa:bb:cc:dd:ee:ff] = %q, want 10.0.0.2", got)
+	}
+}
+
 // ParseCIDRsStrict: a malformed CIDR entry returns a non-nil error.
 func TestParseStrictRejectsInvalid(t *testing.T) {
 	_, err := ParseCIDRsStrict([]string{"not-a-cidr"})

@@ -16,6 +16,9 @@ const (
 	// OIDIfDescr is the IF-MIB ifTable.ifDescr column (RFC 2863 §3.1.2).
 	// Older devices that lack the ifXTable ifName column use this OID instead.
 	OIDIfDescr = "1.3.6.1.2.1.2.2.1.2"
+	// OIDIPNetToMediaPhysAddr is the ipNetToMediaTable.ipNetToMediaPhysAddress
+	// column (RFC 1213 §4.2.2): a map of ifIndex.remoteIP → MAC address.
+	OIDIPNetToMediaPhysAddr = "1.3.6.1.2.1.4.22.1.2"
 )
 
 // TableOID is a validated SNMP table-root OID string. Using a named type
@@ -180,6 +183,47 @@ func WalkIfNamesWithFallback(ctx context.Context, client *g.GoSNMP) (map[int]str
 		return descr, nil
 	}
 	return nil, err // return original ifName error
+}
+
+// WalkARPTable walks the ipNetToMediaTable and returns a map of MAC address
+// string → IP address string for all ARP entries on the device. Only valid
+// 6-byte MAC entries with a parseable IPv4 suffix are included.
+func WalkARPTable(ctx context.Context, client *g.GoSNMP) (map[string]string, error) {
+	pdus, err := BulkWalk(ctx, client, OIDIPNetToMediaPhysAddr)
+	if err != nil {
+		return nil, err
+	}
+	// OID suffix format: ifIndex.a.b.c.d where a.b.c.d is the remote IPv4 address.
+	prefix := "." + OIDIPNetToMediaPhysAddr + "."
+	result := make(map[string]string, len(pdus))
+	for _, pdu := range pdus {
+		suffix, ok := TrimOIDPrefix(pdu.Name, prefix)
+		if !ok {
+			continue
+		}
+		// suffix is "ifIndex.a.b.c.d"; strip the ifIndex component.
+		dot := strings.Index(suffix, ".")
+		if dot < 0 {
+			continue
+		}
+		ipStr := suffix[dot+1:] // "a.b.c.d"
+		if net.ParseIP(ipStr) == nil {
+			continue
+		}
+		var macBytes []byte
+		switch v := pdu.Value.(type) {
+		case []byte:
+			macBytes = v
+		case string:
+			macBytes = []byte(v)
+		}
+		if len(macBytes) != 6 {
+			continue
+		}
+		mac := net.HardwareAddr(macBytes).String()
+		result[mac] = ipStr
+	}
+	return result, nil
 }
 
 func walkIntIndexedStrings(ctx context.Context, client *g.GoSNMP, oid string) (map[int]string, error) {
