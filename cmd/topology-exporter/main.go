@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -399,6 +400,7 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 		go func() {
 			var writeDone chan error // non-nil while a write goroutine is in flight
 			for f := range snapshotCh {
+				lc.m.SnapshotQueueDepth.Set(float64(len(snapshotCh)))
 				// Collect result from any previously timed-out write that has now finished.
 				if writeDone != nil {
 					select {
@@ -436,6 +438,7 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 	var cycleNum int
 	cycle := func() {
 		cycleNum++
+		lc.m.GoRoutines.Set(float64(runtime.NumGoroutine()))
 		start := time.Now()
 		newGraph, newAges, conflicts, deviceErrors := runCycle(ctx, lc.logger, lc.cfg, lc.m, resolver, allowedNets, ages)
 		if ctx.Err() != nil {
@@ -445,6 +448,21 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 			LastCycleAt:  time.Now(),
 			DeviceErrors: int64(deviceErrors),
 		})
+
+		// Admission control: reject local graph updates that exceed the
+		// configured size budget (mirrors hub-mode MaxGraph* enforcement).
+		maxDevices := lc.cfg.Discovery.MaxGraphDevices
+		maxEdges := lc.cfg.Discovery.MaxGraphEdges
+		if (maxDevices > 0 && len(newGraph.Devices) > maxDevices) ||
+			(maxEdges > 0 && len(newGraph.Edges) > maxEdges) {
+			lc.logger.Warn("local graph update rejected: exceeds size budget",
+				"devices", len(newGraph.Devices), "max_devices", maxDevices,
+				"edges", len(newGraph.Edges), "max_edges", maxEdges)
+			lc.m.GraphUpdatesRejectedTotal.Inc()
+			// Keep prevGraph as the published graph; skip all downstream updates.
+			return
+		}
+
 		changes := graph.Diff(prevGraph.Edges, newGraph.Edges)
 		if len(changes) > 0 {
 			evLogger.Emit(ctx, changes)
@@ -500,6 +518,7 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 		if snapshotCh != nil {
 			select {
 			case snapshotCh <- f:
+				lc.m.SnapshotQueueDepth.Set(float64(len(snapshotCh)))
 			default:
 				lc.logger.Warn("snapshot write queue full; dropping (previous write still in flight)")
 			}
@@ -626,8 +645,8 @@ func runCycle(
 			devCtx, cancel := context.WithTimeout(cycleCtx, cfg.Discovery.TimeoutPerDevice)
 			defer cancel()
 			devCtx = snmpwalk.ContextWithDecodeIssueReporter(devCtx, func(issue snmpwalk.DecodeIssue) {
-				m.DiscoveryDecodeIssues.WithLabelValues(issue.Module, issue.OID, issue.Reason).Add(float64(issue.Count))
-				m.DiscoveryQuarantinedRowsTotal.WithLabelValues(issue.Module, issue.OID, issue.Reason).Add(float64(issue.Count))
+				m.DiscoveryDecodeIssues.WithLabelValues(issue.Module, string(issue.OID), issue.Reason).Add(float64(issue.Count))
+				m.DiscoveryQuarantinedRowsTotal.WithLabelValues(issue.Module, string(issue.OID), issue.Reason).Add(float64(issue.Count))
 			})
 
 			resolver.RecordSuccess(ip.String(), profileName)
