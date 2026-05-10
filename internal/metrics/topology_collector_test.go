@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -214,6 +215,30 @@ func TestSanitizeLabel(t *testing.T) {
 				t.Errorf("sanitizeLabel(%q) = %q, want %q", tc.input, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestSanitizeLabelUTF8Boundary verifies that sanitizeLabel never produces
+// invalid UTF-8 when a multi-byte rune straddles the maxLabelLen (128) byte
+// boundary. The input is 127 ASCII bytes followed by a 2-byte UTF-8 rune
+// (U+00E9, é), placing the second byte of the rune at position 128 — exactly
+// at the truncation point.
+func TestSanitizeLabelUTF8Boundary(t *testing.T) {
+	// Build a string of 127 ASCII 'a' bytes + U+00E9 (é, 2 bytes in UTF-8).
+	// Total: 129 bytes. The rune boundary falls at byte 127, so the safe
+	// truncation must produce exactly 127 bytes.
+	input := strings.Repeat("a", 127) + "é"
+	if len(input) != 129 {
+		t.Fatalf("test setup: expected 129-byte input, got %d", len(input))
+	}
+
+	got := sanitizeLabel(input)
+
+	if len(got) >= 129 {
+		t.Errorf("sanitizeLabel: result too long: %d bytes", len(got))
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("sanitizeLabel: result is not valid UTF-8: %q", got)
 	}
 }
 
