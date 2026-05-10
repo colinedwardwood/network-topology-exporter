@@ -34,10 +34,11 @@ func init() {
 
 func newTestSpokeFor(t *testing.T, hubURL string) *Spoke {
 	t.Helper()
-	pushURL, err := buildSpokeURL(hubURL)
-	if err != nil {
-		t.Fatalf("buildSpokeURL(%q): %v", hubURL, err)
-	}
+	// Construct pushURL directly without going through buildSpokeURL so that
+	// plain-HTTP httptest servers (which are valid in tests) are not rejected by
+	// the HTTPS enforcement added in Fix 3. Tests that exercise buildSpokeURL
+	// itself (TestBuildSpokeURL, TestBuildSpokeURLInvalidURL) call it directly.
+	pushURL := strings.TrimRight(hubURL, "/") + "/spoke/push"
 	return &Spoke{
 		cfg: config.FederationConfig{
 			Spoke: config.FederationSpokeConfig{HubURL: hubURL},
@@ -121,6 +122,17 @@ func TestBuildSpokeURLInvalidURL(t *testing.T) {
 	_, err := buildSpokeURL("://invalid-url")
 	if err == nil {
 		t.Fatal("buildSpokeURL: expected error for invalid URL, got nil")
+	}
+}
+
+// TestBuildSpokeURLRequiresHTTPS verifies that buildSpokeURL rejects non-HTTPS URLs.
+func TestBuildSpokeURLRequiresHTTPS(t *testing.T) {
+	_, err := buildSpokeURL("http://hub:9101")
+	if err == nil {
+		t.Fatal("buildSpokeURL: expected error for http:// URL, got nil")
+	}
+	if !strings.Contains(err.Error(), "HTTPS") {
+		t.Errorf("error = %q, want to contain 'HTTPS'", err.Error())
 	}
 }
 

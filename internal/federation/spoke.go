@@ -115,6 +115,9 @@ func buildSpokeURL(baseURL string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("parse hub URL: %w", err)
 	}
+	if base.Scheme != "https" {
+		return "", fmt.Errorf("hub URL must use HTTPS, got %q", base.Scheme)
+	}
 	if !strings.HasSuffix(base.Path, "/") {
 		base.Path += "/"
 	}
@@ -124,12 +127,12 @@ func buildSpokeURL(baseURL string) (string, error) {
 func (s *Spoke) post(ctx context.Context, body []byte) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.pushURL, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return fmt.Errorf("build push request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("push to hub: %w", err)
 	}
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
