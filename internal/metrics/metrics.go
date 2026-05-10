@@ -74,6 +74,14 @@ type Metrics struct {
 	// MAC correlation was found; these were not host MACs that passed the
 	// single-learned-MAC filter.
 	FDBSuppressedMACs prometheus.Counter
+
+	// GoRoutines is the current number of live goroutines in the process,
+	// sampled once per discovery cycle.
+	GoRoutines prometheus.Gauge
+
+	// SnapshotQueueDepth is the current number of snapshots queued for
+	// writing (0 or 1 for the capacity-1 channel).
+	SnapshotQueueDepth prometheus.Gauge
 }
 
 // New builds and registers the exporter's metric set. emitBoundaryObs should
@@ -184,6 +192,14 @@ func New(emitBoundaryObs bool) *Metrics {
 			Name: "network_topology_fdb_suppressed_macs_total",
 			Help: "FDB MAC peers dropped because no LLDP chassis MAC correlation was found; these were not host MACs that passed the single-learned-MAC filter.",
 		}),
+		GoRoutines: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "network_topology_goroutines",
+			Help: "Current number of live goroutines in the process.",
+		}),
+		SnapshotQueueDepth: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "network_topology_snapshot_queue_depth",
+			Help: "Current number of snapshots queued for writing.",
+		}),
 	}
 	m.Topology = newTopologyCollector(emitBoundaryObs, m.TopologyLastScrapeDurationSeconds, m.TopologyLastScrapeSamplesTotal)
 
@@ -213,6 +229,8 @@ func New(emitBoundaryObs bool) *Metrics {
 		m.TopologyLastScrapeDurationSeconds,
 		m.TopologyLastScrapeSamplesTotal,
 		m.FDBSuppressedMACs,
+		m.GoRoutines,
+		m.SnapshotQueueDepth,
 	)
 
 	return m

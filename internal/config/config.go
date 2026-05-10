@@ -146,6 +146,16 @@ type DiscoveryConfig struct {
 	// per-device timeout. 0 means no additional cap (default). When set, a
 	// slow LLDP walk cannot consume the full timeout_per_device for all modules.
 	TimeoutPerModule time.Duration `yaml:"timeout_per_module"`
+
+	// MaxGraphDevices, if > 0, rejects local graph updates with more devices
+	// than this value. Mirrors FederationHubConfig.MaxGraphDevices for
+	// standalone and spoke mode.
+	MaxGraphDevices int `yaml:"max_graph_devices"`
+
+	// MaxGraphEdges, if > 0, rejects local graph updates with more edges than
+	// this value. Mirrors FederationHubConfig.MaxGraphEdges for standalone
+	// and spoke mode.
+	MaxGraphEdges int `yaml:"max_graph_edges"`
 }
 
 // ScopeConfig is the LD-11 polling-scope guard. CIDRAllowList is mandatory

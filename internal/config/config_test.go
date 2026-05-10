@@ -1476,6 +1476,51 @@ func TestValidateCycleBudgetFractionOutOfRange(t *testing.T) {
 	}
 }
 
+// TestDiscoveryMaxGraphFieldsParsed verifies that max_graph_devices and
+// max_graph_edges are correctly read from YAML and stored in DiscoveryConfig.
+func TestDiscoveryMaxGraphFieldsParsed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+discovery:
+  max_graph_devices: 500
+  max_graph_edges: 2000
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if c.Discovery.MaxGraphDevices != 500 {
+		t.Errorf("MaxGraphDevices = %d, want 500", c.Discovery.MaxGraphDevices)
+	}
+	if c.Discovery.MaxGraphEdges != 2000 {
+		t.Errorf("MaxGraphEdges = %d, want 2000", c.Discovery.MaxGraphEdges)
+	}
+}
+
+// TestDiscoveryMaxGraphFieldsDefaultToZero verifies that omitting the fields
+// results in a zero value (disabled / no limit).
+func TestDiscoveryMaxGraphFieldsDefaultToZero(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("targets: []\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if c.Discovery.MaxGraphDevices != 0 {
+		t.Errorf("MaxGraphDevices default = %d, want 0 (unlimited)", c.Discovery.MaxGraphDevices)
+	}
+	if c.Discovery.MaxGraphEdges != 0 {
+		t.Errorf("MaxGraphEdges default = %d, want 0 (unlimited)", c.Discovery.MaxGraphEdges)
+	}
+}
+
 // TestValidateTimeoutPerModuleNegative verifies that a negative
 // discovery.timeout_per_module causes Load to return an error.
 func TestValidateTimeoutPerModuleNegative(t *testing.T) {
