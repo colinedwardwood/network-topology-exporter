@@ -77,13 +77,13 @@ func newTopologyCollector(emitBoundaryObs bool, scrapeDuration, scrapeSamples pr
 		),
 		oosCountDesc: prometheus.NewDesc(
 			"network_topology_out_of_scope_neighbours_total",
-			"Count of LLDP/CDP-discovered neighbours whose IP falls outside the LD-11 CIDR allow-list. Detail in log lines.",
+			"Count of LLDP/CDP-discovered neighbours whose IP falls outside the configured CIDR allow-list. Detail in log lines.",
 			nil,
 			nil,
 		),
 		boundaryObsDesc: prometheus.NewDesc(
 			"network_topology_boundary_observation_info",
-			"LD-15 uncoordinated mode: one series per out-of-scope boundary observation. "+
+			"Federation uncoordinated mode: one series per out-of-scope boundary observation. "+
 				"peer_a is always the alphabetically-smaller endpoint. "+
 				"A Mimir recording rule fires count by(peer_a,peer_b,proto)(...)==2 for confirmed cross-boundary edges.",
 			[]string{"peer_a", "peer_b", "reporting_device", "src_port", "proto"},

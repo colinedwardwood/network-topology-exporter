@@ -1,6 +1,6 @@
 # Federation
 
-Federation lets multiple `network-topology-exporter` instances coordinate across administrative boundaries. LD-15 through LD-20 added four modes. This runbook covers choosing a mode, PKI setup, configuration, tuning, and troubleshooting.
+Federation lets multiple `network-topology-exporter` instances coordinate across administrative boundaries. This runbook covers choosing a mode, PKI setup, configuration, tuning, and troubleshooting.
 
 ## Mode selection
 
@@ -178,7 +178,7 @@ curl -v --cacert /etc/topo-exporter/pki/ca.pem \
   https://hub.example.com:9101/healthz
 ```
 
-A 200 response confirms the new cert is accepted. A 403 means the spoke_id in the cert CN does not match `federation.spoke.spoke_id` in the spoke config (LD-21 binding).
+A 200 response confirms the new cert is accepted. A 403 means the spoke_id in the cert CN does not match `federation.spoke.spoke_id` in the spoke config.
 
 ## Tuning spoke_timeout
 

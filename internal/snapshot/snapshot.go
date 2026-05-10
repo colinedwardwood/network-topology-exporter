@@ -1,6 +1,6 @@
-// Package snapshot implements LD-13: versioned JSON persistence of the
-// reconciled graph plus the LD-12 credential cache. The exporter loads the
-// snapshot at startup so /metrics serves the previous-cycle graph immediately
+// Package snapshot implements versioned JSON persistence of the reconciled
+// graph plus the credential cache. The exporter loads the snapshot at startup
+// so /metrics serves the previous-cycle graph immediately
 // (with network_topology_graph_stale=1) instead of going dark while the
 // first live cycle runs.
 //

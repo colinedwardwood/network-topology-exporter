@@ -4,7 +4,7 @@
 
 | Standard | Scope in this exporter | Notes |
 |---|---|---|
-| **IEEE 802.1AB-2016 (LLDP)** | `lldpRemTable` walk; chassis/port ID decode for subtypes 1–7; TTL aging delegated to SNMP agent; LD-11 scope enforcement on network-address chassis IDs | Primary topology discovery protocol. Mandatory-field validation (chassis ID, port ID, subtype range, MAC length, network-address family prefix) enforced in `buildEdges`. |
+| **IEEE 802.1AB-2016 (LLDP)** | `lldpRemTable` walk; chassis/port ID decode for subtypes 1–7; TTL aging delegated to SNMP agent; CIDR allow-list scope enforcement on network-address chassis IDs | Primary topology discovery protocol. Mandatory-field validation (chassis ID, port ID, subtype range, MAC length, network-address family prefix) enforced in `buildEdges`. |
 | **ANSI/TIA-1057 (LLDP-MED)** | Not implemented | LLDP-MED extensions (media endpoint discovery) are irrelevant for network-infrastructure topology. |
 | **Cisco CDP (proprietary)** | `cdpCacheTable` walk; device ID, port ID, address decode | Implemented as a higher-precedence fallback for Cisco infrastructure that pre-dates LLDP deployment. |
 | **IEEE 802.1D-2004 (STP)** | `dot1dStpPortState` walk; forwarding(5) filter in FDB module | STP state used to suppress stale FDB entries on non-forwarding ports. |

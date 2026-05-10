@@ -1,6 +1,6 @@
-// Package graph implements the LD-10 reconciliation and diff logic. It's
+// Package graph implements the reconciliation and diff logic. It's
 // the seam where the precedence-ladder policy from
-// network-o11y-dev/docs/ARCHITECTURE.md §LD-10 actually executes.
+// network-o11y-dev/docs/ARCHITECTURE.md actually executes.
 //
 // Reconcile takes the per-cycle Edge slice — every discovery module's
 // output concatenated together — and returns the same edges with their
