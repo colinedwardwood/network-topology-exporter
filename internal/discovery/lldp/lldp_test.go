@@ -977,3 +977,153 @@ func TestFmtNetAddrHexFallback(t *testing.T) {
 		t.Errorf("fmtNetAddr hex fallback = %q, want 01c0a8", got)
 	}
 }
+
+// ---------- IEEE 802.1AB compliance tests ----------
+
+// TestIEEE802_1ABCompliance covers binary/UTF-8 handling for subtype 7 (local)
+// and confirms well-known subtype decoding remains correct.
+func TestIEEE802_1ABCompliance(t *testing.T) {
+	tests := []struct {
+		name    string
+		fn      func(int, []byte) string
+		subtype int
+		raw     []byte
+		want    string
+	}{
+		// 1. decodeChassisID: binary subtype 7 → hex-encoded (not mojibake).
+		{
+			name:    "decodeChassisID binary subtype 7 → hex",
+			fn:      decodeChassisID,
+			subtype: portSubtypeLocal, // 7 — same value for both chassis and port
+			raw:     []byte{0x01, 0x02, 0xfe, 0xff},
+			want:    "0102feff",
+		},
+		// 2. decodeChassisID: subtype 7 with valid UTF-8 → string preserved.
+		{
+			name:    "decodeChassisID subtype 7 valid UTF-8 → preserved",
+			fn:      decodeChassisID,
+			subtype: portSubtypeLocal,
+			raw:     []byte("arista-sw-1"),
+			want:    "arista-sw-1",
+		},
+		// 3. decodePortID: binary subtype 7 → hex-encoded.
+		{
+			name:    "decodePortID binary subtype 7 → hex",
+			fn:      decodePortID,
+			subtype: portSubtypeLocal,
+			raw:     []byte{0x01, 0x02, 0xfe, 0xff},
+			want:    "0102feff",
+		},
+		// 4. decodePortID: subtype 7 with valid UTF-8 → string preserved.
+		{
+			name:    "decodePortID subtype 7 valid UTF-8 → preserved",
+			fn:      decodePortID,
+			subtype: portSubtypeLocal,
+			raw:     []byte("arista-sw-1"),
+			want:    "arista-sw-1",
+		},
+		// 5. decodeChassisID: MAC subtype (4) with zero bytes → empty string
+		//    (len check fires first).
+		{
+			name:    "decodeChassisID empty raw → empty string",
+			fn:      decodeChassisID,
+			subtype: chassisSubtypeMACAddress,
+			raw:     []byte{},
+			want:    "",
+		},
+		// 6. decodePortID: null-terminated ASCII with interface-name subtype (5) → trimmed.
+		{
+			name:    "decodePortID null-terminated ASCII → trimmed",
+			fn:      decodePortID,
+			subtype: portSubtypeInterfaceName,
+			raw:     []byte("Gi0/1\x00"),
+			want:    "Gi0/1",
+		},
+		// 7. decodeChassisID: MAC subtype (4) → colon-hex notation.
+		{
+			name:    "decodeChassisID MAC subtype → formatted MAC",
+			fn:      decodeChassisID,
+			subtype: chassisSubtypeMACAddress,
+			raw:     []byte{0x00, 0x1a, 0x2b, 0x3c, 0x4d, 0x5e},
+			want:    "00:1a:2b:3c:4d:5e",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.fn(tc.subtype, tc.raw)
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// ---------- TestMandatoryTLVValidation ----------
+
+// TestMandatoryTLVValidation verifies that buildEdges drops entries whose
+// chassisSubtype or portSubtype fall outside the IEEE 802.1AB-defined range
+// of 1–7. The validation is already implemented in buildEdges; the four
+// subtests below confirm all four boundary conditions (chassis low/high,
+// port low/high).
+func TestMandatoryTLVValidation(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry remEntry
+	}{
+		{
+			name: "chassisSubtype below range (0)",
+			entry: remEntry{
+				chassisSubtype: 0,
+				chassisID:      []byte{0, 1, 2, 3, 4, 5},
+				portSubtype:    portSubtypeInterfaceName,
+				portID:         []byte("Eth0"),
+				sysName:        "peer",
+			},
+		},
+		{
+			name: "chassisSubtype above range (8)",
+			entry: remEntry{
+				chassisSubtype: 8,
+				chassisID:      []byte{0, 1, 2, 3, 4, 5},
+				portSubtype:    portSubtypeInterfaceName,
+				portID:         []byte("Eth0"),
+				sysName:        "peer",
+			},
+		},
+		{
+			name: "portSubtype below range (0)",
+			entry: remEntry{
+				chassisSubtype: chassisSubtypeMACAddress,
+				chassisID:      []byte{0, 1, 2, 3, 4, 5},
+				portSubtype:    0,
+				portID:         []byte("Eth0"),
+				sysName:        "peer",
+			},
+		},
+		{
+			name: "portSubtype above range (8)",
+			entry: remEntry{
+				chassisSubtype: chassisSubtypeMACAddress,
+				chassisID:      []byte{0, 1, 2, 3, 4, 5},
+				portSubtype:    8,
+				portID:         []byte("Eth0"),
+				sysName:        "peer",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			entry := tc.entry
+			remEntries := map[remKey]*remEntry{{1, 1}: &entry}
+			edges, _, err := buildEdges("me", map[int]locPort{}, remEntries, nil)
+			if err != nil {
+				t.Fatalf("buildEdges: %v", err)
+			}
+			if len(edges) != 0 {
+				t.Errorf("expected entry to be dropped, got %d edge(s)", len(edges))
+			}
+		})
+	}
+}

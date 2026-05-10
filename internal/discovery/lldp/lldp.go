@@ -29,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	gsnmp "github.com/gosnmp/gosnmp"
 
@@ -349,7 +350,11 @@ func decodePortID(subtype int, raw []byte) string {
 	case portSubtypeNetworkAddress:
 		return fmtNetAddr(raw)
 	default:
-		return strings.TrimRight(string(raw), "\x00")
+		s := strings.TrimRight(string(raw), "\x00")
+		if !utf8.ValidString(s) {
+			return hex.EncodeToString(raw)
+		}
+		return s
 	}
 }
 
@@ -364,7 +369,11 @@ func decodeChassisID(subtype int, raw []byte) string {
 	case chassisSubtypeNetworkAddress:
 		return fmtNetAddr(raw)
 	default:
-		return strings.TrimRight(string(raw), "\x00")
+		s := strings.TrimRight(string(raw), "\x00")
+		if !utf8.ValidString(s) {
+			return hex.EncodeToString(raw)
+		}
+		return s
 	}
 }
 
