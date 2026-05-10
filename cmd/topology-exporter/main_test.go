@@ -1834,25 +1834,22 @@ func TestResolveEdgeDstDevices(t *testing.T) {
 	edges := []discovery.Edge{
 		{SrcDevice: "core-sw-01", DstDevice: "10.0.0.2", DiscoveryProto: "bgp"},
 		{SrcDevice: "core-sw-02", DstDevice: "10.0.0.1", DiscoveryProto: "ospf"},
-		{SrcDevice: "core-sw-01", DstDevice: "core-sw-03", DiscoveryProto: "lldp"},          // already sysName — unchanged
-		{SrcDevice: "core-sw-01", DstDevice: "10.0.1.99", DiscoveryProto: "isis"},            // not in inventory — unchanged
-		{SrcDevice: "core-sw-01", DstDevice: "00:1a:2b:3c:4d:5e", DiscoveryProto: "fdb"},    // MAC in index → resolved
-		{SrcDevice: "core-sw-01", DstDevice: "00:ff:ee:dd:cc:bb", DiscoveryProto: "fdb"},    // MAC not in index → hashed
+		{SrcDevice: "core-sw-01", DstDevice: "core-sw-03", DiscoveryProto: "lldp"},       // already sysName — unchanged
+		{SrcDevice: "core-sw-01", DstDevice: "10.0.1.99", DiscoveryProto: "isis"},        // not in inventory — unchanged (routing proto)
+		{SrcDevice: "core-sw-01", DstDevice: "00:1a:2b:3c:4d:5e", DiscoveryProto: "fdb"}, // MAC in index → resolved
+		{SrcDevice: "core-sw-01", DstDevice: "00:ff:ee:dd:cc:bb", DiscoveryProto: "fdb"}, // MAC not in index → suppressed
 	}
 
-	resolveEdgeDstDevices(edges, ipToID, macToID)
+	got := resolveEdgeDstDevices(edges, ipToID, macToID)
 
-	want := []string{"core-sw-02", "core-sw-01", "core-sw-03", "10.0.1.99", "spine-01", "mac-"}
-	for i, e := range edges {
-		if i < 5 {
-			if e.DstDevice != want[i] {
-				t.Errorf("edge[%d] DstDevice = %q, want %q", i, e.DstDevice, want[i])
-			}
-		} else {
-			// Unresolved MAC → hashed to mac-<8hex>
-			if len(e.DstDevice) != 12 || e.DstDevice[:4] != "mac-" {
-				t.Errorf("edge[%d] DstDevice = %q, want mac-<8hex>", i, e.DstDevice)
-			}
+	// Unresolved MAC edge is suppressed; expect 5 edges back (not 6).
+	want := []string{"core-sw-02", "core-sw-01", "core-sw-03", "10.0.1.99", "spine-01"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d edges, want %d", len(got), len(want))
+	}
+	for i, e := range got {
+		if e.DstDevice != want[i] {
+			t.Errorf("edge[%d] DstDevice = %q, want %q", i, e.DstDevice, want[i])
 		}
 	}
 }
