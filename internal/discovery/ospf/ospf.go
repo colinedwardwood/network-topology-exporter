@@ -108,11 +108,7 @@ func walkOspfNbrTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*nb
 		}
 		switch col {
 		case colNbrIPAddr:
-			if b := snmputil.PDUBytes(pdu); len(b) == 4 {
-				ip := make(net.IP, 4)
-				copy(ip, b)
-				row.nbrIP = ip
-			}
+			row.nbrIP = snmputil.PDUIPv4(pdu)
 		case colNbrState:
 			row.state = snmputil.PDUInt(pdu)
 		}

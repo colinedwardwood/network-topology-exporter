@@ -181,7 +181,7 @@ func buildOspfAgentPDUs() []gsnmp.SnmpPDU {
 	const idx = "192.0.2.1.0"
 
 	return []gsnmp.SnmpPDU{
-		{Name: base + "1." + idx, Type: gsnmp.OctetString, Value: []byte{192, 0, 2, 1}},
+		{Name: base + "1." + idx, Type: gsnmp.IPAddress, Value: "192.0.2.1"},
 		{Name: base + "6." + idx, Type: gsnmp.Integer, Value: stateFull},
 	}
 }
@@ -224,7 +224,8 @@ func TestWalkOspfNbrTableFails(t *testing.T) {
 }
 
 // walkOspfNbrTable: PDUs with OIDs that fail parseNbrOID are silently skipped.
-// Also covers the len(b) != 4 path for ospfNbrIpAddr PDUs.
+// Also covers the truncated-bytes path for ospfNbrIpAddr PDUs (PDUIPv4 returns
+// nil for []byte values that are not exactly 4 bytes).
 func TestWalkOspfNbrTableSkipsOIDs(t *testing.T) {
 	const base = ".1.3.6.1.2.1.14.10.1."
 	const idx = "192.0.2.1.0"
@@ -236,7 +237,8 @@ func TestWalkOspfNbrTableSkipsOIDs(t *testing.T) {
 		// parseNbrOID (.1.3.6.1.2.1.14.10.2. vs .1.3.6.1.2.1.14.10.1.) — triggers
 		// the !ok continue in walkOspfNbrTable.
 		{Name: ".1.3.6.1.2.1.14.10.2.1.192.0.2.1.0", Type: gsnmp.Integer, Value: int(8)},
-		// ospfNbrIpAddr PDU with a 2-byte value — len(b) != 4 so nbrIP stays nil.
+		// ospfNbrIpAddr PDU with a 2-byte raw value — PDUIPv4 returns nil for
+		// []byte values that are not exactly 4 bytes, so nbrIP stays nil.
 		{Name: base + "1." + idx, Type: gsnmp.OctetString, Value: []byte{192, 0}},
 	}
 
