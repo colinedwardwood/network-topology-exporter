@@ -658,9 +658,9 @@ func TestRunLogLevelFlag(t *testing.T) {
 	}
 }
 
-// TestRunHubModeInvalidTLS exercises the hub code path in run(). The hub's
-// Serve goroutine fails on the missing TLS certs and cancels the context, which
-// triggers the normal shutdown path (exit code 0).
+// TestRunHubModeInvalidTLS verifies that run() returns 1 when hub mode is
+// configured with nonexistent TLS certificate files. Config validation checks
+// file existence at startup before any goroutine is launched.
 func TestRunHubModeInvalidTLS(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "hub.yaml")
@@ -702,10 +702,8 @@ federation:
 		"--config.file=" + cfgPath,
 		"--web.listen-address=" + listenAddr,
 	})
-	// The hub Serve goroutine cancels the context when TLS cert read fails;
-	// run() then follows the normal clean-shutdown path (exit code 0).
-	if code != 0 {
-		t.Errorf("hub invalid TLS: exit code = %d, want 0", code)
+	if code != 1 {
+		t.Errorf("hub invalid TLS: exit code = %d, want 1", code)
 	}
 }
 
