@@ -18,11 +18,16 @@ const (
 	OIDIfDescr = "1.3.6.1.2.1.2.2.1.2"
 )
 
+// TableOID is a validated SNMP table-root OID string. Using a named type
+// prevents per-PDU instance OIDs (which include the row suffix) from being
+// accidentally passed as a metric label, which would create unbounded cardinality.
+type TableOID string
+
 // DecodeIssue describes a decode anomaly observed while parsing SNMP table PDUs.
 // It is emitted through SetDecodeIssueObserver for metrics/logging aggregation.
 type DecodeIssue struct {
 	Module string
-	OID    string
+	OID    TableOID // always a table-root OID, never a per-row instance OID
 	Reason string
 	Count  int
 }
@@ -105,7 +110,7 @@ func WalkToIntMapStrict(ctx context.Context, client *g.GoSNMP, module, oid strin
 		if stats.DecodeFailures > 0 {
 			reportDecodeIssue(ctx, DecodeIssue{
 				Module: module,
-				OID:    oid,
+				OID:    TableOID(oid),
 				Reason: "invalid_type",
 				Count:  stats.DecodeFailures,
 			})
@@ -113,7 +118,7 @@ func WalkToIntMapStrict(ctx context.Context, client *g.GoSNMP, module, oid strin
 		if stats.TrimFailures > 0 {
 			reportDecodeIssue(ctx, DecodeIssue{
 				Module: module,
-				OID:    oid,
+				OID:    TableOID(oid),
 				Reason: "invalid_oid",
 				Count:  stats.TrimFailures,
 			})
