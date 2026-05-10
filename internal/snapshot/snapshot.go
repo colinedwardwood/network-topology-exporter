@@ -97,7 +97,8 @@ func Load(path string) (*File, error) {
 }
 
 func quarantine(path string, contents []byte) error {
-	for i := 0; ; i++ {
+	const maxAttempts = 100
+	for i := 0; i < maxAttempts; i++ {
 		dst := path + ".bad"
 		if i > 0 {
 			dst = fmt.Sprintf("%s.bad.%d", path, i)
@@ -120,6 +121,8 @@ func quarantine(path string, contents []byte) error {
 		}
 		return os.Remove(path)
 	}
+	// All slots taken — remove original to prevent repeat-startup hang
+	return os.Remove(path)
 }
 
 // Write persists f to path atomically. The temp file lives next to the

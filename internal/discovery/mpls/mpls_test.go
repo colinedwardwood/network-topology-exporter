@@ -68,8 +68,8 @@ func TestWalkUpTunnelInScope(t *testing.T) {
 	if e.Confidence != discovery.ConfidenceMedium {
 		t.Errorf("Confidence = %q, want medium", e.Confidence)
 	}
-	if e.Adjacency != discovery.AdjacencyDirect {
-		t.Errorf("Adjacency = %q, want direct", e.Adjacency)
+	if e.Adjacency != discovery.AdjacencyUnknown {
+		t.Errorf("Adjacency = %q, want unknown", e.Adjacency)
 	}
 	if e.PrecedenceRank != precedenceRank {
 		t.Errorf("PrecedenceRank = %d, want %d", e.PrecedenceRank, precedenceRank)

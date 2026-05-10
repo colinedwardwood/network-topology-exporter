@@ -279,10 +279,13 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 	// actually published; the size-budget guard can reject the graph and return
 	// false, which would otherwise leave firstLive=true with no Topology update.
 	wasFirst := !h.firstLive.Load()
-	if h.tryPublishMetrics(gen, combined, wasFirst, unmatchedCount) && wasFirst {
+	published := h.tryPublishMetrics(gen, combined, wasFirst, unmatchedCount)
+	if published && wasFirst {
 		h.firstLive.Store(true)
 	}
-	h.writeSnapshotAsync(combined)
+	if published {
+		h.writeSnapshotAsync(combined)
+	}
 
 	h.logger.Info("hub: spoke push accepted",
 		"spoke_id", payload.SpokeID,
@@ -531,8 +534,9 @@ func (h *Hub) evictSilentSpokes() {
 		gen := h.publishGen.Add(1)
 		h.mu.Unlock()
 		combined, unmatchedCount := h.buildCombinedGraph(spokes)
-		h.tryPublishMetrics(gen, combined, false, unmatchedCount)
-		h.writeSnapshotAsync(combined)
+		if h.tryPublishMetrics(gen, combined, false, unmatchedCount) {
+			h.writeSnapshotAsync(combined)
+		}
 	}
 }
 

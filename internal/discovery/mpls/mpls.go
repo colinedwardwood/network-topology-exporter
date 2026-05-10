@@ -95,6 +95,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 		}
 		if len(allowedNets) > 0 && !snmputil.IPInNets(egressIP, allowedNets) {
 			oos = append(oos, discovery.OutOfScopeNeighbour{
+				Proto:           "mpls_te",
 				ReportingDevice: localDevice,
 				ReportingPort:   fmt.Sprintf("te-tunnel%d", tunnelIdx),
 				NeighbourHint:   egressIP.String(),
@@ -118,7 +119,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 			DiscoveryProto: "mpls_te",
 			Direction:      discovery.DirectionUnidirectional,
 			Confidence:     discovery.ConfidenceMedium,
-			Adjacency:      discovery.AdjacencyDirect,
+			Adjacency:      discovery.AdjacencyUnknown,
 			PrecedenceRank: precedenceRank,
 			LinkKind:       "mpls-te",
 			ObservedAt:     now,
