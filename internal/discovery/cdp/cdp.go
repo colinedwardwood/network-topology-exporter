@@ -140,6 +140,7 @@ func buildEdges(localDevice string, ifNames map[int]string, entries map[cacheKey
 		if remIP := cdpNeighborIP(e); remIP != nil {
 			if len(allowedNets) > 0 && !snmputil.IPInNets(remIP, allowedNets) {
 				oos = append(oos, discovery.OutOfScopeNeighbour{
+					Proto:           "cdp",
 					ReportingDevice: localDevice,
 					ReportingPort:   localPort,
 					NeighbourHint:   e.deviceID,
