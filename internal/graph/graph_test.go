@@ -339,14 +339,16 @@ func TestEdgeKeysToAges(t *testing.T) {
 
 // Reconcile: two sources naming different neighbours for the same local port
 // produce a ConflictNeighbourDisagreement and both edges are preserved.
+// The conflict's SrcPort must be the raw name reported by the protocol
+// ("GigabitEthernet0/1"), not the normalized key form ("Gi0/1").
 func TestReconcileConflictNeighbourDisagreement(t *testing.T) {
 	lldpEdge := discovery.Edge{
-		SrcDevice: "sw-01", SrcPort: "Gi0/1",
+		SrcDevice: "sw-01", SrcPort: "GigabitEthernet0/1",
 		DstDevice: "sw-02", DstPort: "Gi0/1",
 		DiscoveryProto: "lldp", PrecedenceRank: 1,
 	}
 	cdpEdge := discovery.Edge{
-		SrcDevice: "sw-01", SrcPort: "Gi0/1",
+		SrcDevice: "sw-01", SrcPort: "GigabitEthernet0/1",
 		DstDevice: "sw-03", DstPort: "Gi0/1",
 		DiscoveryProto: "cdp", PrecedenceRank: 1,
 	}
@@ -366,8 +368,10 @@ func TestReconcileConflictNeighbourDisagreement(t *testing.T) {
 	if c.SrcDevice != "sw-01" {
 		t.Errorf("conflict SrcDevice = %q, want sw-01", c.SrcDevice)
 	}
-	if c.SrcPort != "Gi0/1" {
-		t.Errorf("conflict SrcPort = %q, want Gi0/1", c.SrcPort)
+	// SrcPort must be the raw long-form name the protocol reported, not the
+	// normalized key used for deduplication.
+	if c.SrcPort != "GigabitEthernet0/1" {
+		t.Errorf("conflict SrcPort = %q, want GigabitEthernet0/1 (raw port name)", c.SrcPort)
 	}
 	if !slices.Contains(c.Sources, "lldp") {
 		t.Errorf("Sources %v missing lldp", c.Sources)
@@ -378,13 +382,15 @@ func TestReconcileConflictNeighbourDisagreement(t *testing.T) {
 }
 
 func TestReconcileConflictNeighbourDisagreementUsesReportedLocalPort(t *testing.T) {
+	// Use a long-form port name so the test verifies the conflict carries the
+	// raw reported name rather than the normalized key form.
 	lldpEdge := discovery.Edge{
-		SrcDevice: "zz-sw", SrcPort: "Gi0/1",
+		SrcDevice: "zz-sw", SrcPort: "GigabitEthernet0/1",
 		DstDevice: "aa-neighbour", DstPort: "Gi0/2",
 		DiscoveryProto: "lldp", PrecedenceRank: 1,
 	}
 	cdpEdge := discovery.Edge{
-		SrcDevice: "zz-sw", SrcPort: "Gi0/1",
+		SrcDevice: "zz-sw", SrcPort: "GigabitEthernet0/1",
 		DstDevice: "bb-neighbour", DstPort: "Gi0/3",
 		DiscoveryProto: "cdp", PrecedenceRank: 1,
 	}
@@ -398,8 +404,9 @@ func TestReconcileConflictNeighbourDisagreementUsesReportedLocalPort(t *testing.
 	if c.Kind != ConflictNeighbourDisagreement {
 		t.Fatalf("conflict kind = %q, want %q", c.Kind, ConflictNeighbourDisagreement)
 	}
-	if c.SrcDevice != "zz-sw" || c.SrcPort != "Gi0/1" {
-		t.Fatalf("conflict local endpoint = %s/%s, want zz-sw/Gi0/1", c.SrcDevice, c.SrcPort)
+	// SrcPort must reflect the raw reported name, not the normalized "Gi0/1" key.
+	if c.SrcDevice != "zz-sw" || c.SrcPort != "GigabitEthernet0/1" {
+		t.Fatalf("conflict local endpoint = %s/%s, want zz-sw/GigabitEthernet0/1", c.SrcDevice, c.SrcPort)
 	}
 }
 
