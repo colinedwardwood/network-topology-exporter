@@ -88,7 +88,7 @@ type FederationHubConfig struct {
 	// this limit. Protects scrape latency and memory from runaway topologies.
 	MaxGraphEdges int `yaml:"max_graph_edges"`
 	// MaxGraphDevices, if > 0, rejects combined-graph updates with more devices
-	// than this limit.
+	// than this limit. Protects scrape latency and memory from runaway topologies.
 	MaxGraphDevices int `yaml:"max_graph_devices"`
 }
 

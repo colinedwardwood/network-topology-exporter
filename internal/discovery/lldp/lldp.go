@@ -294,7 +294,7 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 		var metadata map[string]string
 		if rem.chassisSubtype == chassisSubtypeMACAddress && rem.sysName != "" {
 			metadata = map[string]string{
-				"peer_chassis_mac": decodeChassisID(rem.chassisSubtype, rem.chassisID),
+				discovery.MetadataKeyPeerChassisMac: fmtMAC(rem.chassisID),
 			}
 		}
 

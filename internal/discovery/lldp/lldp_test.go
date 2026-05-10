@@ -927,7 +927,7 @@ func TestBuildEdgesPeerChassisMACMetadata(t *testing.T) {
 	if e.Metadata == nil {
 		t.Fatal("expected Metadata to be non-nil")
 	}
-	mac, ok := e.Metadata["peer_chassis_mac"]
+	mac, ok := e.Metadata[discovery.MetadataKeyPeerChassisMac]
 	if !ok {
 		t.Fatal("expected peer_chassis_mac key in Metadata")
 	}
@@ -960,7 +960,7 @@ func TestBuildEdgesNoPeerChassisMACWithoutSysName(t *testing.T) {
 	}
 	e := edges[0]
 	if e.Metadata != nil {
-		if _, ok := e.Metadata["peer_chassis_mac"]; ok {
+		if _, ok := e.Metadata[discovery.MetadataKeyPeerChassisMac]; ok {
 			t.Error("expected peer_chassis_mac to be absent when sysName is empty")
 		}
 	}
