@@ -189,8 +189,9 @@ func run(ctx context.Context, args []string) int {
 		}
 		if hubSnap != nil {
 			hub.RestoreGraph(discovery.Graph{
-				Devices: hubSnap.Devices,
-				Edges:   hubSnap.Edges,
+				Devices:    hubSnap.Devices,
+				Edges:      hubSnap.Edges,
+				OutOfScope: hubSnap.OutOfScope,
 			})
 			logger.Info("hub snapshot loaded", "devices", len(hubSnap.Devices), "edges", len(hubSnap.Edges))
 			m.SnapshotLoadedDevicesTotal.Set(float64(len(hubSnap.Devices)))
@@ -1019,9 +1020,9 @@ func walkSystemWithCredentials(ctx context.Context, cfg *config.Config, resolver
 			return dev, c.params, c.profileName, nil
 		}
 		lastErr = err
-		if errors.Is(err, context.Canceled) {
-			// Parent context cancelled (SIGTERM) — stop immediately.
-			return nil, snmpwalk.Params{}, "", err
+		if ctx.Err() != nil {
+			// Parent context done (SIGTERM or cycle budget expiry) — stop immediately.
+			return nil, snmpwalk.Params{}, "", ctx.Err()
 		}
 		// SNMP v2c agents silently drop packets with a wrong community string —
 		// the client gets DeadlineExceeded just as if the device were unreachable.
