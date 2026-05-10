@@ -440,15 +440,29 @@ func AgeUnconfirmed(current []discovery.Edge, ages map[EdgeKey]int, ttl int) []E
 			delete(ages, k)
 			continue
 		}
-		ages[k]++
-		if ages[k] >= ttl {
-			expired = append(expired, k)
-			delete(ages, k) // reset so a reappearing edge gets a fresh counter
+		// First time this edge is seen as unidirectional: record it at 0 so it
+		// gets a full cycle before any expiry check. On subsequent unconfirmed
+		// cycles the counter increments and expires once it reaches ttl.
+		if _, exists := ages[k]; !exists {
+			ages[k] = 0
+		} else {
+			ages[k]++
+			if ages[k] >= ttl {
+				expired = append(expired, k)
+				delete(ages, k) // reset so a reappearing edge gets a fresh counter
+			}
 		}
 	}
+	// Edges absent from this cycle are also unconfirmed: increment their
+	// counter and expire them once they reach ttl absent cycles, rather than
+	// resetting (deleting) them immediately.
 	for k := range ages {
 		if !seen[k] {
-			delete(ages, k)
+			ages[k]++
+			if ages[k] >= ttl {
+				expired = append(expired, k)
+				delete(ages, k)
+			}
 		}
 	}
 	return expired

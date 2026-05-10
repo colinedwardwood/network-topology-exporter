@@ -12,7 +12,11 @@ import (
 )
 
 // LD-14: a unidirectional edge expires once it has been unconfirmed for ttl
-// consecutive cycles.
+// consecutive cycles. The first cycle an edge is observed as unidirectional
+// the counter is recorded at 0 (the edge is given a full cycle to become
+// bidirectional before aging begins). It therefore takes ttl+1 calls to
+// AgeUnconfirmed — one to record the edge, then ttl increments — for the
+// edge to expire.
 func TestAgeUnconfirmedExpiresAfterTTL(t *testing.T) {
 	edge := discovery.Edge{
 		SrcDevice: "a", SrcPort: "Gi0/1",
@@ -20,7 +24,7 @@ func TestAgeUnconfirmedExpiresAfterTTL(t *testing.T) {
 		Direction: discovery.DirectionUnidirectional,
 	}
 	ages := map[EdgeKey]int{}
-	for cycle := 1; cycle <= 2; cycle++ {
+	for cycle := 1; cycle <= 3; cycle++ {
 		expired := AgeUnconfirmed([]discovery.Edge{edge}, ages, 3)
 		if len(expired) != 0 {
 			t.Fatalf("cycle %d: expected no expirations yet, got %v", cycle, expired)
@@ -28,7 +32,7 @@ func TestAgeUnconfirmedExpiresAfterTTL(t *testing.T) {
 	}
 	expired := AgeUnconfirmed([]discovery.Edge{edge}, ages, 3)
 	if len(expired) != 1 {
-		t.Fatalf("cycle 3: expected one expiration, got %v", expired)
+		t.Fatalf("cycle 4 (ttl+1): expected one expiration, got %v", expired)
 	}
 	if expired[0] != Key(edge) {
 		t.Errorf("expired key = %#v, want %#v", expired[0], Key(edge))
@@ -51,8 +55,9 @@ func TestAgeUnconfirmedResetsOnBidirectional(t *testing.T) {
 	AgeUnconfirmed([]discovery.Edge{uni}, ages, 3)
 	AgeUnconfirmed([]discovery.Edge{uni}, ages, 3)
 
-	if got := ages[Key(uni)]; got != 2 {
-		t.Fatalf("counter after two unconfirmed cycles = %d, want 2", got)
+	// First call records counter at 0; second call increments to 1.
+	if got := ages[Key(uni)]; got != 1 {
+		t.Fatalf("counter after two unconfirmed cycles = %d, want 1", got)
 	}
 	if expired := AgeUnconfirmed([]discovery.Edge{bi}, ages, 3); len(expired) != 0 {
 		t.Errorf("bidirectional cycle should not expire, got %v", expired)
@@ -63,24 +68,26 @@ func TestAgeUnconfirmedResetsOnBidirectional(t *testing.T) {
 }
 
 // LD-14: an edge that disappears entirely (no longer reported by any
-// protocol) is dropped from the counter map so it doesn't leak.
+// protocol) has its counter incremented each absent cycle and is expired
+// once it reaches ttl, so it doesn't linger indefinitely.
 func TestAgeUnconfirmedClearsAbsentKeys(t *testing.T) {
 	edge := discovery.Edge{
 		SrcDevice: "a", SrcPort: "Gi0/1",
 		DstDevice: "b", DstPort: "Gi0/2",
 		Direction: discovery.DirectionUnidirectional,
 	}
+	// Start counter at ttl-1 so one absent cycle pushes it to ttl and expires it.
 	ages := map[EdgeKey]int{Key(edge): 2}
 	AgeUnconfirmed(nil, ages, 3)
 	if _, ok := ages[Key(edge)]; ok {
-		t.Fatal("absent edge should be cleared from counter map")
+		t.Fatal("absent edge at ttl should be expired and removed from counter map")
 	}
 }
 
 // LD-14 regression: an edge that reappears after expiry must start a fresh
-// counter, not immediately expire again. Before the fix, AgeUnconfirmed did
-// not delete(ages, k) after appending to expired, so ages[k] remained at ttl.
-// On the next cycle, ages[k]++ produced ttl+1 >= ttl → permanently expired.
+// counter, not immediately expire again. The first time a (re)appearing edge
+// is seen as unidirectional its counter is recorded at 0, so it takes ttl+1
+// total calls (one to record, then ttl increments) to reach expiry.
 func TestAgeUnconfirmedReappearsAfterExpiry(t *testing.T) {
 	edge := discovery.Edge{
 		SrcDevice: "a", SrcPort: "Gi0/1",
@@ -90,11 +97,13 @@ func TestAgeUnconfirmedReappearsAfterExpiry(t *testing.T) {
 	ages := map[EdgeKey]int{}
 	const ttl = 2
 
-	// Advance to expiry.
+	// Advance to expiry: call 1 records counter at 0; calls 2 and 3 increment
+	// to 1 and 2 respectively. The third call hits ages[k] >= ttl and expires.
+	AgeUnconfirmed([]discovery.Edge{edge}, ages, ttl) // ages[k] = 0
 	AgeUnconfirmed([]discovery.Edge{edge}, ages, ttl) // ages[k] = 1
 	expired := AgeUnconfirmed([]discovery.Edge{edge}, ages, ttl)
 	if len(expired) != 1 {
-		t.Fatalf("expected expiry at ttl=%d, got %v", ttl, expired)
+		t.Fatalf("expected expiry at ttl=%d (after ttl+1 calls), got %v", ttl, expired)
 	}
 
 	// Counter must be absent so a reappearing edge gets a fresh start.
@@ -102,13 +111,13 @@ func TestAgeUnconfirmedReappearsAfterExpiry(t *testing.T) {
 		t.Fatal("ages key must be deleted after expiry")
 	}
 
-	// Edge reappears next cycle — must not expire immediately.
+	// Edge reappears next cycle — counter is recorded at 0, must not expire.
 	expired = AgeUnconfirmed([]discovery.Edge{edge}, ages, ttl)
 	if len(expired) != 0 {
 		t.Fatalf("reappeared edge must not re-expire on first cycle back, got %v", expired)
 	}
-	if got := ages[Key(edge)]; got != 1 {
-		t.Fatalf("counter after reappearance = %d, want 1 (fresh)", got)
+	if got := ages[Key(edge)]; got != 0 {
+		t.Fatalf("counter after reappearance = %d, want 0 (fresh)", got)
 	}
 }
 
