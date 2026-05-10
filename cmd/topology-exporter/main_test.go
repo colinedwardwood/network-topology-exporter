@@ -1983,6 +1983,183 @@ func generateSelfSignedCert(t *testing.T, dir string) (certFile, keyFile string)
 	return certFile, keyFile
 }
 
+// TestSynthesizeEdgesARPResolution verifies that resolveEdgeDstDevices resolves
+// a MAC-addressed FDB edge to a sysName when the MAC appears in the ARP table
+// and the ARP-mapped IP belongs to a known device. This exercises the
+// ARP-based resolution path that runs after LLDP correlation in runCycle.
+func TestSynthesizeEdgesARPResolution(t *testing.T) {
+	// Arrange: one FDB edge whose DstDevice is a raw MAC address.
+	rawEdges := []discovery.Edge{
+		{
+			SrcDevice:      "router-a",
+			SrcPort:        "eth0",
+			DstDevice:      "aa:bb:cc:dd:ee:ff",
+			DiscoveryProto: "fdb",
+			Direction:      discovery.DirectionUnidirectional,
+		},
+	}
+	// ipToID maps the management IP of router-b to its sysName.
+	ipToID := map[string]string{
+		"10.0.0.2": "router-b",
+	}
+	// arpMACToIP maps router-b's MAC to its IP.
+	arpMACToIP := map[string]string{
+		"aa:bb:cc:dd:ee:ff": "10.0.0.2",
+	}
+	// Build macToID the same way runCycle does: first LLDP (none here), then ARP.
+	macToID := make(map[string]string)
+	for mac, ip := range arpMACToIP {
+		if _, resolved := macToID[mac]; resolved {
+			continue
+		}
+		if id, ok := ipToID[ip]; ok {
+			macToID[mac] = id
+		}
+	}
+
+	got := resolveEdgeDstDevices(rawEdges, ipToID, macToID, nil)
+
+	if len(got) != 1 {
+		t.Fatalf("expected 1 resolved edge, got %d", len(got))
+	}
+	if got[0].DstDevice != "router-b" {
+		t.Errorf("DstDevice = %q, want router-b", got[0].DstDevice)
+	}
+}
+
+// TestSynthesizeEdgesIdempotent verifies that calling resolveEdgeDstDevices
+// twice on already-resolved edges produces identical results — no spurious
+// modifications occur on edges whose DstDevice is already a sysName.
+func TestSynthesizeEdgesIdempotent(t *testing.T) {
+	// Edges where DstDevice is already a fully-resolved sysName (not MAC or IP).
+	resolved := []discovery.Edge{
+		{
+			SrcDevice:      "sw-a",
+			SrcPort:        "Gi0/1",
+			DstDevice:      "sw-b",
+			DstPort:        "Gi0/2",
+			DiscoveryProto: "lldp",
+			Direction:      discovery.DirectionBidirectional,
+		},
+		{
+			SrcDevice:      "sw-b",
+			SrcPort:        "Gi0/3",
+			DstDevice:      "sw-c",
+			DstPort:        "Gi0/4",
+			DiscoveryProto: "lldp",
+			Direction:      discovery.DirectionUnidirectional,
+		},
+	}
+
+	ipToID := map[string]string{"10.0.0.1": "sw-a"}
+	macToID := map[string]string{"00:11:22:33:44:55": "sw-a"}
+
+	first := resolveEdgeDstDevices(resolved, ipToID, macToID, nil)
+	second := resolveEdgeDstDevices(first, ipToID, macToID, nil)
+
+	if len(first) != len(second) {
+		t.Fatalf("first call returned %d edges, second returned %d", len(first), len(second))
+	}
+	for i := range first {
+		a, b := first[i], second[i]
+		if a.SrcDevice != b.SrcDevice || a.SrcPort != b.SrcPort ||
+			a.DstDevice != b.DstDevice || a.DstPort != b.DstPort ||
+			a.DiscoveryProto != b.DiscoveryProto || a.Direction != b.Direction {
+			t.Errorf("edge[%d] differs between first and second call: %+v vs %+v", i, a, b)
+		}
+	}
+}
+
+// TestGraphSizeAdmissionControl verifies that when MaxGraphDevices is set and
+// the discovered graph exceeds it, the cycle increments GraphUpdatesRejectedTotal
+// and does not update the published topology.
+func TestGraphSizeAdmissionControl(t *testing.T) {
+	t.Setenv("TEST_COMMUNITY", "public")
+
+	// Start 5 SNMP agents, each with a distinct sysName.
+	var ports []int
+	for i := 0; i < 5; i++ {
+		addr := snmptest.Start(t, "public", systemPDUs(fmt.Sprintf("sw-%02d", i+1)))
+		_, port := snmptest.ParseAddr(addr)
+		ports = append(ports, int(port))
+	}
+
+	targets := make([]config.TargetConfig, len(ports))
+	for i, p := range ports {
+		targets[i] = config.TargetConfig{Host: "127.0.0.1", Port: p}
+	}
+
+	cfg := &config.Config{
+		Discovery: config.DiscoveryConfig{
+			Interval:                 60 * time.Second,
+			TimeoutPerDevice:         5 * time.Second,
+			Parallelism:              5,
+			UnconfirmedLinkTTLCycles: 3,
+			MaxGraphDevices:          3, // fewer than the 5 agents above
+			Scope:                    config.ScopeConfig{CIDRAllowList: []string{"127.0.0.0/8"}},
+		},
+		Modules: config.ModulesConfig{
+			SNMP: config.ModuleSNMP{Enabled: true, Version: "v2c"},
+		},
+		Credentials: config.CredentialsConfig{
+			TrialRatePerSecond: 100,
+			Profiles: []config.CredentialProfile{
+				{Name: "default", Type: config.ProfileTypeSNMPv2c, CommunityEnv: "TEST_COMMUNITY"},
+			},
+			FallbackOrder: []string{"default"},
+		},
+		Snapshot: config.SnapshotConfig{Path: t.TempDir() + "/snap.json"},
+		Targets:  targets,
+	}
+
+	m := metrics.New(false)
+	var status atomic.Pointer[cycleStatus]
+	var ready atomic.Bool
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runDiscoveryLoop(ctx, loopConfig{
+			cancel: func() {},
+			logger: slog.Default(),
+			cfg:    cfg,
+			m:      m,
+			status: &status,
+			ready:  &ready,
+		})
+	}()
+
+	// Wait for the first cycle to complete: status must be set (cycle ran)
+	// and the rejection counter must be > 0.
+	deadline := time.After(12 * time.Second)
+	poll := time.NewTicker(50 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("admission control: cycle did not complete within deadline")
+		case <-poll.C:
+			if status.Load() == nil {
+				continue
+			}
+			rejected := testutil.ToFloat64(m.GraphUpdatesRejectedTotal)
+			if rejected > 0 {
+				cancel()
+				<-done
+				// GraphStale must still be 1: the update was rejected so topology
+				// should never have been published from the live cycle.
+				if testutil.ToFloat64(m.GraphStale) != 1 {
+					t.Errorf("GraphStale = %v after rejected update, want 1", testutil.ToFloat64(m.GraphStale))
+				}
+				return
+			}
+		}
+	}
+}
+
 // TestRunTLSMetrics verifies that when listen.tls_cert_file and
 // listen.tls_key_file are configured, the /metrics endpoint is reachable over
 // HTTPS and returns HTTP 200.
