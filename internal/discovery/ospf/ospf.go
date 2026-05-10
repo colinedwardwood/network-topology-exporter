@@ -181,7 +181,7 @@ func parseNbrOID(oid, prefix string) (col int, key string, ok bool) {
 	for _, octet := range parts[:4] {
 		v, err := strconv.Atoi(octet)
 		if err != nil || v < 0 || v > 255 {
-			return "", "", false
+			return 0, "", false
 		}
 	}
 	return col, key, true
