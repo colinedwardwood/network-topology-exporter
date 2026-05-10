@@ -585,6 +585,7 @@ func runCycle(
 	defer cycleCancel()
 
 	results := make([]probeResult, 0, len(cfg.Targets))
+	allARPMACs := make(map[string]string) // mac → ip, merged from all polled devices
 	var mu sync.Mutex
 	sem := make(chan struct{}, cfg.Discovery.Parallelism)
 	var wg sync.WaitGroup
@@ -732,6 +733,29 @@ func runCycle(
 				allOOS = append(allOOS, oos...)
 			}
 
+			// Walk ARP table for MAC→IP resolution. Failures are non-fatal:
+			// LLDP-based correlation still works without ARP data.
+			arpClient, arpErr := snmpwalk.Open(params)
+			if arpErr != nil {
+				slog.Debug("fdb: ARP table walk failed; MAC→IP resolution unavailable for this device",
+					"device", dev.ID, "err", arpErr)
+			} else {
+				arpMACToIP, arpErr := snmpwalk.WalkARPTable(devCtx, arpClient)
+				_ = arpClient.Conn.Close()
+				if arpErr != nil {
+					slog.Debug("fdb: ARP table walk failed; MAC→IP resolution unavailable for this device",
+						"device", dev.ID, "err", arpErr)
+				} else {
+					mu.Lock()
+					for mac, ip := range arpMACToIP {
+						if _, exists := allARPMACs[mac]; !exists {
+							allARPMACs[mac] = ip
+						}
+					}
+					mu.Unlock()
+				}
+			}
+
 			mu.Lock()
 			results = append(results, probeResult{device: dev, edges: allEdges, outOfScope: allOOS, mgmtIP: ip.String(), moduleStatus: modStatus})
 			okCount++
@@ -778,6 +802,17 @@ func runCycle(
 			if mac, ok := e.Metadata[discovery.MetadataKeyPeerChassisMac]; ok && e.DstDevice != "" {
 				macToID[mac] = e.DstDevice
 			}
+		}
+	}
+	// Second resolution path: ARP table entries.
+	// If a MAC is not already in macToID (no LLDP correlation) but it appears
+	// in the ARP table of a polled device and that IP is a known device, resolve it.
+	for mac, ip := range allARPMACs {
+		if _, resolved := macToID[mac]; resolved {
+			continue // LLDP takes precedence
+		}
+		if id, ok := ipToID[ip]; ok {
+			macToID[mac] = id
 		}
 	}
 	rawEdges = resolveEdgeDstDevices(rawEdges, ipToID, macToID, m.FDBSuppressedMACs)
