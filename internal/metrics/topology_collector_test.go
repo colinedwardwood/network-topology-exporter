@@ -323,7 +323,7 @@ func BenchmarkCollect10000Edges(b *testing.B) {
 
 // TestCardinalityBudget asserts that the total number of Prometheus samples
 // emitted by TopologyCollector stays within a per-device budget across three
-// scale points (100, 500, and 1000 devices). The budget is 15 samples per
+// scale points (100, 500, and 1000 devices). The budget is 5 samples per
 // device, which is deliberately conservative: each device contributes 2
 // samples (device_info + device_uptime_seconds) and each edge contributes 1
 // sample, plus a handful of scalar metrics. If someone introduces an unbounded
@@ -378,9 +378,13 @@ func TestCardinalityBudget(t *testing.T) {
 				t.Fatalf("gather: %v", err)
 			}
 
-			budget := numDevices * 15
+			// Budget: 2 samples per device (device_info + device_uptime) +
+			// 1 sample per edge (edge_info, ring topology gives ~1 edge/device) +
+			// a small constant for scalar metrics. 5×/device is a 60% safety margin
+			// over the observed ~3×/device. Reduce if the topology expands new per-device metrics.
+			budget := numDevices * 5
 			if count > budget {
-				t.Errorf("cardinality budget exceeded: %d samples for %d devices (budget %d = %d * 15)",
+				t.Errorf("cardinality budget exceeded: %d samples for %d devices (budget %d = %d * 5)",
 					count, numDevices, budget, numDevices)
 			}
 		})

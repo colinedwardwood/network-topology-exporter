@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 )
@@ -879,6 +880,33 @@ func TestReconcileNeighbourDisagreementAcrossEncodings(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected ConflictNeighbourDisagreement for same port naming different neighbors, got %v", conflicts)
+	}
+}
+
+// TestReconcileScaleBudget is a wall-clock assertion that Reconcile on a large
+// graph does not regress catastrophically. It is intentionally generous (3 s/run)
+// to avoid flakiness on slow CI runners; tighten once a performance baseline is
+// established.
+func TestReconcileScaleBudget(t *testing.T) {
+	// Generate 5000 bidirectional edges (10000 raw observations).
+	edges := makeEdges(5000)
+
+	// Warm up: run once to ensure any lazy init is done.
+	Reconcile(edges)
+
+	// Assert that Reconcile completes 10 iterations in under 30 seconds total.
+	// This is a generous budget (3s/run) that only catches catastrophic regressions,
+	// not gradual drift. Tighten when a performance baseline is established.
+	const iterations = 10
+	const budget = 30 * time.Second
+	start := time.Now()
+	for i := 0; i < iterations; i++ {
+		out, _ := Reconcile(edges)
+		_ = out
+	}
+	elapsed := time.Since(start)
+	if elapsed > budget {
+		t.Errorf("Reconcile(5000 edges) × %d took %v; budget %v", iterations, elapsed, budget)
 	}
 }
 
