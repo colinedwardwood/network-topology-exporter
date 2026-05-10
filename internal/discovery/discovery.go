@@ -139,6 +139,10 @@ const (
 // discovery protocol. Multiple Edge values can describe the same physical
 // link from different sources; reconciliation per LD-10 is the graph
 // package's job, not the discovery module's.
+//
+// Edge serves as both a raw protocol observation (with MAC/IP DstDevice values)
+// and a canonical graph edge (with resolved sysName DstDevice). The synthesis
+// step in runCycle converts observations to canonical form before reconciliation.
 type Edge struct {
 	SrcDevice string
 	SrcPort   string
