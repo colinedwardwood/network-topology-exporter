@@ -155,7 +155,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, _ []*net.I
 	if err != nil {
 		return nil, nil, fmt.Errorf("fdb stpport %s: %w", p.IP, err)
 	}
-	ifNames, err := snmputil.WalkIfNames(ctx, client)
+	ifNames, err := snmputil.WalkIfNamesWithFallback(ctx, client)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fdb ifname %s: %w", p.IP, err)
 	}
@@ -457,7 +457,7 @@ func buildEdges(localDevice string, entries map[string]*fdbEntry, bridgePorts ma
 		}
 		localPort := ifNames[ifIdx]
 		if localPort == "" {
-			localPort = strconv.Itoa(ifIdx)
+			localPort = fmt.Sprintf("if%d", ifIdx)
 		}
 
 		// AdjacencyIndirect ports (len(macs) > 1) are downstream switch trunks or

@@ -936,6 +936,65 @@ func TestWalkIfNamesWrongType(t *testing.T) {
 	}
 }
 
+// WalkIfNamesWithFallback: when ifXTable returns empty and ifDescr returns
+// results, the fallback ifDescr result is returned.
+func TestWalkIfNamesWithFallback(t *testing.T) {
+	// Serve only ifDescr PDUs — no ifXTable (ifName) PDUs. WalkIfNames will
+	// succeed but return an empty map (no OIDs match), so the fallback fires.
+	pdus := []gsnmp.SnmpPDU{
+		{Name: "." + OIDIfDescr + ".1", Type: gsnmp.OctetString, Value: []byte("GigabitEthernet0/0")},
+		{Name: "." + OIDIfDescr + ".2", Type: gsnmp.OctetString, Value: []byte("GigabitEthernet0/1")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+	client, err := Open(Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = client.Conn.Close() }()
+
+	names, err := WalkIfNamesWithFallback(context.Background(), client)
+	if err != nil {
+		t.Fatalf("WalkIfNamesWithFallback: %v", err)
+	}
+	if names[1] != "GigabitEthernet0/0" {
+		t.Errorf("names[1] = %q, want GigabitEthernet0/0", names[1])
+	}
+	if names[2] != "GigabitEthernet0/1" {
+		t.Errorf("names[2] = %q, want GigabitEthernet0/1", names[2])
+	}
+}
+
+// WalkIfNamesWithFallback: when ifXTable has entries, they are returned without
+// falling back to ifDescr.
+func TestWalkIfNamesWithFallbackPrefersIfName(t *testing.T) {
+	const ifNameOID = "1.3.6.1.2.1.31.1.1.1.1"
+	pdus := []gsnmp.SnmpPDU{
+		{Name: "." + ifNameOID + ".1", Type: gsnmp.OctetString, Value: []byte("eth0")},
+		// ifDescr entry at a different index — must not appear in results.
+		{Name: "." + OIDIfDescr + ".2", Type: gsnmp.OctetString, Value: []byte("should-not-appear")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+	client, err := Open(Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = client.Conn.Close() }()
+
+	names, err := WalkIfNamesWithFallback(context.Background(), client)
+	if err != nil {
+		t.Fatalf("WalkIfNamesWithFallback: %v", err)
+	}
+	if names[1] != "eth0" {
+		t.Errorf("names[1] = %q, want eth0", names[1])
+	}
+	// The ifDescr entry at index 2 must not appear — we returned early from ifName.
+	if _, ok := names[2]; ok {
+		t.Errorf("names[2] unexpectedly present; ifDescr fallback should not have been used")
+	}
+}
+
 // ParseCIDRs: valid CIDRs are all returned.
 func TestParseCIDRs(t *testing.T) {
 	nets := ParseCIDRs([]string{"10.0.0.0/8", "192.168.0.0/16"})

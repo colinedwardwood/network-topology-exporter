@@ -46,6 +46,7 @@ var expectedMetricNames = []string{
 	"network_topology_fdb_suppressed_macs_total",
 	"network_topology_goroutines",
 	"network_topology_snapshot_queue_depth",
+	"network_topology_cycle_budget_skips_total",
 }
 
 func TestMetricSchemaStable(t *testing.T) {
