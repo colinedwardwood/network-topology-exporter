@@ -6,9 +6,9 @@ All metrics use the `network_` prefix. No metric uses a raw IP address or free-f
 
 | Metric | Type | Labels | Notes |
 |--------|------|--------|-------|
-| `network_device_info` | gauge (always 1) | `device_id`, `vendor`, `model`, `os_version`, `site` | One series per discovered device. Absent from `/metrics` when device is no longer in graph. |
-| `network_device_uptime_seconds` | gauge | `device_id` | From SNMP sysUpTime. |
-| `network_topology_edge_info` | gauge (always 1) | `src_device`, `src_port`, `dst_device`, `dst_port`, `discovery_proto`, `link_type`, `direction` | One series per edge. Absent from `/metrics` when edge is removed. |
+| `network_topology_device_info` | gauge (always 1) | `device_id`, `vendor`, `model`, `os_version`, `site` | One series per discovered device. Absent from `/metrics` when device is no longer in graph. |
+| `network_topology_device_uptime_seconds` | gauge | `device_id` | From SNMP sysUpTime. |
+| `network_topology_edge_info` | gauge (always 1) | `src_device`, `src_port`, `dst_device`, `dst_port`, `discovery_proto`, `link_kind`, `direction` | One series per edge. Absent from `/metrics` when edge is removed. |
 | `network_topology_change_total` | counter | `change_kind` (added\|removed\|updated), `discovery_proto` | Resets on restart. Use `increase()` not `rate()` for alerting on sparse events. |
 | `network_topology_out_of_scope_neighbours_total` | gauge | (none) | Count of distinct neighbours seen this cycle whose IPs fall outside the CIDR allow-list. Detail (device, port, hint) is in log lines. |
 
@@ -23,7 +23,7 @@ All metrics use the `network_` prefix. No metric uses a raw IP address or free-f
 | Metric | Type | Notes |
 |--------|------|-------|
 | `network_topology_graph_stale` | gauge (0/1) | 1 while serving snapshot on startup; 0 after first live cycle. Alert: `network_topology_graph_stale == 1 for 15m` |
-| `network_topology_snapshot_last_written_unix` | gauge | Alert: absent or stopped advancing after two cycle intervals. |
+| `network_topology_snapshot_last_written_timestamp_seconds` | gauge | Alert: absent or stopped advancing after two cycle intervals. |
 | `network_topology_snapshot_loaded_devices_total` | gauge | Sanity check at startup; compare to expected fleet size. |
 
 ## Discovery cycle health
@@ -42,7 +42,7 @@ All metrics use the `network_` prefix. No metric uses a raw IP address or free-f
 
 ## Cardinality budget
 
-Dominant series: `network_topology_edge_info`. Each unique `(src_device, src_port, dst_device, dst_port, discovery_proto, link_type, direction)` tuple is one series.
+Dominant series: `network_topology_edge_info`. Each unique `(src_device, src_port, dst_device, dst_port, discovery_proto, link_kind, direction)` tuple is one series.
 
 For a 500-device network with an average of 4 links per device and 2 protocols reporting each link:
 - Edges: ~1000 physical links × 2 protocols = ~2000 edge series
@@ -63,7 +63,7 @@ This is well within Prometheus defaults. If LLDP and CDP both report the same li
 |--------|------|--------|-------|
 | `network_topology_boundary_observation_info` | gauge (always 1) | `peer_a`, `peer_b`, `reporting_device`, `src_port`, `proto` | LD-15 uncoordinated mode only. One series per out-of-scope neighbour, reset each cycle. `peer_a` is always the alphabetically-smaller endpoint. Recording rule: `count by(peer_a, peer_b, proto)(...) == 2` fires when both sides have reported, producing a confirmed cross-boundary edge. |
 | `network_topology_federation_spoke_up` | gauge (0/1) | `spoke_id` | LD-18 hub mode only. 1 while a spoke has pushed within `federation.spoke_timeout`; drops to 0 after eviction. Alert: `network_topology_federation_spoke_up == 0` |
-| `network_topology_federation_spoke_last_push_unix` | gauge | `spoke_id` | LD-18 hub mode only. Wall-clock time of the most recent push from each spoke. Alert: `time() - network_topology_federation_spoke_last_push_unix > federation.spoke_timeout` |
+| `network_topology_federation_spoke_last_push_timestamp_seconds` | gauge | `spoke_id` | LD-18 hub mode only. Unix timestamp in seconds of the most recent push from each spoke. Alert: `time() - network_topology_federation_spoke_last_push_timestamp_seconds > federation.spoke_timeout` |
 | `network_topology_federation_spoke_push_failures_total` | counter | (none) | LD-17 spoke mode only. Incremented each time a push attempt exhausts all retries. A non-zero rate means the hub is not receiving topology data from this spoke. |
 | `network_topology_hub_oos_unmatched_total` | gauge | (none) | LD-18 hub mode only. Count of out-of-scope hints received this cycle that could not be matched to any known device name via `normalizeDeviceName`. A value > 0 indicates vendor chassis-id encoding differences; add static `known_inter_domain_links` entries as the reliable workaround. |
 
@@ -77,7 +77,7 @@ network_topology_graph_stale == 1
 histogram_quantile(0.99, rate(network_topology_discovery_cycle_duration_seconds_bucket[10m])) > 60
 
 # Snapshot stopped being written (dead man's switch)
-time() - network_topology_snapshot_last_written_unix > 300
+time() - network_topology_snapshot_last_written_timestamp_seconds > 300
 
 # Sustained credential failures (possible lockout)
 increase(network_topology_credential_trials_total{status="failed"}[10m]) > 20

@@ -160,7 +160,7 @@ A statically configured `known_inter_domain_links` entry disagrees with what liv
 
 ## 8. Snapshot issues
 
-**`snapshot_last_written_unix` not advancing**
+**`snapshot_last_written_timestamp_seconds` not advancing**
 
 The snapshot is not being written to `snapshot.path`. Common causes:
 
@@ -298,7 +298,7 @@ If cycle duration P99 is close to the configured interval and `otlp_push_total{s
 
 ## 12. Topology metrics absent from /metrics entirely
 
-**Symptom:** `network_device_info`, `network_topology_edge_info`, and related metric families do not appear anywhere in the `/metrics` output — not even as gauge families with zero series.
+**Symptom:** `network_topology_device_info`, `network_topology_edge_info`, and related metric families do not appear anywhere in the `/metrics` output — not even as gauge families with zero series.
 
 This is distinct from [No edges in /metrics](#1-no-edges-in-metrics), where the metric names are present but carry no label tuples. Here the names are missing entirely.
 
@@ -307,7 +307,7 @@ This is distinct from [No edges in /metrics](#1-no-edges-in-metrics), where the 
 On startup the exporter loads the previous snapshot and begins serving it immediately, with `network_topology_graph_stale=1`. If no snapshot exists (cold start), the TopologyCollector holds an empty graph. In this state:
 
 - `network_topology_out_of_scope_neighbours_total` and other scalar gauges will appear with value `0`.
-- `network_device_info` and `network_topology_edge_info` will have no series at all, because they are label-tuple metrics that require at least one graph element to produce a time series.
+- `network_topology_device_info` and `network_topology_edge_info` will have no series at all, because they are label-tuple metrics that require at least one graph element to produce a time series.
 
 This is expected behaviour. Wait for the first discovery cycle to complete; once `network_topology_graph_stale` drops to `0`, the metric families will appear with populated label sets.
 

@@ -14,8 +14,8 @@ import (
 // Removing or renaming a metric requires a deliberate update here
 // and a CHANGELOG entry.
 var expectedMetricNames = []string{
-	"network_device_info",
-	"network_device_uptime_seconds",
+	"network_topology_device_info",
+	"network_topology_device_uptime_seconds",
 	"network_topology_edge_info",
 	"network_topology_out_of_scope_neighbours_total",
 	"network_topology_graph_edges_total",
@@ -23,7 +23,7 @@ var expectedMetricNames = []string{
 	"network_topology_change_total",
 	"network_topology_conflict_total",
 	"network_topology_graph_stale",
-	"network_topology_snapshot_last_written_unix",
+	"network_topology_snapshot_last_written_timestamp_seconds",
 	"network_topology_snapshot_loaded_devices_total",
 	"network_topology_discovery_devices_total",
 	"network_topology_discovery_cycle_duration_seconds",
@@ -36,7 +36,7 @@ var expectedMetricNames = []string{
 	"network_topology_credential_trials_total",
 	"network_topology_otlp_push_total",
 	"network_topology_federation_spoke_up",
-	"network_topology_federation_spoke_last_push_unix",
+	"network_topology_federation_spoke_last_push_timestamp_seconds",
 	"network_topology_federation_spoke_push_failures_total",
 	"network_topology_graph_updates_rejected_total",
 	"network_topology_hub_oos_unmatched_total",

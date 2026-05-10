@@ -20,11 +20,11 @@ func TestNewRegistersExpectedMetrics(t *testing.T) {
 	})
 
 	const want = `
-# HELP network_device_info One series per discovered device. Value is always 1; inventory data is in the labels.
-# TYPE network_device_info gauge
-network_device_info{device_id="dev-1",model="C9300",os_version="17.6.4",site="lab",vendor="cisco"} 1
+# HELP network_topology_device_info One series per discovered device. Value is always 1; inventory data is in the labels.
+# TYPE network_topology_device_info gauge
+network_topology_device_info{device_id="dev-1",model="C9300",os_version="17.6.4",site="lab",vendor="cisco"} 1
 `
-	if err := testutil.GatherAndCompare(m.Registry(), strings.NewReader(want), "network_device_info"); err != nil {
+	if err := testutil.GatherAndCompare(m.Registry(), strings.NewReader(want), "network_topology_device_info"); err != nil {
 		t.Fatalf("metric mismatch: %v", err)
 	}
 }
@@ -40,11 +40,11 @@ func TestTopologyCollectorUptimeUpdatesEveryCycle(t *testing.T) {
 	})
 
 	const want = `
-# HELP network_device_uptime_seconds Per-device uptime from the SNMP SYSTEM group (sysUpTime).
-# TYPE network_device_uptime_seconds gauge
-network_device_uptime_seconds{device_id="dev-1"} 25
+# HELP network_topology_device_uptime_seconds Per-device uptime from the SNMP SYSTEM group (sysUpTime).
+# TYPE network_topology_device_uptime_seconds gauge
+network_topology_device_uptime_seconds{device_id="dev-1"} 25
 `
-	if err := testutil.GatherAndCompare(m.Registry(), strings.NewReader(want), "network_device_uptime_seconds"); err != nil {
+	if err := testutil.GatherAndCompare(m.Registry(), strings.NewReader(want), "network_topology_device_uptime_seconds"); err != nil {
 		t.Fatalf("uptime not updated: %v", err)
 	}
 }

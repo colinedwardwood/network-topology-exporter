@@ -11,7 +11,7 @@ The exporter emits standard signals only. No bespoke control-plane API, no propr
 Two policies are binding on contributors:
 
 - **Source-for-spec, never source-for-code (LD-09).** GPL-licensed monitoring source may be read for behavioural extraction into specifications only. The Go implementation is written from the specifications. Full guardrails in [`CONTRIBUTING.md`](../CONTRIBUTING.md).
-- **Source-attributed reconciliation (LD-10).** Every emitted edge carries `discovery_proto`, `direction`, `link_type`, and `precedence_rank`. Conflicts between sources emit a separate counter rather than being silently resolved. The reconciliation model is informed by Breitbart et al., "The NetInventory System" (IEEE/ACM ToN, 2004), which demonstrated that ranking multiple protocol sources for the same physical link — and surfacing disagreements rather than silently arbitrating — is the correct approach for heterogeneous network environments.
+- **Source-attributed reconciliation (LD-10).** Every emitted edge carries `discovery_proto`, `direction`, `link_kind`, and `precedence_rank`. Conflicts between sources emit a separate counter rather than being silently resolved. The reconciliation model is informed by Breitbart et al., "The NetInventory System" (IEEE/ACM ToN, 2004), which demonstrated that ranking multiple protocol sources for the same physical link — and surfacing disagreements rather than silently arbitrating — is the correct approach for heterogeneous network environments.
 
 Four operational commitments:
 

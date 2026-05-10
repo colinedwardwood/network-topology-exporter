@@ -472,8 +472,8 @@ func TestTopologyCollectorPopulatesMetrics(t *testing.T) {
 	for _, mf := range mfs {
 		counts[mf.GetName()] = len(mf.GetMetric())
 	}
-	if counts["network_device_info"] != 1 {
-		t.Errorf("network_device_info series = %d, want 1", counts["network_device_info"])
+	if counts["network_topology_device_info"] != 1 {
+		t.Errorf("network_topology_device_info series = %d, want 1", counts["network_topology_device_info"])
 	}
 	if counts["network_topology_edge_info"] != 1 {
 		t.Errorf("network_topology_edge_info series = %d, want 1", counts["network_topology_edge_info"])
@@ -484,7 +484,7 @@ func TestTopologyCollectorPopulatesMetrics(t *testing.T) {
 	mfs, _ = m.Registry().Gather()
 	for _, mf := range mfs {
 		switch mf.GetName() {
-		case "network_device_info", "network_topology_edge_info":
+		case "network_topology_device_info", "network_topology_edge_info":
 			t.Errorf("%s has %d series after empty graph update, want 0", mf.GetName(), len(mf.GetMetric()))
 		case "network_topology_out_of_scope_neighbours_total":
 			for _, mm := range mf.GetMetric() {

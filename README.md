@@ -42,13 +42,13 @@ docker run --rm -p 9100:9100 \
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `network_device_info` | gauge (always 1) | `device_id`, `vendor`, `model`, `os_version`, `site` | One series per discovered device. |
-| `network_device_uptime_seconds` | gauge | `device_id` | Per-device uptime from sysUpTime. |
-| `network_topology_edge_info` | gauge (always 1) | `src_device`, `src_port`, `dst_device`, `dst_port`, `discovery_proto`, `link_type`, `direction` | One series per discovered edge. |
+| `network_topology_device_info` | gauge (always 1) | `device_id`, `vendor`, `model`, `os_version`, `site` | One series per discovered device. |
+| `network_topology_device_uptime_seconds` | gauge | `device_id` | Per-device uptime from sysUpTime. |
+| `network_topology_edge_info` | gauge (always 1) | `src_device`, `src_port`, `dst_device`, `dst_port`, `discovery_proto`, `link_kind`, `direction` | One series per discovered edge. |
 | `network_topology_change_total` | counter | `change_kind` (added\|removed\|updated), `discovery_proto` | Topology mutations between cycles. Use `increase()` not `rate()`. |
 | `network_topology_out_of_scope_neighbours_total` | gauge | (none) | Count of LLDP/CDP neighbours outside the CIDR allow-list this cycle. Detail in log lines. |
 | `network_topology_graph_stale` | gauge (0/1) | (none) | 1 while serving the startup snapshot; 0 after first live cycle. |
-| `network_topology_snapshot_last_written_unix` | gauge | (none) | Wall-clock time of most recent snapshot write. |
+| `network_topology_snapshot_last_written_timestamp_seconds` | gauge | (none) | Wall-clock time of most recent snapshot write. |
 | `network_topology_snapshot_loaded_devices_total` | gauge | (none) | Device count loaded from snapshot at startup. |
 | `network_topology_discovery_devices_total` | gauge | `status` (success\|failed\|timeout) | Per-cycle device-discovery outcome. |
 | `network_topology_discovery_cycle_duration_seconds` | histogram | (none) | End-to-end discovery cycle wall time. |
@@ -57,7 +57,7 @@ docker run --rm -p 9100:9100 \
 | `network_topology_credential_trials_total` | counter | `status` (ok\|failed) | Credential trial attempts under the LD-12 rate limiter. |
 | `network_topology_conflict_total` | counter | `conflict_type` | Source disagreements detected during reconciliation (port_name_mismatch, neighbour_disagreement, direction_asymmetry, documented_vs_observed). |
 | `network_topology_federation_spoke_up` | gauge (0/1) | `spoke_id` | Hub mode only. 1 while spoke has pushed within `spoke_timeout`; 0 after eviction. |
-| `network_topology_federation_spoke_last_push_unix` | gauge | `spoke_id` | Hub mode only. Wall-clock time of most recent push from each spoke. |
+| `network_topology_federation_spoke_last_push_timestamp_seconds` | gauge | `spoke_id` | Hub mode only. Wall-clock time of most recent push from each spoke. |
 | `network_topology_federation_spoke_push_failures_total` | counter | (none) | Spoke mode only. Incremented each time a push exhausts all retries. |
 | `network_topology_hub_oos_unmatched_total` | gauge | (none) | Hub mode only. OOS neighbour hints that could not be matched to any known device name. |
 | `network_topology_otlp_push_total` | counter | `status` (ok\|error) | Incremented after each OTLP push attempt. Only present when `output.otlp.enabled: true`. |

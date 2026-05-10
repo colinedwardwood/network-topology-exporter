@@ -124,7 +124,7 @@ const (
 // Adjacency is the NetXMS-style direct-vs-indirect classification: a port
 // with exactly one MAC in its bridge FDB is direct (probably points at a
 // real device); a port with multiple MACs is indirect (downstream switch,
-// hypervisor host, aggregator). Emitted to Prometheus as the `link_type`
+// hypervisor host, aggregator). Emitted to Prometheus as the `link_kind`
 // label per LD-10.
 type Adjacency string
 
