@@ -69,6 +69,11 @@ const (
 	// ConflictPortNameMismatch — sources agree on the neighbour device but
 	// disagree on the port-name encoding (e.g. CDP says "Eth1/1", LLDP says
 	// "Ethernet1/1").
+	//
+	// TODO: this constant is defined but not currently emitted. The devicePair
+	// check that produced it was removed in LD-XX to prevent false positives on
+	// LAG parallel member links. Re-emit if a dedicated per-protocol port-name
+	// normalisation pass is added upstream of Reconcile.
 	ConflictPortNameMismatch ConflictKind = "port_name_mismatch"
 
 	// ConflictNeighbourDisagreement — sources name different neighbour
@@ -127,6 +132,12 @@ func Reconcile(edges []discovery.Edge) ([]discovery.Edge, []Conflict) {
 	groups := make(map[EdgeKey]*group, len(edges))
 	for i := range edges {
 		e := &edges[i]
+		if e.SrcDevice == e.DstDevice {
+			// Drop self-loop — protocol artefact where a device reports itself
+			// as both endpoints. These are never valid physical links and pollute
+			// the conflict-detection and lifecycle-ageing logic.
+			continue
+		}
 		k := normalizedGroupKey(*e)
 		g, ok := groups[k]
 		if !ok {
