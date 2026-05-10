@@ -196,8 +196,9 @@ func Reconcile(edges []discovery.Edge) ([]discovery.Edge, []Conflict) {
 	// disagreement regardless of port name encoding.
 	type portKey struct{ SrcDevice, SrcPort string }
 	type portObservation struct {
-		key       EdgeKey
-		dstDevice string
+		key        EdgeKey
+		dstDevice  string
+		rawSrcPort string // original port name as reported by the protocol
 	}
 	portNeighbours := make(map[portKey][]portObservation, len(groups))
 	for k, g := range groups {
@@ -205,8 +206,9 @@ func Reconcile(edges []discovery.Edge) ([]discovery.Edge, []Conflict) {
 			for _, observed := range candidates {
 				pk := portKey{observed.SrcDevice, NormalizePortName(observed.SrcPort)}
 				portNeighbours[pk] = append(portNeighbours[pk], portObservation{
-					key:       k,
-					dstDevice: observed.DstDevice,
+					key:        k,
+					dstDevice:  observed.DstDevice,
+					rawSrcPort: observed.SrcPort,
 				})
 			}
 		}
@@ -251,9 +253,13 @@ func Reconcile(edges []discovery.Edge) ([]discovery.Edge, []Conflict) {
 			}
 		}
 		slices.Sort(sources)
+		// Use the raw port name from the first observation so operators see
+		// the name the protocol actually reported (e.g. "GigabitEthernet0/1"),
+		// not the normalized key form (e.g. "Gi0/1").
+		rawPort := observations[0].rawSrcPort
 		conflicts = append(conflicts, Conflict{
 			SrcDevice: pk.SrcDevice,
-			SrcPort:   pk.SrcPort,
+			SrcPort:   rawPort,
 			Kind:      ConflictNeighbourDisagreement,
 			Sources:   sources,
 			Edges:     conflictEdges,
