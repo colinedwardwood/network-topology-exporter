@@ -296,11 +296,20 @@ func IPInNets(ip net.IP, nets []*net.IPNet) bool {
 // normalise sysName / device-ID values from SNMP PDUs consistently across
 // LLDP, CDP, and the SYSTEM group walker.
 func NormaliseName(s string) string {
-	return strings.ToLower(strings.TrimSpace(s))
+	s = strings.ToLower(strings.TrimSpace(s))
+	// RFC 1213 defines sysName as SIZE(0..255); cap here before the string
+	// becomes a map key, graph ID, or federation payload field.
+	// sysName is always ASCII in practice so byte truncation is safe.
+	if len(s) > 255 {
+		s = s[:255]
+	}
+	return s
 }
 
-// ParseCIDRs parses a slice of CIDR strings and returns the corresponding
-// IPNet values. Entries that fail to parse are silently skipped.
+// ParseCIDRs parses a slice of CIDR strings and returns only the valid IPNet
+// values; malformed entries are silently skipped. Use ParseCIDRsStrict when
+// the caller cannot tolerate silent drops (e.g. user-provided input that has
+// not been pre-validated by config.Load).
 func ParseCIDRs(cidrs []string) []*net.IPNet {
 	nets := make([]*net.IPNet, 0, len(cidrs))
 	for _, s := range cidrs {
@@ -310,4 +319,18 @@ func ParseCIDRs(cidrs []string) []*net.IPNet {
 		}
 	}
 	return nets
+}
+
+// ParseCIDRsStrict parses cidrs and returns an error if any entry is malformed.
+// Use this when the input has not been pre-validated by config.Load.
+func ParseCIDRsStrict(cidrs []string) ([]*net.IPNet, error) {
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for _, s := range cidrs {
+		_, n, err := net.ParseCIDR(s)
+		if err != nil {
+			return nil, fmt.Errorf("invalid CIDR %q: %w", s, err)
+		}
+		nets = append(nets, n)
+	}
+	return nets, nil
 }
