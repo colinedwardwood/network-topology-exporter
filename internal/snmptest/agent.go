@@ -12,6 +12,7 @@
 package snmptest
 
 import (
+	"log/slog"
 	"net"
 	"sort"
 	"strconv"
@@ -60,6 +61,10 @@ func Start(t *testing.T, community string, pdus []gsnmp.SnmpPDU) string {
 // ParseAddr splits a "host:port" address into a net.IP and uint16 port.
 // Useful in tests that need to build snmp.Params from the address returned
 // by Start.
+//
+// Errors from SplitHostPort or ParseUint are intentionally ignored: callers
+// that pass a malformed address receive nil/0 zero values, which is the
+// desired behaviour for tests that exercise error paths without panicking.
 func ParseAddr(addr string) (net.IP, uint16) {
 	host, portStr, _ := net.SplitHostPort(addr)
 	p, _ := strconv.ParseUint(portStr, 10, 16)
@@ -185,7 +190,9 @@ func sendReply(conn net.PacketConn, src net.Addr, community string, pkt *gsnmp.S
 	if err != nil {
 		return
 	}
-	_, _ = conn.WriteTo(raw, src)
+	if _, err := conn.WriteTo(raw, src); err != nil {
+		slog.Debug("snmptest: sendReply WriteTo failed", "err", err)
+	}
 }
 
 func handleGet(pdus []gsnmp.SnmpPDU, vars []gsnmp.SnmpPDU) []gsnmp.SnmpPDU {
