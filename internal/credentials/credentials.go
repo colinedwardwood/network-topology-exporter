@@ -171,6 +171,9 @@ func newTokenBucket(rate int) *tokenBucket {
 	if rate < 1 {
 		rate = 1
 	}
+	if rate > 1_000_000 {
+		rate = 1_000_000 // interval = 1µs, well above OS timer resolution
+	}
 	return &tokenBucket{rate: rate, tokens: rate, lastRefill: time.Now()}
 }
 
