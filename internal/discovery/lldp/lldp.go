@@ -287,6 +287,7 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 		if remIP := extractChassisIP(rem.chassisSubtype, rem.chassisID); remIP != nil {
 			if len(allowedNets) > 0 && !snmputil.IPInNets(remIP, allowedNets) {
 				oos = append(oos, discovery.OutOfScopeNeighbour{
+					Proto:           "lldp",
 					ReportingDevice: localDevice,
 					ReportingPort:   localPort,
 					NeighbourHint:   remDevice,

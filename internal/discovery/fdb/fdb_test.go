@@ -335,12 +335,12 @@ func TestWalkEndToEndQBridge(t *testing.T) {
 // OID suffixes and returns a sorted, deduplicated slice of valid VLAN IDs.
 func TestDiscoverVlanIDs(t *testing.T) {
 	pdus := []gsnmp.SnmpPDU{
-		// .1.3.6.1.2.1.17.7.1.4.2.3.0.1 (col=3, timeMark=0, vlanId=1)
-		{Name: ".1.3.6.1.2.1.17.7.1.4.2.3.0.1", Type: gsnmp.Integer, Value: 1},
-		// .1.3.6.1.2.1.17.7.1.4.2.3.0.10 (col=3, timeMark=0, vlanId=10)
-		{Name: ".1.3.6.1.2.1.17.7.1.4.2.3.0.10", Type: gsnmp.Integer, Value: 10},
-		// .1.3.6.1.2.1.17.7.1.4.2.3.0.100 (col=3, timeMark=0, vlanId=100)
-		{Name: ".1.3.6.1.2.1.17.7.1.4.2.3.0.100", Type: gsnmp.Integer, Value: 100},
+		// .1.3.6.1.2.1.17.7.1.4.2.1.3.0.1 (col=3, timeMark=0, vlanId=1)
+		{Name: ".1.3.6.1.2.1.17.7.1.4.2.1.3.0.1", Type: gsnmp.Integer, Value: 1},
+		// .1.3.6.1.2.1.17.7.1.4.2.1.3.0.10 (col=3, timeMark=0, vlanId=10)
+		{Name: ".1.3.6.1.2.1.17.7.1.4.2.1.3.0.10", Type: gsnmp.Integer, Value: 10},
+		// .1.3.6.1.2.1.17.7.1.4.2.1.3.0.100 (col=3, timeMark=0, vlanId=100)
+		{Name: ".1.3.6.1.2.1.17.7.1.4.2.1.3.0.100", Type: gsnmp.Integer, Value: 100},
 	}
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
@@ -375,7 +375,7 @@ func TestDiscoverVlanIDs(t *testing.T) {
 func TestWalkVlanCommunityFdbDiscovery(t *testing.T) {
 	vlanTablePDUs := []gsnmp.SnmpPDU{
 		// dot1qVlanCurrentTable: VLAN 10 active
-		{Name: ".1.3.6.1.2.1.17.7.1.4.2.3.0.10", Type: gsnmp.Integer, Value: 10},
+		{Name: ".1.3.6.1.2.1.17.7.1.4.2.1.3.0.10", Type: gsnmp.Integer, Value: 10},
 		// dot1dBasePortTable: bridge port 1 → ifIndex 2
 		{Name: ".1.3.6.1.2.1.17.1.4.1.2.1", Type: gsnmp.Integer, Value: 2},
 		// ifXTable.ifName: ifIndex 2 → "GigabitEthernet0/2"
@@ -871,9 +871,9 @@ func TestDiscoverVlanIDsOutOfRange(t *testing.T) {
 func TestWalkVlanCommunityFdbsMaxVlans(t *testing.T) {
 	// Three VLANs in dot1qVlanCurrentTable.
 	vlanTablePDUs := []gsnmp.SnmpPDU{
-		{Name: ".1.3.6.1.2.1.17.7.1.4.2.3.0.10", Type: gsnmp.Integer, Value: 10},
-		{Name: ".1.3.6.1.2.1.17.7.1.4.2.3.0.20", Type: gsnmp.Integer, Value: 20},
-		{Name: ".1.3.6.1.2.1.17.7.1.4.2.3.0.30", Type: gsnmp.Integer, Value: 30},
+		{Name: ".1.3.6.1.2.1.17.7.1.4.2.1.3.0.10", Type: gsnmp.Integer, Value: 10},
+		{Name: ".1.3.6.1.2.1.17.7.1.4.2.1.3.0.20", Type: gsnmp.Integer, Value: 20},
+		{Name: ".1.3.6.1.2.1.17.7.1.4.2.1.3.0.30", Type: gsnmp.Integer, Value: 30},
 	}
 
 	// FDB entries for each per-VLAN community.
@@ -964,7 +964,7 @@ func TestWalkVlanCommunityFdbsV3Skip(t *testing.T) {
 // skipped via continue.
 func TestWalkVlanCommunityFdbsOpenFails(t *testing.T) {
 	vlanTablePDUs := []gsnmp.SnmpPDU{
-		{Name: ".1.3.6.1.2.1.17.7.1.4.2.3.0.10", Type: gsnmp.Integer, Value: 10},
+		{Name: ".1.3.6.1.2.1.17.7.1.4.2.1.3.0.10", Type: gsnmp.Integer, Value: 10},
 	}
 	addr := snmptest.Start(t, "public", vlanTablePDUs)
 	ip, port := snmptest.ParseAddr(addr)
@@ -1028,7 +1028,7 @@ func TestWalkVlanCommunityFdbsParallel(t *testing.T) {
 	vlanTablePDUs := make([]gsnmp.SnmpPDU, 0, len(vlanIDs))
 	for _, id := range vlanIDs {
 		vlanTablePDUs = append(vlanTablePDUs, gsnmp.SnmpPDU{
-			Name:  fmt.Sprintf(".1.3.6.1.2.1.17.7.1.4.2.3.0.%d", id),
+			Name:  fmt.Sprintf(".1.3.6.1.2.1.17.7.1.4.2.1.3.0.%d", id),
 			Type:  gsnmp.Integer,
 			Value: id,
 		})
@@ -1224,7 +1224,7 @@ func TestWalkStpPortStatesPortStrEmpty(t *testing.T) {
 // ifXTable.ifName: ifIndex 2 → "GigabitEthernet0/1", ifIndex 3 → "GigabitEthernet0/2"
 func buildQBridgeAgentPDUs() []gsnmp.SnmpPDU {
 	fdbBase := ".1.3.6.1.2.1.17.4.3.1."
-	qBridgeBase := ".1.3.6.1.2.1.17.7.1.2.2."
+	qBridgeBase := ".1.3.6.1.2.1.17.7.1.2.2.1."
 	basePortBase := ".1.3.6.1.2.1.17.1.4.1."
 	stpPortBase := ".1.3.6.1.2.1.17.2.15.1."
 	ifNameBase := ".1.3.6.1.2.1.31.1.1.1.1."

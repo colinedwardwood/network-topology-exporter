@@ -225,7 +225,7 @@ func walkQBridgeFdbTable(ctx context.Context, client *gsnmp.GoSNMP, entries map[
 	if err != nil {
 		return err
 	}
-	const prefix = ".1.3.6.1.2.1.17.7.1.2.2."
+	const prefix = ".1.3.6.1.2.1.17.7.1.2.2.1."
 	for _, pdu := range pdus {
 		suffix, ok := snmputil.TrimOIDPrefix(pdu.Name, prefix)
 		if !ok {
@@ -268,7 +268,7 @@ func discoverVlanIDs(ctx context.Context, client *gsnmp.GoSNMP) []int {
 	if err != nil {
 		return nil
 	}
-	const prefix = ".1.3.6.1.2.1.17.7.1.4.2."
+	const prefix = ".1.3.6.1.2.1.17.7.1.4.2.1."
 	seen := make(map[int]struct{})
 	for _, pdu := range pdus {
 		suffix, ok := snmputil.TrimOIDPrefix(pdu.Name, prefix)
