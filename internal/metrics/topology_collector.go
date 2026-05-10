@@ -23,8 +23,11 @@ func sanitizeLabel(s string) string {
 	}, s)
 	if len(s) > maxLabelLen {
 		// Truncate at a rune boundary so we never produce invalid UTF-8.
+		// utf8.RuneStart returns true for any byte that is not a UTF-8
+		// continuation byte (10xxxxxx), so the loop retreats at most 3 bytes
+		// for a 4-byte rune — O(1) per call rather than O(n).
 		n := maxLabelLen
-		for n > 0 && !utf8.ValidString(s[:n]) {
+		for n > 0 && !utf8.RuneStart(s[n]) {
 			n--
 		}
 		return s[:n]
