@@ -8,7 +8,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"flag"
 	"fmt"
@@ -397,11 +396,29 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 	if lc.cfg.Snapshot.Path != "" {
 		snapshotCh = make(chan snapshot.File, 1)
 		go func() {
+			var writeDone chan error // non-nil while a write goroutine is in flight
 			for f := range snapshotCh {
-				done := make(chan error, 1)
-				go func(f snapshot.File) { done <- snapshot.Write(lc.cfg.Snapshot.Path, f) }(f)
+				// Collect result from any previously timed-out write that has now finished.
+				if writeDone != nil {
+					select {
+					case err := <-writeDone:
+						writeDone = nil
+						if err != nil {
+							lc.logger.Error("snapshot write failed (delayed)", "error", err)
+						} else {
+							lc.m.SnapshotLastWrittenUnix.Set(float64(time.Now().Unix()))
+						}
+					default:
+						// Still blocked — drop this snapshot rather than spawning another goroutine.
+						lc.logger.Warn("snapshot write still in flight; dropping snapshot (NFS stall?)")
+						continue
+					}
+				}
+				writeDone = make(chan error, 1)
+				go func(f snapshot.File, done chan error) { done <- snapshot.Write(lc.cfg.Snapshot.Path, f) }(f, writeDone)
 				select {
-				case err := <-done:
+				case err := <-writeDone:
+					writeDone = nil
 					if err != nil {
 						lc.logger.Error("snapshot write failed", "error", err)
 					} else {
@@ -409,6 +426,7 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 					}
 				case <-time.After(snapshotWriteTimeout):
 					lc.logger.Warn("snapshot write timed out (NFS stall?); discovery continues", "timeout", snapshotWriteTimeout)
+					// writeDone goroutine still running; next iteration will detect this.
 				}
 			}
 		}()
@@ -741,7 +759,25 @@ func runCycle(
 			}
 		}
 	}
-	resolveEdgeDstDevices(rawEdges, ipToID, macToID)
+	rawEdges = resolveEdgeDstDevices(rawEdges, ipToID, macToID)
+
+	// Backfill DstPort on FDB edges from LLDP observations with matching endpoints.
+	// After MAC→sysName resolution, LLDP and FDB can agree on all four endpoint
+	// fields, letting graph.Reconcile merge them into one edge (LLDP wins on rank).
+	type epKey struct{ src, srcPort, dst string }
+	lldpDstPort := make(map[epKey]string, len(rawEdges))
+	for _, e := range rawEdges {
+		if e.DiscoveryProto == "lldp" && e.DstPort != "" {
+			lldpDstPort[epKey{e.SrcDevice, e.SrcPort, e.DstDevice}] = e.DstPort
+		}
+	}
+	for i := range rawEdges {
+		if rawEdges[i].DiscoveryProto == "fdb" && rawEdges[i].DstPort == "" {
+			if p, ok := lldpDstPort[epKey{rawEdges[i].SrcDevice, rawEdges[i].SrcPort, rawEdges[i].DstDevice}]; ok {
+				rawEdges[i].DstPort = p
+			}
+		}
+	}
 
 	reconciledEdges, conflicts := graph.Reconcile(rawEdges)
 
@@ -794,36 +830,38 @@ func collectDegradedReasons(edges []discovery.Edge) []string {
 	return reasons
 }
 
-// macAddrHash returns a short, stable SHA-256-derived surrogate for a MAC
-// address, used as a fallback dst_device label when the MAC cannot be resolved
-// to a sysName via the LLDP identity index. Hashing bounds Prometheus label
-// cardinality for unresolved FDB peers.
-func macAddrHash(mac net.HardwareAddr) string {
-	sum := sha256.Sum256(mac)
-	return fmt.Sprintf("mac-%x", sum[:4])
-}
-
 // resolveEdgeDstDevices replaces IP-valued and MAC-valued DstDevice fields with
 // the canonical device ID (sysName) from the discovered inventory when available.
 // BGP/OSPF/IS-IS walks report peer IPs; FDB reports raw MACs; LLDP reports sysNames.
-// For IP DstDevices: resolves to sysName using the device walk inventory.
+// For IP DstDevices: resolves to sysName using the device walk inventory; unresolved
+// IPs are kept (still useful for routing protocol edges).
 // For MAC DstDevices: resolves to sysName via the LLDP identity index; unresolved
-// MACs are hashed to mac-<8hex> to bound Prometheus label cardinality.
-func resolveEdgeDstDevices(edges []discovery.Edge, ipToID map[string]string, macToID map[string]string) {
+// MACs are suppressed (likely hosts, not infrastructure).
+func resolveEdgeDstDevices(edges []discovery.Edge, ipToID map[string]string, macToID map[string]string) []discovery.Edge {
+	result := make([]discovery.Edge, 0, len(edges))
 	for i := range edges {
-		dst := edges[i].DstDevice
+		e := edges[i]
+		dst := e.DstDevice
 		if net.ParseIP(dst) != nil {
 			if id, ok := ipToID[dst]; ok {
-				edges[i].DstDevice = id
+				e.DstDevice = id
 			}
+			// unresolved IP: keep edge (still useful for routing protocol edges)
 		} else if hw, err := net.ParseMAC(dst); err == nil {
 			if id, ok := macToID[dst]; ok {
-				edges[i].DstDevice = id
+				e.DstDevice = id
 			} else {
-				edges[i].DstDevice = macAddrHash(hw)
+				// Unresolved MAC — likely a host, not infrastructure.
+				// Suppress rather than publish a mac-<hash> pseudo-device.
+				slog.Debug("fdb: suppressing unresolved MAC peer; no LLDP correlation",
+					"src_device", e.SrcDevice, "src_port", e.SrcPort, "mac", dst)
+				_ = hw
+				continue
 			}
 		}
+		result = append(result, e)
 	}
+	return result
 }
 
 type credentialCandidate struct {
@@ -875,6 +913,8 @@ func credentialCandidates(cfg *config.Config, resolver *credentials.Resolver, ip
 		}
 		params, err := profileToParams(ip, port, cfg.Discovery.TimeoutPerDevice, p)
 		if err != nil {
+			slog.Warn("credential profile unusable; skipping",
+				"profile", name, "ip", ip, "error", err)
 			continue
 		}
 		candidates = append(candidates, credentialCandidate{params: params, profileName: name})
