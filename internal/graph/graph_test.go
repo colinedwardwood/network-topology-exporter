@@ -883,6 +883,97 @@ func TestReconcileNeighbourDisagreementAcrossEncodings(t *testing.T) {
 	}
 }
 
+// TestSelfLoopEdgeDropped verifies that an edge where SrcDevice == DstDevice is
+// silently dropped by Reconcile and never appears in the output. Such edges are
+// protocol artefacts and are never valid physical links.
+func TestSelfLoopEdgeDropped(t *testing.T) {
+	loop := discovery.Edge{
+		SrcDevice: "sw-a", SrcPort: "Gi0/1",
+		DstDevice: "sw-a", DstPort: "Gi0/2",
+		DiscoveryProto: "lldp", PrecedenceRank: 1,
+		Direction: discovery.DirectionUnidirectional,
+	}
+	edges, conflicts := Reconcile([]discovery.Edge{loop})
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges after dropping self-loop, got %d: %v", len(edges), edges)
+	}
+	if len(conflicts) != 0 {
+		t.Errorf("expected 0 conflicts for self-loop input, got %d: %v", len(conflicts), conflicts)
+	}
+}
+
+// TestSelfLoopEdgeDroppedWithValidEdge verifies that a self-loop is filtered out
+// while a valid edge in the same input slice is preserved.
+func TestSelfLoopEdgeDroppedWithValidEdge(t *testing.T) {
+	loop := discovery.Edge{
+		SrcDevice: "sw-a", SrcPort: "Gi0/1",
+		DstDevice: "sw-a", DstPort: "Gi0/2",
+		DiscoveryProto: "lldp", PrecedenceRank: 1,
+	}
+	valid := discovery.Edge{
+		SrcDevice: "sw-a", SrcPort: "Gi0/3",
+		DstDevice: "sw-b", DstPort: "Gi0/1",
+		DiscoveryProto: "lldp", PrecedenceRank: 1,
+	}
+	edges, _ := Reconcile([]discovery.Edge{loop, valid})
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge (self-loop dropped, valid edge kept), got %d: %v", len(edges), edges)
+	}
+	if edges[0].SrcDevice == edges[0].DstDevice {
+		t.Errorf("remaining edge is still a self-loop: %+v", edges[0])
+	}
+}
+
+// TestNormalizePortNameEmpty verifies that NormalizePortName does not panic on
+// an empty string and returns an empty string unchanged.
+func TestNormalizePortNameEmpty(t *testing.T) {
+	got := NormalizePortName("")
+	if got != "" {
+		t.Errorf("NormalizePortName(\"\") = %q, want \"\"", got)
+	}
+}
+
+// TestNormalizePortNameAllDigitSuffix verifies normalization of port names where
+// the suffix contains only digits (e.g. "GigabitEthernet0" — no slash separators).
+func TestNormalizePortNameAllDigitSuffix(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"GigabitEthernet0", "Gi0"},
+		{"FastEthernet1", "Fa1"},
+		{"Ethernet0", "Eth0"},
+		{"Loopback0", "Lo0"},
+	}
+	for _, tc := range cases {
+		got := NormalizePortName(tc.in)
+		if got != tc.want {
+			t.Errorf("NormalizePortName(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestDiffBothEmpty verifies that Diff with two empty (non-nil) slices returns nil.
+func TestDiffBothEmpty(t *testing.T) {
+	changes := Diff([]discovery.Edge{}, []discovery.Edge{})
+	if changes != nil {
+		t.Errorf("Diff([], []) = %v, want nil", changes)
+	}
+}
+
+// TestDiffNilBeforeEmptyAfter verifies that Diff(nil, []) returns nil.
+func TestDiffNilBeforeEmptyAfter(t *testing.T) {
+	changes := Diff(nil, []discovery.Edge{})
+	if changes != nil {
+		t.Errorf("Diff(nil, []) = %v, want nil", changes)
+	}
+}
+
+// TestDiffEmptyBeforeNilAfter verifies that Diff([], nil) returns nil.
+func TestDiffEmptyBeforeNilAfter(t *testing.T) {
+	changes := Diff([]discovery.Edge{}, nil)
+	if changes != nil {
+		t.Errorf("Diff([], nil) = %v, want nil", changes)
+	}
+}
+
 // TestReconcileScaleBudget is a wall-clock assertion that Reconcile on a large
 // graph does not regress catastrophically. It is intentionally generous (3 s/run)
 // to avoid flakiness on slow CI runners; tighten once a performance baseline is
