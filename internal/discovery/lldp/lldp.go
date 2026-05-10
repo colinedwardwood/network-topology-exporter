@@ -288,6 +288,16 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 			}
 		}
 
+		// Phase 1 identity annotation: when the peer uses a MAC chassis ID and
+		// also advertises a sysName, record the MAC so the synthesis layer can
+		// build a MAC→sysName index for FDB edge resolution (Phase 2).
+		var metadata map[string]string
+		if rem.chassisSubtype == chassisSubtypeMACAddress && rem.sysName != "" {
+			metadata = map[string]string{
+				"peer_chassis_mac": decodeChassisID(rem.chassisSubtype, rem.chassisID),
+			}
+		}
+
 		edges = append(edges, discovery.Edge{
 			SrcDevice:      localDevice,
 			SrcPort:        localPort,
@@ -300,6 +310,7 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 			PrecedenceRank: precedenceRank,
 			LinkKind:       "ethernet",
 			ObservedAt:     now,
+			Metadata:       metadata,
 		})
 	}
 

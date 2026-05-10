@@ -901,6 +901,71 @@ func TestBuildEdgesMACPortIDWrongLength(t *testing.T) {
 	}
 }
 
+// buildEdges: peer with MAC chassis ID and sysName populates peer_chassis_mac in Metadata.
+func TestBuildEdgesPeerChassisMACMetadata(t *testing.T) {
+	locPorts := map[int]locPort{
+		1: {idSubtype: portSubtypeInterfaceName, id: []byte("Ethernet0")},
+	}
+	remEntries := map[remKey]*remEntry{
+		{1, 1}: {
+			chassisSubtype: chassisSubtypeMACAddress,
+			chassisID:      []byte{0x00, 0x1a, 0x2b, 0x3c, 0x4d, 0x5e},
+			portSubtype:    portSubtypeInterfaceName,
+			portID:         []byte("Ethernet1"),
+			sysName:        "some-peer",
+		},
+	}
+
+	edges, _, err := buildEdges("me", locPorts, remEntries, nil)
+	if err != nil {
+		t.Fatalf("buildEdges: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(edges))
+	}
+	e := edges[0]
+	if e.Metadata == nil {
+		t.Fatal("expected Metadata to be non-nil")
+	}
+	mac, ok := e.Metadata["peer_chassis_mac"]
+	if !ok {
+		t.Fatal("expected peer_chassis_mac key in Metadata")
+	}
+	if mac != "00:1a:2b:3c:4d:5e" {
+		t.Errorf("peer_chassis_mac = %q, want 00:1a:2b:3c:4d:5e", mac)
+	}
+}
+
+// buildEdges: peer with MAC chassis ID but no sysName does NOT populate peer_chassis_mac.
+func TestBuildEdgesNoPeerChassisMACWithoutSysName(t *testing.T) {
+	locPorts := map[int]locPort{
+		1: {idSubtype: portSubtypeInterfaceName, id: []byte("Ethernet0")},
+	}
+	remEntries := map[remKey]*remEntry{
+		{1, 1}: {
+			chassisSubtype: chassisSubtypeMACAddress,
+			chassisID:      []byte{0x00, 0x1a, 0x2b, 0x3c, 0x4d, 0x5e},
+			portSubtype:    portSubtypeInterfaceName,
+			portID:         []byte("Ethernet1"),
+			sysName:        "", // no sysName → no peer_chassis_mac
+		},
+	}
+
+	edges, _, err := buildEdges("me", locPorts, remEntries, nil)
+	if err != nil {
+		t.Fatalf("buildEdges: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(edges))
+	}
+	e := edges[0]
+	if e.Metadata != nil {
+		if _, ok := e.Metadata["peer_chassis_mac"]; ok {
+			t.Error("expected peer_chassis_mac to be absent when sysName is empty")
+		}
+	}
+}
+
 // ---------- fmtNetAddr tests ----------
 
 // fmtNetAddr: when extractChassisIP returns nil (wrong-length raw), falls back to hex.

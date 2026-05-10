@@ -1011,6 +1011,109 @@ func TestBuildClientRetriesDefault(t *testing.T) {
 	}
 }
 
+// appendDecodeSample: adding to an under-capacity slice appends the sample.
+func TestAppendDecodeSampleBasic(t *testing.T) {
+	s := appendDecodeSample([]string{"a", "b"}, "c")
+	if len(s) != 3 || s[2] != "c" {
+		t.Errorf("appendDecodeSample = %v, want [a b c]", s)
+	}
+}
+
+// appendDecodeSample: slice already at capacity (5) is returned unchanged.
+func TestAppendDecodeSampleFull(t *testing.T) {
+	full := []string{"a", "b", "c", "d", "e"}
+	got := appendDecodeSample(full, "f")
+	if len(got) != 5 {
+		t.Errorf("appendDecodeSample on full slice: len = %d, want 5", len(got))
+	}
+	// Must be the exact same slice — no reallocation.
+	if &got[0] != &full[0] {
+		t.Error("appendDecodeSample on full slice returned a different slice")
+	}
+}
+
+// ContextWithDecodeIssueReporter: nil fn returns the original context unchanged.
+func TestContextWithDecodeIssueReporterNilFn(t *testing.T) {
+	ctx := context.Background()
+	got := ContextWithDecodeIssueReporter(ctx, nil)
+	if got != ctx {
+		t.Error("ContextWithDecodeIssueReporter(nil) should return the original context")
+	}
+}
+
+// ContextWithDecodeIssueReporter: non-nil fn is stored and called via reportDecodeIssue.
+func TestContextWithDecodeIssueReporterCallsReporter(t *testing.T) {
+	var called DecodeIssue
+	ctx := ContextWithDecodeIssueReporter(context.Background(), func(issue DecodeIssue) {
+		called = issue
+	})
+	want := DecodeIssue{Module: "m", OID: "1.2.3", Reason: "invalid_type", Count: 2}
+	reportDecodeIssue(ctx, want)
+	if called != want {
+		t.Errorf("reporter called with %+v, want %+v", called, want)
+	}
+}
+
+// WalkToIntMapStrict: PDU whose OID name does not share the walked prefix
+// increments TrimFailures and is excluded from the result map.
+//
+// Strategy: register a scalar PDU at the root OID (e.g. ".1.2.3") and a
+// sibling PDU at ".1.2.4.1" to push the first BulkGet response out of the
+// walked subtree. gosnmp then falls back to a GetRequest for ".1.2.3" itself
+// and includes the returned PDU in the walk results. TrimOIDPrefix(".1.2.3",
+// ".1.2.3.") returns false, incrementing TrimFailures.
+func TestWalkToIntMapStrictTrimFailure(t *testing.T) {
+	const oid = "1.2.3"
+	pdus := []gsnmp.SnmpPDU{
+		// Scalar leaf at the root OID — GetRequest fallback will return this.
+		{Name: "." + oid, Type: gsnmp.Integer, Value: 99},
+		// Sibling outside the subtree — causes the first BulkGet response to be
+		// out of range, triggering gosnmp's GetRequest fallback for the root.
+		{Name: ".1.2.4.1", Type: gsnmp.Integer, Value: 1},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+	client, err := Open(Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = client.Conn.Close() }()
+
+	m, stats, err := WalkToIntMapStrict(context.Background(), client, "test", oid)
+	if err != nil {
+		t.Fatalf("WalkToIntMapStrict: %v", err)
+	}
+	if stats.TrimFailures == 0 {
+		t.Errorf("TrimFailures = 0, want > 0; stats = %+v", stats)
+	}
+	// The mismatched PDU must not appear in the result map.
+	if _, ok := m[oid]; ok {
+		t.Errorf("result map unexpectedly contains OID key %q: %v", oid, m)
+	}
+}
+
+// WalkToIntMap: cancelled context propagates the error from WalkToIntMapStrict.
+func TestWalkToIntMapError(t *testing.T) {
+	addr := snmptest.Start(t, "public", nil)
+	ip, port := snmptest.ParseAddr(addr)
+	client, err := Open(Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = client.Conn.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel so BulkWalk returns immediately with an error
+
+	m, err := WalkToIntMap(ctx, client, "1.3.6.1.2.1.138.1.6.1.1.2")
+	if err == nil {
+		t.Error("expected error from WalkToIntMap with cancelled context, got nil")
+	}
+	if m != nil {
+		t.Errorf("expected nil map on error, got %v", m)
+	}
+}
+
 // Walk: wrong community causes a timeout and returns a non-nil error.
 // Real devices silently drop packets from unknown communities; our test agent
 // does the same. The client exhausts its retries and Walk returns an error.

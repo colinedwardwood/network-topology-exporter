@@ -1423,3 +1423,87 @@ func TestListenTLSNeitherSet(t *testing.T) {
 		t.Fatalf("expected plain-HTTP config to be valid, got: %v", err)
 	}
 }
+
+// TestListenTLSCertExistsKeyMissing verifies that when both tls_cert_file and
+// tls_key_file are provided but the key file does not exist on disk, Load
+// returns an error (covering the tls_key_file os.Stat branch).
+func TestListenTLSCertExistsKeyMissing(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "cert.pem")
+	if err := os.WriteFile(certPath, []byte("dummy cert"), 0o600); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+
+	cfgPath := filepath.Join(dir, "config.yaml")
+	body := "listen:\n  tls_cert_file: " + certPath + "\n  tls_key_file: /nonexistent/key.pem\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error when tls_key_file does not exist, got nil")
+	}
+}
+
+// TestValidateCycleBudgetFractionOutOfRange verifies that
+// discovery.cycle_budget_fraction values outside (0, 1] are rejected.
+func TestValidateCycleBudgetFractionOutOfRange(t *testing.T) {
+	cases := []string{
+		// > 1
+		"discovery:\n  cycle_budget_fraction: 1.5\n",
+		// exactly 0 — applyDefaults only replaces 0.0 with 0.8, so the YAML
+		// value 0.0 is replaced by the default; use a small negative value to
+		// bypass the defaulting and reach the validation guard directly.
+	}
+	for _, body := range cases {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.yaml")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if _, err := Load(path); err == nil {
+			t.Errorf("cycle_budget_fraction config %q: expected error, got nil", body)
+		}
+	}
+
+	// Negative value bypasses applyDefaults (which only replaces 0) and
+	// directly hits the validation guard.
+	c := &Config{}
+	c.applyDefaults()
+	c.Discovery.CycleBudgetFraction = -0.1
+	if err := c.validate(); err == nil {
+		t.Fatal("expected error for cycle_budget_fraction=-0.1, got nil")
+	}
+}
+
+// TestValidateTimeoutPerModuleNegative verifies that a negative
+// discovery.timeout_per_module causes Load to return an error.
+func TestValidateTimeoutPerModuleNegative(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "discovery:\n  timeout_per_module: -1s\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for timeout_per_module=-1s, got nil")
+	}
+}
+
+// TestValidateHTTPEndpointNoHost verifies that validateHTTPEndpoint rejects a
+// URL that has a valid scheme but an empty host (covers the "host is required"
+// error path).
+func TestValidateHTTPEndpointNoHost(t *testing.T) {
+	// "http:///path" parses successfully with scheme "http" but empty host.
+	if err := validateHTTPEndpoint("http:///path"); err == nil {
+		t.Fatal("expected error for http:///path (empty host), got nil")
+	}
+}
+
+// TestValidateHTTPSEndpointNoHost verifies that validateHTTPSEndpoint rejects
+// a URL that has scheme "https" but an empty host.
+func TestValidateHTTPSEndpointNoHost(t *testing.T) {
+	if err := validateHTTPSEndpoint("https:///path"); err == nil {
+		t.Fatal("expected error for https:///path (empty host), got nil")
+	}
+}
