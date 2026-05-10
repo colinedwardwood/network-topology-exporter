@@ -191,6 +191,7 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	defer r.Body.Close()
 
 	var payload SpokePayload
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<20)) // 16 MiB
@@ -267,11 +268,11 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 	h.spokes[payload.SpokeID] = spokeEntry{payload: payload, lastSeen: now}
 	spokes := h.spokesSnapshot()
 	gen := h.publishGen.Add(1)
+	h.m.FederationSpokeUp.WithLabelValues(payload.SpokeID).Set(1)
+	h.m.FederationSpokeLastPushUnix.WithLabelValues(payload.SpokeID).Set(float64(now.Unix()))
 	h.mu.Unlock()
 	combined := h.buildCombinedGraph(spokes)
 
-	h.m.FederationSpokeUp.WithLabelValues(payload.SpokeID).Set(1)
-	h.m.FederationSpokeLastPushUnix.WithLabelValues(payload.SpokeID).Set(float64(now.Unix()))
 	// LD-13: clear GraphStale atomically inside publishMu on the first live push
 	// so a concurrent scrape never sees fresh edges alongside GraphStale=1.
 	h.tryPublishMetrics(gen, combined, !h.firstLive.Swap(true))
