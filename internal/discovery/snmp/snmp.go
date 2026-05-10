@@ -10,6 +10,7 @@ package snmp
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"regexp"
 	"strings"
@@ -189,8 +190,14 @@ func Walk(ctx context.Context, p Params) (*discovery.Device, error) {
 		case dotOIDSysObjectID:
 			dev.Vendor = vendorFromObjectID(pduOID(pdu))
 		case dotOIDSysUpTime:
+			// sysUpTime wraps to zero after ~497 days; callers cannot distinguish wrap from reboot.
 			if ticks, ok := pdu.Value.(uint32); ok {
 				dev.Uptime = time.Duration(ticks) * 10 * time.Millisecond
+				uptimeSec := dev.Uptime.Seconds()
+				if uptimeSec < 86400 {
+					slog.Debug("snmp: sysUpTime below 24h; may be recent reboot or 497-day counter wrap",
+						"device", dev.ID, "uptime_seconds", uptimeSec)
+				}
 			}
 		}
 	}
