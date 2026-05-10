@@ -271,11 +271,11 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 	h.m.FederationSpokeUp.WithLabelValues(payload.SpokeID).Set(1)
 	h.m.FederationSpokeLastPushUnix.WithLabelValues(payload.SpokeID).Set(float64(now.Unix()))
 	h.mu.Unlock()
-	combined := h.buildCombinedGraph(spokes)
+	combined, unmatchedCount := h.buildCombinedGraph(spokes)
 
 	// LD-13: clear GraphStale atomically inside publishMu on the first live push
 	// so a concurrent scrape never sees fresh edges alongside GraphStale=1.
-	h.tryPublishMetrics(gen, combined, !h.firstLive.Swap(true))
+	h.tryPublishMetrics(gen, combined, !h.firstLive.Swap(true), unmatchedCount)
 	h.writeSnapshotAsync(combined)
 
 	h.logger.Info("hub: spoke push accepted",
@@ -300,7 +300,8 @@ func (h *Hub) spokesSnapshot() map[string]spokeEntry {
 // already holding h.mu. Production paths use spokesSnapshot + buildCombinedGraph
 // to move Reconcile outside the critical section.
 func (h *Hub) combinedGraphLocked() discovery.Graph {
-	return h.buildCombinedGraph(h.spokes)
+	g, _ := h.buildCombinedGraph(h.spokes)
+	return g
 }
 
 // buildCombinedGraph constructs the unified discovery.Graph from the supplied
@@ -308,7 +309,10 @@ func (h *Hub) combinedGraphLocked() discovery.Graph {
 // graph.Reconcile pass so cross-boundary bidirectionality is detected at the
 // hub level per LD-17. Does NOT require h.mu — call spokesSnapshot() under the
 // lock first, then release h.mu before calling this function.
-func (h *Hub) buildCombinedGraph(spokes map[string]spokeEntry) discovery.Graph {
+// The second return value is the count of unmatched OOS observations; callers
+// should only publish this via HubOOSUnmatchedTotal after confirming the build
+// wins the CAS in tryPublishMetrics.
+func (h *Hub) buildCombinedGraph(spokes map[string]spokeEntry) (discovery.Graph, int) {
 	var allDevices []discovery.Device
 	seenDevices := make(map[string]bool)
 	var allEdges []discovery.Edge
@@ -462,13 +466,11 @@ func (h *Hub) buildCombinedGraph(spokes map[string]spokeEntry) discovery.Graph {
 		)
 	}
 
-	h.m.HubOOSUnmatchedTotal.Set(float64(unmatchedCount))
-
 	reconciledEdges, _ := graph.Reconcile(allEdges)
 	return discovery.Graph{
 		Devices: allDevices,
 		Edges:   reconciledEdges,
-	}
+	}, unmatchedCount
 }
 
 // runEviction periodically evicts spokes that have not pushed within
@@ -476,6 +478,9 @@ func (h *Hub) buildCombinedGraph(spokes map[string]spokeEntry) discovery.Graph {
 // distinct failure modes; this path handles domain-level silence, not
 // individual link instability.
 func (h *Hub) runEviction(ctx context.Context) {
+	if h.cfg.SpokeTimeout <= 0 {
+		return // eviction disabled; avoids time.NewTicker(0) panic in tests
+	}
 	ticker := time.NewTicker(h.cfg.SpokeTimeout / 2)
 	defer ticker.Stop()
 	for {
@@ -519,8 +524,8 @@ func (h *Hub) evictSilentSpokes() {
 		spokes := h.spokesSnapshot()
 		gen := h.publishGen.Add(1)
 		h.mu.Unlock()
-		combined := h.buildCombinedGraph(spokes)
-		h.tryPublishMetrics(gen, combined, false)
+		combined, unmatchedCount := h.buildCombinedGraph(spokes)
+		h.tryPublishMetrics(gen, combined, false, unmatchedCount)
 		h.writeSnapshotAsync(combined)
 	}
 }
@@ -540,7 +545,9 @@ func (h *Hub) publishMetrics(g discovery.Graph, clearStale bool) {
 // published generation, preventing a slow concurrent goroutine from overwriting
 // a newer combined graph with an older snapshot. It uses a CAS loop so that two
 // concurrent callers with equal gen do not both publish.
-func (h *Hub) tryPublishMetrics(gen uint64, g discovery.Graph, clearStale bool) {
+// unmatchedCount is only written to HubOOSUnmatchedTotal when the CAS succeeds,
+// so the metric always reflects the winning build rather than a discarded one.
+func (h *Hub) tryPublishMetrics(gen uint64, g discovery.Graph, clearStale bool, unmatchedCount int) {
 	for {
 		last := h.lastPublishedGen.Load()
 		if gen <= last {
@@ -559,6 +566,7 @@ func (h *Hub) tryPublishMetrics(gen uint64, g discovery.Graph, clearStale bool) 
 				h.m.GraphUpdatesRejectedTotal.Inc()
 				return
 			}
+			h.m.HubOOSUnmatchedTotal.Set(float64(unmatchedCount))
 			h.m.Topology.Update(g)
 			if clearStale {
 				h.m.GraphStale.Set(0)

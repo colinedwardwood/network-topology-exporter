@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -134,6 +135,7 @@ func (s *Spoke) post(ctx context.Context, body []byte) error {
 	if err != nil {
 		return fmt.Errorf("push to hub: %w", err)
 	}
+	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("hub returned HTTP %d", resp.StatusCode)

@@ -532,7 +532,10 @@ func TestHubHandlePushSuccessStoresSpokeAndSetsGauges(t *testing.T) {
 		Devices: []discovery.Device{{ID: "sw-1"}},
 		Edges:   []discovery.Edge{},
 	}
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -595,7 +598,10 @@ func TestHubHandlePushRejectsStaleCycleAt(t *testing.T) {
 		SpokeID: "dc-stale",
 		CycleAt: time.Now().Add(-2 * time.Minute), // older than spoke_timeout
 	}
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -769,7 +775,7 @@ func TestHubRestoreGraphPublishesMetrics(t *testing.T) {
 }
 
 // TestHubOOSUnmatchedMetricIncrementsOnMiss verifies that unmatched OOS hints
-// increment the HubOOSUnmatchedTotal gauge.
+// are reflected in HubOOSUnmatchedTotal after the build wins the publish CAS.
 func TestHubOOSUnmatchedMetricIncrementsOnMiss(t *testing.T) {
 	m := metrics.New(false)
 	h := NewHub(config.FederationConfig{SpokeTimeout: 5 * time.Minute}, m, nil, "")
@@ -784,8 +790,12 @@ func TestHubOOSUnmatchedMetricIncrementsOnMiss(t *testing.T) {
 		},
 		lastSeen: time.Now(),
 	}
-	h.combinedGraphLocked()
+	spokes := h.spokesSnapshot()
+	gen := h.publishGen.Add(1)
 	h.mu.Unlock()
+
+	combined, unmatchedCount := h.buildCombinedGraph(spokes)
+	h.tryPublishMetrics(gen, combined, false, unmatchedCount)
 
 	if got := testutil.ToFloat64(m.HubOOSUnmatchedTotal); got == 0 {
 		t.Error("HubOOSUnmatchedTotal = 0, want > 0 for unmatched OOS hint")
@@ -824,7 +834,10 @@ func TestHubHandlePushMissingCycleAt(t *testing.T) {
 	h := newTestHub(nil)
 
 	payload := SpokePayload{SpokeID: "dc-no-time"} // CycleAt is zero
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -845,7 +858,10 @@ func TestHubHandlePushRejectsFutureCycleAt(t *testing.T) {
 		SpokeID: "dc-future",
 		CycleAt: time.Now().Add(10 * time.Minute),
 	}
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -863,7 +879,10 @@ func TestHubHandlePushRejectsEmptySpokeID(t *testing.T) {
 	h := newTestHub(nil)
 
 	payload := SpokePayload{SpokeID: "", CycleAt: time.Now()}
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -906,7 +925,10 @@ func TestHubHandlePushRejectsCertCNMismatch(t *testing.T) {
 
 	// Cert has CN "dc-a"; payload claims spoke_id "dc-b" — mismatch.
 	payload := SpokePayload{SpokeID: "dc-b", CycleAt: time.Now()}
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.TLS = &tls.ConnectionState{
@@ -927,7 +949,10 @@ func TestHubHandlePushAcceptsCertCNMatch(t *testing.T) {
 	h := newTestHub(nil)
 
 	payload := SpokePayload{SpokeID: "dc-match", CycleAt: time.Now()}
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.TLS = &tls.ConnectionState{
@@ -1227,7 +1252,10 @@ func TestHubIsReadyTrueAfterPush(t *testing.T) {
 	h := newTestHub(nil)
 
 	payload := SpokePayload{SpokeID: "dc-ready", CycleAt: time.Now()}
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -1481,7 +1509,7 @@ func TestTryPublishMetricsRejectsOversizedGraphEdges(t *testing.T) {
 		},
 	}
 
-	h.tryPublishMetrics(1, g, false)
+	h.tryPublishMetrics(1, g, false, 0)
 
 	if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal); got != 1 {
 		t.Errorf("GraphUpdatesRejectedTotal = %v, want 1", got)
@@ -1521,7 +1549,7 @@ func TestTryPublishMetricsRejectsOversizedGraphDevices(t *testing.T) {
 		},
 	}
 
-	h.tryPublishMetrics(1, g, false)
+	h.tryPublishMetrics(1, g, false, 0)
 
 	if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal); got != 1 {
 		t.Errorf("GraphUpdatesRejectedTotal = %v, want 1", got)
