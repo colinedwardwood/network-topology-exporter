@@ -275,7 +275,13 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 
 	// LD-13: clear GraphStale atomically inside publishMu on the first live push
 	// so a concurrent scrape never sees fresh edges alongside GraphStale=1.
-	h.tryPublishMetrics(gen, combined, !h.firstLive.Swap(true), unmatchedCount)
+	// Only advance firstLive after tryPublishMetrics confirms the graph was
+	// actually published; the size-budget guard can reject the graph and return
+	// false, which would otherwise leave firstLive=true with no Topology update.
+	wasFirst := !h.firstLive.Load()
+	if h.tryPublishMetrics(gen, combined, wasFirst, unmatchedCount) && wasFirst {
+		h.firstLive.Store(true)
+	}
 	h.writeSnapshotAsync(combined)
 
 	h.logger.Info("hub: spoke push accepted",
@@ -547,14 +553,17 @@ func (h *Hub) publishMetrics(g discovery.Graph, clearStale bool) {
 // concurrent callers with equal gen do not both publish.
 // unmatchedCount is only written to HubOOSUnmatchedTotal when the CAS succeeds,
 // so the metric always reflects the winning build rather than a discarded one.
-func (h *Hub) tryPublishMetrics(gen uint64, g discovery.Graph, clearStale bool, unmatchedCount int) {
+// Returns true only when Topology.Update is actually called (i.e. the graph was
+// accepted and published). Returns false when the CAS lost the race or the
+// size-budget guard rejected the graph.
+func (h *Hub) tryPublishMetrics(gen uint64, g discovery.Graph, clearStale bool, unmatchedCount int) bool {
 	for {
 		last := h.lastPublishedGen.Load()
 		if gen <= last {
 			if clearStale {
 				h.m.GraphStale.Set(0)
 			}
-			return
+			return false
 		}
 		if h.lastPublishedGen.CompareAndSwap(last, gen) {
 			maxEdges := h.cfg.Hub.MaxGraphEdges
@@ -564,14 +573,14 @@ func (h *Hub) tryPublishMetrics(gen uint64, g discovery.Graph, clearStale bool, 
 					"edges", len(g.Edges), "max_edges", maxEdges,
 					"devices", len(g.Devices), "max_devices", maxDevices)
 				h.m.GraphUpdatesRejectedTotal.Inc()
-				return
+				return false
 			}
 			h.m.HubOOSUnmatchedTotal.Set(float64(unmatchedCount))
 			h.m.Topology.Update(g)
 			if clearStale {
 				h.m.GraphStale.Set(0)
 			}
-			return
+			return true
 		}
 	}
 }

@@ -671,38 +671,22 @@ func TestHubWriteSnapshotPersistsGraph(t *testing.T) {
 	}
 }
 
-// TestHubWriteSnapshotAsyncTimesOut verifies the NFS-stall protection in
-// writeSnapshotAsync: when the inner write goroutine blocks beyond
-// snapshotWriteTimeout, the outer goroutine exits without updating
-// SnapshotLastWrittenUnix. The caller (handlePush or evictSilentSpokes) must
-// not block — writeSnapshotAsync must return immediately.
-func TestHubWriteSnapshotAsyncTimesOut(t *testing.T) {
-	block := make(chan struct{})
+// TestWriteSnapshotAsyncIsNonBlocking verifies that writeSnapshotAsync returns
+// immediately even when the snapshot channel is already full. The actual
+// NFS-stall timeout behaviour (runSnapshotWriter dropping a slow write and
+// continuing) is tested in TestRunSnapshotWriterTimeoutContinues.
+func TestWriteSnapshotAsyncIsNonBlocking(t *testing.T) {
 	m := metrics.New(false)
 	h := NewHub(config.FederationConfig{}, m, nil, t.TempDir()+"/snap.json")
-	// Use a short timeout and a blocking write fn; both are Hub fields, so
-	// setting them before any goroutines start establishes happens-before.
-	h.snapshotWriteTimeout = 20 * time.Millisecond
-	h.snapshotWriteFn = func(string, snapshot.File) error {
-		<-block
-		return nil
-	}
+
+	// Fill the channel (capacity 1) so the next send would block if async were blocking.
+	h.snapshotCh <- discovery.Graph{}
 
 	start := time.Now()
-	h.writeSnapshotAsync(discovery.Graph{})
+	h.writeSnapshotAsync(discovery.Graph{}) // channel full — must drop and return immediately
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Errorf("writeSnapshotAsync blocked for %v — must return immediately", elapsed)
 	}
-
-	// Wait for the timeout to fire (20 ms) + margin.
-	time.Sleep(200 * time.Millisecond)
-
-	if got := testutil.ToFloat64(m.SnapshotLastWrittenUnix); got != 0 {
-		t.Errorf("SnapshotLastWrittenUnix = %v after stalled write, want 0", got)
-	}
-
-	// Unblock the inner goroutine so it doesn't leak beyond the test.
-	close(block)
 }
 
 // TestHubWriteSnapshotNoopWhenPathEmpty verifies that writeSnapshot is a no-op

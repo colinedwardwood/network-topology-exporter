@@ -136,6 +136,7 @@ func buildEdges(localDevice string, rows map[string]*nbrRow, allowedNets []*net.
 			oos = append(oos, discovery.OutOfScopeNeighbour{
 				ReportingDevice: localDevice,
 				NeighbourHint:   row.nbrIP.String(),
+				FirstSeen:       now,
 				LastSeen:        now,
 			})
 			continue

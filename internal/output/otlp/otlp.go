@@ -326,6 +326,9 @@ func (e *Exporter) post(ctx context.Context, path string, payload any) error {
 				return ctx.Err()
 			}
 			delay *= 2
+			if delay > postMaxRetryAfter {
+				delay = postMaxRetryAfter
+			}
 		}
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.cfg.Endpoint+path, bytes.NewReader(body))
