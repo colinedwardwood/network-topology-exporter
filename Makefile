@@ -50,7 +50,13 @@ tidy: ## go mod tidy
 
 .PHONY: docker
 docker: ## Build the container image
-	docker build -t network-topology-exporter:$(VERSION) -t network-topology-exporter:dev .
+	docker build \
+	  --build-arg VERSION=$(VERSION) \
+	  --build-arg COMMIT=$(COMMIT) \
+	  --build-arg DATE=$(DATE) \
+	  -t network-topology-exporter:$(VERSION) \
+	  -t network-topology-exporter:dev \
+	  .
 
 .PHONY: test-integration
 test-integration: ## Run integration tests (requires no extra dependencies)
