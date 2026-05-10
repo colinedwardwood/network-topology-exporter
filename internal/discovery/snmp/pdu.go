@@ -182,7 +182,10 @@ func WalkIfNamesWithFallback(ctx context.Context, client *g.GoSNMP) (map[int]str
 	if descrErr == nil && len(descr) > 0 {
 		return descr, nil
 	}
-	return nil, err // return original ifName error
+	if err != nil {
+		return nil, err
+	}
+	return nil, descrErr
 }
 
 // WalkARPTable walks the ipNetToMediaTable and returns a map of MAC address
