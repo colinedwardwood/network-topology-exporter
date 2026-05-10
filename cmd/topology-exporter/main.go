@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"flag"
 	"fmt"
@@ -730,7 +731,17 @@ func runCycle(
 		rawEdges = append(rawEdges, r.edges...)
 		allOOS = append(allOOS, r.outOfScope...)
 	}
-	resolveEdgeDstDevices(rawEdges, ipToID)
+	// Build MAC→sysName identity index from LLDP observations.
+	// LLDP emits peer_chassis_mac in Metadata when it knows both the MAC and sysName of a peer.
+	macToID := make(map[string]string)
+	for _, e := range rawEdges {
+		if e.DiscoveryProto == "lldp" {
+			if mac, ok := e.Metadata["peer_chassis_mac"]; ok && e.DstDevice != "" {
+				macToID[mac] = e.DstDevice
+			}
+		}
+	}
+	resolveEdgeDstDevices(rawEdges, ipToID, macToID)
 
 	reconciledEdges, conflicts := graph.Reconcile(rawEdges)
 
@@ -783,16 +794,33 @@ func collectDegradedReasons(edges []discovery.Edge) []string {
 	return reasons
 }
 
-// resolveEdgeDstDevices replaces IP-valued DstDevice fields with the
-// canonical device ID (sysName) from the discovered inventory when available.
-// BGP/OSPF/IS-IS walks report peer IPs as DstDevice; LLDP reports sysNames.
-// Resolving to sysName allows graph.Reconcile to deduplicate edges that
-// represent the same physical link reported by different protocols.
-func resolveEdgeDstDevices(edges []discovery.Edge, ipToID map[string]string) {
+// macAddrHash returns a short, stable SHA-256-derived surrogate for a MAC
+// address, used as a fallback dst_device label when the MAC cannot be resolved
+// to a sysName via the LLDP identity index. Hashing bounds Prometheus label
+// cardinality for unresolved FDB peers.
+func macAddrHash(mac net.HardwareAddr) string {
+	sum := sha256.Sum256(mac)
+	return fmt.Sprintf("mac-%x", sum[:4])
+}
+
+// resolveEdgeDstDevices replaces IP-valued and MAC-valued DstDevice fields with
+// the canonical device ID (sysName) from the discovered inventory when available.
+// BGP/OSPF/IS-IS walks report peer IPs; FDB reports raw MACs; LLDP reports sysNames.
+// For IP DstDevices: resolves to sysName using the device walk inventory.
+// For MAC DstDevices: resolves to sysName via the LLDP identity index; unresolved
+// MACs are hashed to mac-<8hex> to bound Prometheus label cardinality.
+func resolveEdgeDstDevices(edges []discovery.Edge, ipToID map[string]string, macToID map[string]string) {
 	for i := range edges {
-		if net.ParseIP(edges[i].DstDevice) != nil {
-			if id, ok := ipToID[edges[i].DstDevice]; ok {
+		dst := edges[i].DstDevice
+		if net.ParseIP(dst) != nil {
+			if id, ok := ipToID[dst]; ok {
 				edges[i].DstDevice = id
+			}
+		} else if hw, err := net.ParseMAC(dst); err == nil {
+			if id, ok := macToID[dst]; ok {
+				edges[i].DstDevice = id
+			} else {
+				edges[i].DstDevice = macAddrHash(hw)
 			}
 		}
 	}

@@ -427,6 +427,131 @@ func TestServiceResourceAttributes(t *testing.T) {
 	}
 }
 
+// TestPushGraphEdgeMetadata verifies that per-edge metadata is serialised as
+// attributes with the network.topology. prefix, covering the metadata loop.
+func TestPushGraphEdgeMetadata(t *testing.T) {
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody = decodeBody(t, r)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+
+	g := discovery.Graph{
+		Edges: []discovery.Edge{
+			{
+				SrcDevice:      "sw-a",
+				SrcPort:        "Gi0/1",
+				DstDevice:      "sw-b",
+				DstPort:        "Gi0/2",
+				DiscoveryProto: "lldp",
+				LinkKind:       "ethernet",
+				Metadata:       map[string]string{"vlan": "100", "speed": "1G"},
+			},
+		},
+	}
+
+	if err := exp.PushGraph(context.Background(), g); err != nil {
+		t.Fatalf("PushGraph: %v", err)
+	}
+
+	metrics := drillMetrics(t, gotBody)
+	edgePoints, ok := metrics["network_topology_edge"]
+	if !ok || len(edgePoints) != 1 {
+		t.Fatalf("expected 1 edge data point, got %v", edgePoints)
+	}
+
+	pt := edgePoints[0]
+	if pt["network.topology.vlan"] != "100" {
+		t.Errorf("metadata attr network.topology.vlan = %v, want 100", pt["network.topology.vlan"])
+	}
+	if pt["network.topology.speed"] != "1G" {
+		t.Errorf("metadata attr network.topology.speed = %v, want 1G", pt["network.topology.speed"])
+	}
+}
+
+// TestPushChangesNoBeforeNoAfterTimestamp verifies the fallback to time.Now()
+// when neither Before nor After has a valid ObservedAt timestamp.
+func TestPushChangesNoBeforeNoAfterTimestamp(t *testing.T) {
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody = decodeBody(t, r)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+
+	// Both Before and After are nil — timestamp must default to time.Now().
+	changes := []graph.EdgeChange{
+		{Kind: graph.ChangeAdded},
+	}
+
+	if err := exp.PushChanges(context.Background(), changes); err != nil {
+		t.Fatalf("PushChanges: %v", err)
+	}
+
+	records := drillLogs(t, gotBody)
+	if len(records) != 1 {
+		t.Fatalf("log records = %d, want 1", len(records))
+	}
+	// TimeUnixNano must be a non-empty string (the time.Now() path was hit).
+	ts, ok := records[0]["timeUnixNano"].(string)
+	if !ok || ts == "" {
+		t.Errorf("timeUnixNano = %v, want non-empty string", records[0]["timeUnixNano"])
+	}
+}
+
+// TestPostAllRetriesExhausted503 verifies that post returns an error after
+// exhausting all retries on persistent 503 responses.
+func TestPostAllRetriesExhausted503(t *testing.T) {
+	var hitCount int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hitCount++
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+
+	err := exp.PushGraph(context.Background(), discovery.Graph{})
+	if err == nil {
+		t.Fatal("expected error after exhausting all 503 retries, got nil")
+	}
+	// postMaxAttempts = 3: all three must have been tried.
+	if hitCount != 3 {
+		t.Errorf("server hit count = %d, want 3", hitCount)
+	}
+}
+
+// TestPostContextCancelledDuringRetryDelay verifies that post returns ctx.Err()
+// when the context is cancelled while waiting for a retry delay (503 path).
+func TestPostContextCancelledDuringRetryDelay(t *testing.T) {
+	// Cancel the context after the first request returns so that the retry
+	// delay select hits the ctx.Done() branch instead of time.After.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// The server cancels ctx immediately after responding 503, before the
+	// retry delay (postBaseDelay = 100ms + jitter) can fire.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		cancel()
+	}))
+	defer srv.Close()
+
+	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+
+	err := exp.PushGraph(ctx, discovery.Graph{})
+	if err == nil {
+		t.Fatal("expected error when context cancelled during retry, got nil")
+	}
+}
+
 // TestSchemaURLPresent verifies that the serialised OTLP metrics payload
 // includes a schemaUrl field set to the OpenTelemetry 1.21.0 schema URL.
 func TestSchemaURLPresent(t *testing.T) {

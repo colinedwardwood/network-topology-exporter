@@ -33,8 +33,8 @@ func TestBuildEdgesDirectAdjacency(t *testing.T) {
 	if e.SrcPort != "GigabitEthernet0/1" {
 		t.Errorf("SrcPort = %q, want GigabitEthernet0/1", e.SrcPort)
 	}
-	if e.DstDevice != "mac-10414054" {
-		t.Errorf("DstDevice = %q, want mac-10414054", e.DstDevice)
+	if e.DstDevice != "00:0a:bb:cc:dd:ee" {
+		t.Errorf("DstDevice = %q, want 00:0a:bb:cc:dd:ee", e.DstDevice)
 	}
 	if e.Adjacency != discovery.AdjacencyDirect {
 		t.Errorf("Adjacency = %q, want direct", e.Adjacency)
@@ -82,8 +82,8 @@ func TestBuildEdgesFiltersNonLearned(t *testing.T) {
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge (only learned), got %d", len(edges))
 	}
-	if edges[0].DstDevice != "mac-20316a8c" {
-		t.Errorf("DstDevice = %q, want mac-20316a8c", edges[0].DstDevice)
+	if edges[0].DstDevice != "00:01:02:03:04:07" {
+		t.Errorf("DstDevice = %q, want 00:01:02:03:04:07", edges[0].DstDevice)
 	}
 }
 
@@ -223,8 +223,8 @@ func TestWalkEndToEnd(t *testing.T) {
 	if e.SrcPort != "GigabitEthernet0/1" {
 		t.Errorf("SrcPort = %q, want GigabitEthernet0/1", e.SrcPort)
 	}
-	if e.DstDevice != "mac-10414054" {
-		t.Errorf("DstDevice = %q, want mac-10414054", e.DstDevice)
+	if e.DstDevice != "00:0a:bb:cc:dd:ee" {
+		t.Errorf("DstDevice = %q, want 00:0a:bb:cc:dd:ee", e.DstDevice)
 	}
 	if e.Adjacency != discovery.AdjacencyDirect {
 		t.Errorf("Adjacency = %q, want direct", e.Adjacency)
@@ -322,11 +322,11 @@ func TestWalkEndToEndQBridge(t *testing.T) {
 	for _, e := range edges {
 		seen[e.DstDevice] = true
 	}
-	if !seen["mac-10414054"] {
-		t.Errorf("expected DstDevice mac-10414054 in edges")
+	if !seen["00:0a:bb:cc:dd:ee"] {
+		t.Errorf("expected DstDevice 00:0a:bb:cc:dd:ee in edges")
 	}
-	if !seen["mac-649065c0"] {
-		t.Errorf("expected DstDevice mac-649065c0 in edges")
+	if !seen["00:aa:bb:cc:dd:01"] {
+		t.Errorf("expected DstDevice 00:aa:bb:cc:dd:01 in edges")
 	}
 }
 
@@ -409,13 +409,13 @@ func TestWalkVlanCommunityFdbDiscovery(t *testing.T) {
 
 	found := false
 	for _, e := range edges {
-		if e.DstDevice == "mac-b5cafd7b" {
+		if e.DstDevice == "00:aa:bb:cc:dd:ee" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected edge with DstDevice mac-b5cafd7b, got %v", edges)
+		t.Errorf("expected edge with DstDevice 00:aa:bb:cc:dd:ee, got %v", edges)
 	}
 }
 

@@ -72,7 +72,6 @@ package fdb
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"net"
@@ -197,14 +196,6 @@ func walkFdbTableInto(ctx context.Context, client *gsnmp.GoSNMP, entries map[str
 		}
 	}
 	return nil
-}
-
-// macAddrHash returns a short, stable SHA-256-derived surrogate for a MAC
-// address, used as the dst_device label value on FDB direct edges. Raw MAC
-// values are logged at Debug; only the hash appears in metric labels.
-func macAddrHash(mac net.HardwareAddr) string {
-	sum := sha256.Sum256(mac)
-	return fmt.Sprintf("mac-%x", sum[:4])
 }
 
 // parseQBridgeIndex parses a Q-BRIDGE OID instance suffix of the form
@@ -442,14 +433,14 @@ func buildEdges(localDevice string, entries map[string]*fdbEntry, bridgePorts ma
 			continue
 		}
 
-		hash := macAddrHash(macs[0])
+		rawMAC := macs[0].String()
 		slog.Debug("fdb: direct peer",
 			"local_device", localDevice, "local_port", localPort,
-			"dst_device", hash, "raw_mac", macs[0].String())
+			"dst_device", rawMAC)
 		edges = append(edges, discovery.Edge{
 			SrcDevice:      localDevice,
 			SrcPort:        localPort,
-			DstDevice:      hash,
+			DstDevice:      rawMAC,
 			DiscoveryProto: "fdb",
 			Direction:      discovery.DirectionUnidirectional,
 			Confidence:     discovery.ConfidenceMedium,

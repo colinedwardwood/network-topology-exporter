@@ -36,7 +36,7 @@ The exporter is not public-release ready for enterprise use because it can still
 - [x] **Introduce Discovery Budget Controller**: `CycleBudgetFraction` (default 0.8) derives a `cycleCtx` deadline at `now + interval × fraction`; all module goroutines use `cycleCtx` so cycles are cancelled before the next interval begins.
   **Reference**: Queueing stability principle (`service_time < inter-arrival_time`) and Prometheus scrape SLO design.
 
-- [ ] **Two-Phase Graph Assembly**: Separate raw observation ingest from canonical link synthesis (identity resolution, dedupe, confidence arbitration, and suppression of endpoint noise).
+- [x] **Two-Phase Graph Assembly**: Phase 1 observation: FDB edges carry raw MAC strings as DstDevice; LLDP edges annotate `peer_chassis_mac` in Metadata when the peer advertises both a MAC chassis ID and a sysName. Phase 2 synthesis: `runCycle` in `main.go` builds a MAC→sysName identity index from LLDP observations and passes it to `resolveEdgeDstDevices`, which resolves known MACs to sysNames and hashes unresolved MACs to `mac-<8hex>`. This allows `graph.Reconcile` to deduplicate LLDP and FDB edges for the same physical link.
   **Reference**: NetInventory reconciliation model and RFC 8345 logical separation of nodes/links.
 
 - [x] **Replace Global Fan-Out with Work-Stealing + Deadline Partitioning**: `TimeoutPerModule` (opt-in) wraps each module walk in `context.WithTimeout(devCtx, TimeoutPerModule)`; prevents one slow SNMP walk from consuming the full per-device budget.
