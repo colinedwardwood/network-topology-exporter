@@ -64,7 +64,10 @@ func generateTestPKI(t *testing.T, dir, spokeID string) testPKI {
 	caCert, _ := x509.ParseCertificate(caDER)
 
 	// Server cert — IP SAN for 127.0.0.1 so the spoke's TLS client can verify it.
-	serverKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	serverKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate server key: %v", err)
+	}
 	serverTmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
 		Subject:      pkix.Name{CommonName: "hub"},
@@ -74,10 +77,16 @@ func generateTestPKI(t *testing.T, dir, spokeID string) testPKI {
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
 	}
-	serverDER, _ := x509.CreateCertificate(rand.Reader, serverTmpl, caCert, &serverKey.PublicKey, caKey)
+	serverDER, err := x509.CreateCertificate(rand.Reader, serverTmpl, caCert, &serverKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create server cert: %v", err)
+	}
 
 	// Client cert — CN = spokeID so the hub's LD-21 check passes.
-	clientKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	clientKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate client key: %v", err)
+	}
 	clientTmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(3),
 		Subject:      pkix.Name{CommonName: spokeID},
@@ -86,7 +95,10 @@ func generateTestPKI(t *testing.T, dir, spokeID string) testPKI {
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
-	clientDER, _ := x509.CreateCertificate(rand.Reader, clientTmpl, caCert, &clientKey.PublicKey, caKey)
+	clientDER, err := x509.CreateCertificate(rand.Reader, clientTmpl, caCert, &clientKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create client cert: %v", err)
+	}
 
 	write := func(name string, blocks ...*pem.Block) string {
 		path := filepath.Join(dir, name)
@@ -103,8 +115,14 @@ func generateTestPKI(t *testing.T, dir, spokeID string) testPKI {
 		return path
 	}
 
-	serverKeyDER, _ := x509.MarshalECPrivateKey(serverKey)
-	clientKeyDER, _ := x509.MarshalECPrivateKey(clientKey)
+	serverKeyDER, err := x509.MarshalECPrivateKey(serverKey)
+	if err != nil {
+		t.Fatalf("marshal server key: %v", err)
+	}
+	clientKeyDER, err := x509.MarshalECPrivateKey(clientKey)
+	if err != nil {
+		t.Fatalf("marshal client key: %v", err)
+	}
 
 	return testPKI{
 		caCertFile:     write("ca.pem", &pem.Block{Type: "CERTIFICATE", Bytes: caDER}),

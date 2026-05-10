@@ -79,7 +79,7 @@ func TestRunCycleTwoDevices(t *testing.T) {
 			FallbackOrder: []string{"default"},
 		},
 		Snapshot: config.SnapshotConfig{
-			Path: t.TempDir() + "/snapshot.json",
+			Path: filepath.Join(t.TempDir(), "snapshot.json"),
 		},
 		Targets: []config.TargetConfig{
 			{Host: "127.0.0.1", Port: int(port1)},
@@ -338,7 +338,7 @@ func TestRunCycleLLDPEdge(t *testing.T) {
 			FallbackOrder: []string{"default"},
 		},
 		Snapshot: config.SnapshotConfig{
-			Path: t.TempDir() + "/snapshot.json",
+			Path: filepath.Join(t.TempDir(), "snapshot.json"),
 		},
 		Targets: []config.TargetConfig{
 			{Host: "127.0.0.1", Port: int(port1)},
@@ -522,7 +522,7 @@ func TestRunDiscoveryLoopClearsGraphStale(t *testing.T) {
 			},
 			FallbackOrder: []string{"default"},
 		},
-		Snapshot: config.SnapshotConfig{Path: t.TempDir() + "/snap.json"},
+		Snapshot: config.SnapshotConfig{Path: filepath.Join(t.TempDir(), "snap.json")},
 		Targets:  []config.TargetConfig{{Host: "127.0.0.1", Port: int(port)}},
 	}
 
@@ -999,6 +999,7 @@ func TestRunDiscoveryLoopWithSnapshot(t *testing.T) {
 	deadline1 := time.After(12 * time.Second)
 	poll1 := time.NewTicker(50 * time.Millisecond)
 	defer poll1.Stop()
+outer:
 	for {
 		select {
 		case <-deadline1:
@@ -1007,11 +1008,10 @@ func TestRunDiscoveryLoopWithSnapshot(t *testing.T) {
 			if testutil.ToFloat64(m1.SnapshotLastWrittenUnix) > 0 {
 				cancel1()
 				<-done1
-				goto snapshotReady
+				break outer
 			}
 		}
 	}
-snapshotReady:
 
 	// Now start a second loop — it should load the snapshot produced above.
 	m2 := metrics.New(false)
@@ -1078,7 +1078,7 @@ func TestRunDiscoveryLoopSecondTick(t *testing.T) {
 			},
 			FallbackOrder: []string{"default"},
 		},
-		Snapshot: config.SnapshotConfig{Path: t.TempDir() + "/snap.json"},
+		Snapshot: config.SnapshotConfig{Path: filepath.Join(t.TempDir(), "snap.json")},
 		Targets:  []config.TargetConfig{{Host: "127.0.0.1", Port: int(port)}},
 	}
 
@@ -1150,7 +1150,7 @@ func TestRunDiscoveryLoopContextCancelledDuringCycle(t *testing.T) {
 			},
 			FallbackOrder: []string{"default"},
 		},
-		Snapshot: config.SnapshotConfig{Path: t.TempDir() + "/snap.json"},
+		Snapshot: config.SnapshotConfig{Path: filepath.Join(t.TempDir(), "snap.json")},
 		Targets:  []config.TargetConfig{{Host: "127.0.0.1", Port: int(port)}},
 	}
 
@@ -1201,7 +1201,7 @@ func TestRunDiscoveryLoopCredResolverError(t *testing.T) {
 				{CIDR: "not-a-cidr", Profiles: []string{"p"}},
 			},
 		},
-		Snapshot: config.SnapshotConfig{Path: t.TempDir() + "/snap.json"},
+		Snapshot: config.SnapshotConfig{Path: filepath.Join(t.TempDir(), "snap.json")},
 	}
 
 	m := metrics.New(false)
@@ -1272,7 +1272,7 @@ func TestRunCycleAllCredentialsFail(t *testing.T) {
 			},
 			FallbackOrder: []string{"wrong"},
 		},
-		Snapshot: config.SnapshotConfig{Path: t.TempDir() + "/snap.json"},
+		Snapshot: config.SnapshotConfig{Path: filepath.Join(t.TempDir(), "snap.json")},
 		Targets:  []config.TargetConfig{{Host: "127.0.0.1", Port: int(port)}},
 	}
 
@@ -1317,7 +1317,7 @@ func TestRunCycleDeviceLabels(t *testing.T) {
 			},
 			FallbackOrder: []string{"default"},
 		},
-		Snapshot: config.SnapshotConfig{Path: t.TempDir() + "/snap.json"},
+		Snapshot: config.SnapshotConfig{Path: filepath.Join(t.TempDir(), "snap.json")},
 		Targets: []config.TargetConfig{{
 			Host: "127.0.0.1",
 			Port: int(port),
@@ -1389,7 +1389,7 @@ func TestRunCycleExpiredUnconfirmedEdge(t *testing.T) {
 			},
 			FallbackOrder: []string{"default"},
 		},
-		Snapshot: config.SnapshotConfig{Path: t.TempDir() + "/snap.json"},
+		Snapshot: config.SnapshotConfig{Path: filepath.Join(t.TempDir(), "snap.json")},
 		Targets: []config.TargetConfig{
 			{Host: "127.0.0.1", Port: int(portA)},
 			{Host: "127.0.0.1", Port: int(portC)},
@@ -1473,7 +1473,7 @@ func TestRunCycleHostnameDNSFailure(t *testing.T) {
 			},
 			FallbackOrder: []string{"default"},
 		},
-		Snapshot: config.SnapshotConfig{Path: t.TempDir() + "/snap.json"},
+		Snapshot: config.SnapshotConfig{Path: filepath.Join(t.TempDir(), "snap.json")},
 		Targets: []config.TargetConfig{
 			// this-hostname-does-not-exist.invalid will fail DNS lookup.
 			{Host: "this-hostname-does-not-exist.invalid", Port: 161},
@@ -1525,7 +1525,7 @@ func TestRunCycleHostnameOutsideAllowList(t *testing.T) {
 			},
 			FallbackOrder: []string{"default"},
 		},
-		Snapshot: config.SnapshotConfig{Path: t.TempDir() + "/snap.json"},
+		Snapshot: config.SnapshotConfig{Path: filepath.Join(t.TempDir(), "snap.json")},
 		Targets: []config.TargetConfig{
 			// localhost resolves to 127.0.0.1, outside 192.0.2.0/24.
 			{Host: "localhost", Port: int(port)},
@@ -2108,7 +2108,7 @@ func TestGraphSizeAdmissionControl(t *testing.T) {
 			},
 			FallbackOrder: []string{"default"},
 		},
-		Snapshot: config.SnapshotConfig{Path: t.TempDir() + "/snap.json"},
+		Snapshot: config.SnapshotConfig{Path: filepath.Join(t.TempDir(), "snap.json")},
 		Targets:  targets,
 	}
 
