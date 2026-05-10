@@ -794,48 +794,10 @@ func runCycle(
 		rawEdges = append(rawEdges, r.edges...)
 		allOOS = append(allOOS, r.outOfScope...)
 	}
-	// Build MAC→sysName identity index from LLDP observations.
-	// LLDP sets MetadataKeyPeerChassisMac when it knows both the MAC and sysName of a peer.
-	macToID := make(map[string]string)
-	for _, e := range rawEdges {
-		if e.DiscoveryProto == "lldp" {
-			if mac, ok := e.Metadata[discovery.MetadataKeyPeerChassisMac]; ok && e.DstDevice != "" {
-				macToID[mac] = e.DstDevice
-			}
-		}
-	}
-	// Second resolution path: ARP table entries.
-	// If a MAC is not already in macToID (no LLDP correlation) but it appears
-	// in the ARP table of a polled device and that IP is a known device, resolve it.
-	for mac, ip := range allARPMACs {
-		if _, resolved := macToID[mac]; resolved {
-			continue // LLDP takes precedence
-		}
-		if id, ok := ipToID[ip]; ok {
-			macToID[mac] = id
-		}
-	}
-	rawEdges = resolveEdgeDstDevices(rawEdges, ipToID, macToID, m.FDBSuppressedMACs)
+	canonicalEdges := synthesizeEdges(rawEdges, ipToID, allARPMACs, m.FDBSuppressedMACs)
 
-	// Backfill DstPort on FDB edges from LLDP observations with matching endpoints.
-	// After MAC→sysName resolution, LLDP and FDB can agree on all four endpoint
-	// fields, letting graph.Reconcile merge them into one edge (LLDP wins on rank).
-	type epKey struct{ src, srcPort, dst string }
-	lldpDstPort := make(map[epKey]string, len(rawEdges))
-	for _, e := range rawEdges {
-		if e.DiscoveryProto == "lldp" && e.DstPort != "" {
-			lldpDstPort[epKey{e.SrcDevice, e.SrcPort, e.DstDevice}] = e.DstPort
-		}
-	}
-	for i := range rawEdges {
-		if rawEdges[i].DiscoveryProto == "fdb" && rawEdges[i].DstPort == "" {
-			if p, ok := lldpDstPort[epKey{rawEdges[i].SrcDevice, rawEdges[i].SrcPort, rawEdges[i].DstDevice}]; ok {
-				rawEdges[i].DstPort = p
-			}
-		}
-	}
-
-	reconciledEdges, conflicts := graph.Reconcile(rawEdges)
+	// Phase 2 complete; run reconciliation.
+	reconciledEdges, conflicts := graph.Reconcile(canonicalEdges)
 
 	// LD-14: advance unconfirmed-link age counters and drop expired edges.
 	ages := maps.Clone(prevAges)
@@ -884,6 +846,60 @@ func collectDegradedReasons(edges []discovery.Edge) []string {
 		reasons = append(reasons, reason)
 	}
 	return reasons
+}
+
+// synthesizeEdges resolves protocol-level observations into canonical graph edges.
+//
+// Phase 1 (done by callers): each protocol module emits observations with raw
+// endpoints — MACs from FDB/LLDP, IPs from CDP/BGP — into rawEdges.
+//
+// Phase 2 (this function): resolve endpoints to sysName device IDs using the
+// LLDP chassis-MAC index and ARP table, backfill missing DstPorts from LLDP
+// observations that share the same three-endpoint tuple, and drop observations
+// whose remote endpoint could not be resolved to a known device.
+func synthesizeEdges(
+	rawEdges []discovery.Edge,
+	ipToID map[string]string,
+	arpMACToIP map[string]string,
+	suppressedCounter prometheus.Counter,
+) []discovery.Edge {
+	// Build MAC→sysName index from LLDP chassis MAC annotations.
+	macToID := make(map[string]string)
+	for _, e := range rawEdges {
+		if e.DiscoveryProto == "lldp" {
+			if mac, ok := e.Metadata[discovery.MetadataKeyPeerChassisMac]; ok && e.DstDevice != "" {
+				macToID[mac] = e.DstDevice
+			}
+		}
+	}
+	// Second resolution path: ARP table. LLDP takes precedence.
+	for mac, ip := range arpMACToIP {
+		if _, resolved := macToID[mac]; resolved {
+			continue
+		}
+		if id, ok := ipToID[ip]; ok {
+			macToID[mac] = id
+		}
+	}
+
+	edges := resolveEdgeDstDevices(rawEdges, ipToID, macToID, suppressedCounter)
+
+	// Backfill DstPort on FDB edges from LLDP observations with matching endpoints.
+	type epKey struct{ src, srcPort, dst string }
+	lldpDstPort := make(map[epKey]string, len(edges))
+	for _, e := range edges {
+		if e.DiscoveryProto == "lldp" && e.DstPort != "" {
+			lldpDstPort[epKey{e.SrcDevice, e.SrcPort, e.DstDevice}] = e.DstPort
+		}
+	}
+	for i := range edges {
+		if edges[i].DiscoveryProto == "fdb" && edges[i].DstPort == "" {
+			if p, ok := lldpDstPort[epKey{edges[i].SrcDevice, edges[i].SrcPort, edges[i].DstDevice}]; ok {
+				edges[i].DstPort = p
+			}
+		}
+	}
+	return edges
 }
 
 // resolveEdgeDstDevices replaces IP-valued and MAC-valued DstDevice fields with
