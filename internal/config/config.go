@@ -336,6 +336,9 @@ func (c *Config) applyDefaults() {
 	if c.Output.OTLP.HeartbeatCycles == 0 {
 		c.Output.OTLP.HeartbeatCycles = 10
 	}
+	if c.Output.OTLP.Timeout == 0 {
+		c.Output.OTLP.Timeout = 10 * time.Second
+	}
 }
 
 func (c *Config) validateListen() error {
