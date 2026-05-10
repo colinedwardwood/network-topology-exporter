@@ -3,6 +3,7 @@ package snmp
 import (
 	"context"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -1140,5 +1141,33 @@ func TestWalkWrongCommunity(t *testing.T) {
 	}
 	if dev != nil {
 		t.Errorf("expected nil device on auth failure, got %+v", dev)
+	}
+}
+
+// NormaliseName: a string longer than 255 bytes is capped at exactly 255 bytes.
+func TestNormaliseNameCap(t *testing.T) {
+	input := strings.Repeat("a", 300)
+	got := NormaliseName(input)
+	if len(got) != 255 {
+		t.Errorf("NormaliseName(300-byte string) len = %d, want 255", len(got))
+	}
+}
+
+// ParseCIDRsStrict: a malformed CIDR entry returns a non-nil error.
+func TestParseStrictRejectsInvalid(t *testing.T) {
+	_, err := ParseCIDRsStrict([]string{"not-a-cidr"})
+	if err == nil {
+		t.Error("ParseCIDRsStrict(invalid) expected error, got nil")
+	}
+}
+
+// ParseCIDRsStrict: all valid CIDRs return no error and the correct count.
+func TestParseStrictAcceptsValid(t *testing.T) {
+	nets, err := ParseCIDRsStrict([]string{"10.0.0.0/8", "192.168.1.0/24"})
+	if err != nil {
+		t.Fatalf("ParseCIDRsStrict(valid) unexpected error: %v", err)
+	}
+	if len(nets) != 2 {
+		t.Errorf("ParseCIDRsStrict returned %d nets, want 2", len(nets))
 	}
 }
