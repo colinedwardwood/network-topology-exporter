@@ -11,16 +11,16 @@ discovery:
   timeout_per_device: 10s
   parallelism: 20
 
-  # LD-11: hard polling-scope guard. The exporter polls only IPs within this
-  # allow-list. LLDP/CDP-discovered neighbours whose IPs fall outside surface
-  # as network_topology_out_of_scope_neighbours_total (and a log line) but are
-  # never polled. Required when targets: is set.
+  # Polling-scope guard (hard allow-list). The exporter polls only IPs within
+  # this allow-list. LLDP/CDP-discovered neighbours whose IPs fall outside
+  # surface as network_topology_out_of_scope_neighbours_total (and a log line)
+  # but are never polled. Required when targets: is set.
   scope:
     cidr_allow_list:
       - 198.51.100.0/24
 
-  # LD-14: a unidirectional link is removed from the graph after this many
-  # consecutive unconfirmed cycles. Default 3.
+  # Unidirectional link expiry: a unidirectional link is removed from the graph
+  # after this many consecutive unconfirmed cycles. Default 3.
   unconfirmed_link_ttl_cycles: 3
 
 # ─── Per-protocol modules ──────────────────────────────────────────────────
@@ -29,7 +29,7 @@ modules:
     enabled: true
     version: v2c               # v2c | v3
     # Legacy single-community path. Production deployments should leave this
-    # unset and use credentials.profiles below (LD-12).
+    # unset and use credentials.profiles below.
     community_env: SNMP_COMMUNITY
   lldp:
     enabled: true              # IEEE 802.1AB / RFC 4957
@@ -42,7 +42,7 @@ modules:
   fdb:
     enabled: false             # RFC 4188 BRIDGE-MIB — noisy without filtering; disabled by default
 
-# ─── LD-12 credential management ───────────────────────────────────────────
+# ─── Credential management ──────────────────────────────────────────────────
 # Named profiles, per-IP/CIDR assignment, ordered fallback, and a global
 # trial rate limit. Secret values are dereferenced from environment variables.
 # Cold-start lockout runbook: docs/operator/cold-start-credentials.md
@@ -68,7 +68,7 @@ credentials:
   # rate so a fresh exporter does not trigger SNMP auth-lockout policies.
   trial_rate_per_second: 5
 
-# ─── LD-13 graph snapshot ──────────────────────────────────────────────────
+# ─── Startup snapshot ───────────────────────────────────────────────────────
 # Versioned JSON snapshot of the reconciled graph plus the credential cache.
 # Loaded on startup; serves stale-but-valid metrics with
 # network_topology_graph_stale=1 until the first live cycle completes.
@@ -77,7 +77,7 @@ credentials:
 snapshot:
   path: /var/lib/network-topology-exporter/snapshot.json
 
-# ─── LD-15–LD-20 federation ────────────────────────────────────────────────
+# ─── Federation ─────────────────────────────────────────────────────────────
 # Three modes beyond standalone:
 #
 # uncoordinated: adds network_topology_boundary_observation_info metric for
@@ -85,7 +85,7 @@ snapshot:
 #   Recording rule: count by(peer_a,peer_b,proto)(network_topology_boundary_observation_info) == 2
 #
 # spoke: runs normal discovery + pushes pre-reconciled graph to a hub binary
-#   after each cycle (LD-16/LD-17). mTLS is required (LD-20).
+#   after each cycle. mTLS is required.
 #
 # hub: pure aggregator — no local SNMP discovery. Receives spoke pushes,
 #   reconciles combined graph, emits unified Prometheus metrics.
@@ -93,23 +93,23 @@ snapshot:
 #
 # federation:
 #   role: standalone                  # standalone (default) | uncoordinated | spoke | hub
-#   spoke_timeout: 3m                 # LD-18: evict a silent spoke after this duration
+#   spoke_timeout: 3m                 # evict a silent spoke after this duration
 #
-#   # LD-19: static stitching overrides for boundary ports with inconsistent names.
+#   # Static stitching overrides for boundary ports with inconsistent names.
 #   known_inter_domain_links:
 #     - local_device: sw-dc-a
 #       local_port: Gi0/1
 #       remote_device: sw-dc-b
 #       remote_port: Gi0/2
 #
-#   # Hub-side settings (role: hub). Per LD-20, mTLS is required.
+#   # Hub-side settings (role: hub). mTLS is required.
 #   hub:
 #     listen_addr: :9101
 #     tls_ca_cert: /etc/topology-exporter/pki/ca.pem
 #     tls_cert: /etc/topology-exporter/pki/hub.crt
 #     tls_key: /etc/topology-exporter/pki/hub.key
 #
-#   # Spoke-side settings (role: spoke). Per LD-20, mTLS is required.
+#   # Spoke-side settings (role: spoke). mTLS is required.
 #   spoke:
 #     spoke_id: dc-a                  # unique identifier; used in hub metric labels
 #     hub_url: https://hub.example.com:9101
@@ -128,7 +128,7 @@ snapshot:
 # Targets provide enrichment metadata (SNMP port, site label, custom labels)
 # for devices discovered within the CIDR allow-list. The CIDR drives what
 # gets polled; targets attach metadata to matching IPs. A target IP outside
-# the allow-list is rejected at startup (LD-11).
+# the allow-list is rejected at startup.
 targets:
   - host: 198.51.100.10
     port: 161

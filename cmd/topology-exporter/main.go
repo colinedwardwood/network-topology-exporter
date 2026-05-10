@@ -3,7 +3,7 @@
 // structured log lines.
 //
 // README.md documents the emitted-signal contract; CONTRIBUTING.md documents
-// the LD-09 clean-room development rules.
+// the clean-room development rules.
 package main
 
 import (

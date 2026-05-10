@@ -41,7 +41,7 @@ func TestTopologyCollectorBoundaryObsEmission(t *testing.T) {
 	})
 
 	const want = `
-# HELP network_topology_boundary_observation_info LD-15 uncoordinated mode: one series per out-of-scope boundary observation. peer_a is always the alphabetically-smaller endpoint. A Mimir recording rule fires count by(peer_a,peer_b,proto)(...)==2 for confirmed cross-boundary edges.
+# HELP network_topology_boundary_observation_info Federation uncoordinated mode: one series per out-of-scope boundary observation. peer_a is always the alphabetically-smaller endpoint. A Mimir recording rule fires count by(peer_a,peer_b,proto)(...)==2 for confirmed cross-boundary edges.
 # TYPE network_topology_boundary_observation_info gauge
 network_topology_boundary_observation_info{peer_a="alpha-device",peer_b="zeta-device",proto="cdp",reporting_device="zeta-device",src_port="Gi0/2"} 1
 network_topology_boundary_observation_info{peer_a="alpha-device",peer_b="zeta-device",proto="lldp",reporting_device="alpha-device",src_port="Gi0/1"} 1
@@ -79,7 +79,7 @@ func TestTopologyCollectorEmptyGraph(t *testing.T) {
 		m.Topology.Update(discovery.Graph{}) // nil Devices, Edges, OutOfScope
 
 		const want = `
-# HELP network_topology_out_of_scope_neighbours_total Count of LLDP/CDP-discovered neighbours whose IP falls outside the LD-11 CIDR allow-list. Detail in log lines.
+# HELP network_topology_out_of_scope_neighbours_total Count of LLDP/CDP-discovered neighbours whose IP falls outside the configured CIDR allow-list. Detail in log lines.
 # TYPE network_topology_out_of_scope_neighbours_total gauge
 network_topology_out_of_scope_neighbours_total 0
 `
