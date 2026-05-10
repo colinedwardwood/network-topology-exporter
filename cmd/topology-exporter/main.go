@@ -328,7 +328,7 @@ func (lc loopConfig) otlpPush(ctx context.Context, fn func(context.Context) erro
 		if lc.otlpSem != nil {
 			defer func() { <-lc.otlpSem }()
 		}
-		pushCtx, cancel := context.WithTimeout(ctx, otlpPushTimeout)
+		pushCtx, cancel := context.WithTimeout(context.Background(), otlpPushTimeout)
 		defer cancel()
 		if err := fn(pushCtx); err != nil {
 			lc.logger.Warn(warnMsg, "error", err)
@@ -396,9 +396,12 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 	// ensures at most one write is queued at a time; a full channel drops the
 	// new snapshot rather than accumulating blocked goroutines under NFS stall.
 	var snapshotCh chan snapshot.File
+	var snapWg sync.WaitGroup
 	if lc.cfg.Snapshot.Path != "" {
 		snapshotCh = make(chan snapshot.File, 1)
+		snapWg.Add(1)
 		go func() {
+			defer snapWg.Done()
 			var writeDone chan error // non-nil while a write goroutine is in flight
 			for f := range snapshotCh {
 				lc.m.SnapshotQueueDepth.Set(float64(len(snapshotCh)))
@@ -550,6 +553,7 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 			if snapshotCh != nil {
 				close(snapshotCh)
 			}
+			snapWg.Wait()
 			return
 		case <-tick.C:
 			cycle()
@@ -870,17 +874,35 @@ func synthesizeEdges(
 	for _, e := range rawEdges {
 		if e.DiscoveryProto == "lldp" {
 			if mac, ok := e.Metadata[discovery.MetadataKeyPeerChassisMac]; ok && e.DstDevice != "" {
-				macToID[mac] = e.DstDevice
+				hw, err := net.ParseMAC(mac)
+				if err != nil {
+					continue
+				}
+				dst := e.DstDevice
+				// Skip entries where DstDevice is an IP (sysName absent) or a MAC
+				// (unresolved); only store proper resolved names.
+				if net.ParseIP(dst) != nil {
+					continue
+				}
+				if _, err := net.ParseMAC(dst); err == nil {
+					continue
+				}
+				macToID[hw.String()] = dst
 			}
 		}
 	}
 	// Second resolution path: ARP table. LLDP takes precedence.
 	for mac, ip := range arpMACToIP {
-		if _, resolved := macToID[mac]; resolved {
+		hw, err := net.ParseMAC(mac)
+		if err != nil {
+			continue
+		}
+		canonicalMac := hw.String()
+		if _, resolved := macToID[canonicalMac]; resolved {
 			continue
 		}
 		if id, ok := ipToID[ip]; ok {
-			macToID[mac] = id
+			macToID[canonicalMac] = id
 		}
 	}
 
@@ -923,14 +945,13 @@ func resolveEdgeDstDevices(logger *slog.Logger, edges []discovery.Edge, ipToID m
 			}
 			// unresolved IP: keep edge (still useful for routing protocol edges)
 		} else if hw, err := net.ParseMAC(dst); err == nil {
-			if id, ok := macToID[dst]; ok {
+			if id, ok := macToID[hw.String()]; ok {
 				e.DstDevice = id
 			} else {
 				// Unresolved MAC — likely a host, not infrastructure.
 				// Suppress rather than publish a mac-<hash> pseudo-device.
 				logger.Debug("fdb: suppressing unresolved MAC peer; no LLDP correlation",
 					"src_device", e.SrcDevice, "src_port", e.SrcPort, "mac", dst)
-				_ = hw
 				if suppressedCounter != nil {
 					suppressedCounter.Inc()
 				}
