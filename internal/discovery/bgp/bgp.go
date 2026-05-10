@@ -147,6 +147,7 @@ func buildEdges(localDevice string, peers map[string]*bgpPeer, allowedNets []*ne
 			oos = append(oos, discovery.OutOfScopeNeighbour{
 				ReportingDevice: localDevice,
 				NeighbourHint:   peer.remoteIP.String(),
+				FirstSeen:       now,
 				LastSeen:        now,
 			})
 			continue

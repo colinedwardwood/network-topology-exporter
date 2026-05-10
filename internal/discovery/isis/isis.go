@@ -162,7 +162,9 @@ func walkAdjIPAddrs(ctx context.Context, client *gsnmp.GoSNMP, localDevice strin
 		if len(allowedNets) > 0 && !snmputil.IPInNets(ip, allowedNets) {
 			oos = append(oos, discovery.OutOfScopeNeighbour{
 				ReportingDevice: localDevice,
+				ReportingPort:   ifName,
 				NeighbourHint:   ip.String(),
+				FirstSeen:       now,
 				LastSeen:        now,
 			})
 			continue

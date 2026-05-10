@@ -1838,7 +1838,7 @@ func TestResolveEdgeDstDevices(t *testing.T) {
 		{SrcDevice: "core-sw-01", DstDevice: "00:ff:ee:dd:cc:bb", DiscoveryProto: "fdb"}, // MAC not in index → suppressed
 	}
 
-	got := resolveEdgeDstDevices(edges, ipToID, macToID, nil)
+	got := resolveEdgeDstDevices(slog.Default(), edges, ipToID, macToID, nil)
 
 	// Unresolved MAC edge is suppressed; expect 5 edges back (not 6).
 	want := []string{"core-sw-02", "core-sw-01", "core-sw-03", "10.0.1.99", "spine-01"}
@@ -2015,7 +2015,7 @@ func TestSynthesizeEdgesARPResolution(t *testing.T) {
 		}
 	}
 
-	got := resolveEdgeDstDevices(rawEdges, ipToID, macToID, nil)
+	got := resolveEdgeDstDevices(slog.Default(), rawEdges, ipToID, macToID, nil)
 
 	if len(got) != 1 {
 		t.Fatalf("expected 1 resolved edge, got %d", len(got))
@@ -2052,8 +2052,8 @@ func TestSynthesizeEdgesIdempotent(t *testing.T) {
 	ipToID := map[string]string{"10.0.0.1": "sw-a"}
 	macToID := map[string]string{"00:11:22:33:44:55": "sw-a"}
 
-	first := resolveEdgeDstDevices(resolved, ipToID, macToID, nil)
-	second := resolveEdgeDstDevices(first, ipToID, macToID, nil)
+	first := resolveEdgeDstDevices(slog.Default(), resolved, ipToID, macToID, nil)
+	second := resolveEdgeDstDevices(slog.Default(), first, ipToID, macToID, nil)
 
 	if len(first) != len(second) {
 		t.Fatalf("first call returned %d edges, second returned %d", len(first), len(second))

@@ -243,6 +243,11 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 		// Network-address chassis ID (subtype 5): first byte is IANA address family
 		// (1=IPv4, 2=IPv6); total length must be 5 (1+4 for IPv4) or 17 (1+16 for IPv6).
 		if rem.chassisSubtype == chassisSubtypeNetworkAddress {
+			if len(rem.chassisID) == 0 {
+				slog.Debug("lldp: zero-length network-address chassis ID; skipping entry",
+					"device", localDevice)
+				continue
+			}
 			if len(rem.chassisID) < 2 ||
 				(rem.chassisID[0] == 1 && len(rem.chassisID) != 5) ||
 				(rem.chassisID[0] == 2 && len(rem.chassisID) != 17) ||
