@@ -37,6 +37,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,8 +57,8 @@ const (
 
 // ospfNbrTable column numbers (RFC 4750 §11.2).
 const (
-	colNbrIPAddr = "1"
-	colNbrState  = "6"
+	colNbrIPAddr = 1
+	colNbrState  = 6
 )
 
 const (
@@ -154,23 +155,26 @@ func buildEdges(localDevice string, rows map[string]*nbrRow, allowedNets []*net.
 	return edges, oos
 }
 
-// parseNbrOID extracts the column string and composite row key from an
+// parseNbrOID extracts the column number and composite row key from an
 // ospfNbrTable OID suffix. The suffix after the table prefix has the form
 // "<col>.<ip0>.<ip1>.<ip2>.<ip3>.<addressLessIndex>".
-func parseNbrOID(oid, prefix string) (col, key string, ok bool) {
+func parseNbrOID(oid, prefix string) (col int, key string, ok bool) {
 	if !strings.HasPrefix(oid, prefix) {
-		return "", "", false
+		return 0, "", false
 	}
 	rest := oid[len(prefix):]
 	dotIdx := strings.IndexByte(rest, '.')
 	if dotIdx < 0 {
-		return "", "", false
+		return 0, "", false
 	}
-	col = rest[:dotIdx]
+	col, err := strconv.Atoi(rest[:dotIdx])
+	if err != nil {
+		return 0, "", false
+	}
 	key = rest[dotIdx+1:]
 	// key must be "<ip0>.<ip1>.<ip2>.<ip3>.<addrLessIdx>" — exactly 4 dots.
 	if strings.Count(key, ".") != 4 {
-		return "", "", false
+		return 0, "", false
 	}
 	return col, key, true
 }

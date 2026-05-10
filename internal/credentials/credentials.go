@@ -185,6 +185,11 @@ func (b *tokenBucket) acquire(ctx context.Context) error {
 			return nil
 		}
 		b.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		t := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():

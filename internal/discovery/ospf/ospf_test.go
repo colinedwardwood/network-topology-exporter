@@ -311,13 +311,13 @@ func TestParseNbrOIDWrongDotCount(t *testing.T) {
 // parseNbrOID: valid OID returns the column and key correctly.
 func TestParseNbrOIDValid(t *testing.T) {
 	const prefix = ".1.3.6.1.2.1.14.10.1."
-	// OID = prefix + "6.192.0.2.1.0" → col="6", key="192.0.2.1.0" (4 dots) → true.
+	// OID = prefix + "6.192.0.2.1.0" → col=6, key="192.0.2.1.0" (4 dots) → true.
 	col, key, ok := parseNbrOID(prefix+"6.192.0.2.1.0", prefix)
 	if !ok {
 		t.Fatal("expected ok=true for valid OID, got false")
 	}
-	if col != "6" {
-		t.Errorf("col = %q, want 6", col)
+	if col != 6 {
+		t.Errorf("col = %d, want 6", col)
 	}
 	if key != "192.0.2.1.0" {
 		t.Errorf("key = %q, want 192.0.2.1.0", key)
