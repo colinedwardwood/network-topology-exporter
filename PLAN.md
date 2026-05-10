@@ -1,372 +1,146 @@
 # Engineering Improvement Plan: Network Topology Exporter
 
-## Previous work
-All §2–§5 items from the original plan are shipped. See git log for details.
+## 1. Executive Summary
+The exporter is not public-release ready: it has credible architecture and protocol coverage, but it still publishes misleading topology under common enterprise conditions and carries metric/schema debt that serious Prometheus users will notice immediately. The remaining work is not cosmetic; it is the difference between a useful topology collector and a public GitHub repository that teaches operators to distrust its own graph.
 
----
+## 2. Immediate Remediation (High Priority)
+- [ ] **Stop Treating Host MACs as Topology Devices**: FDB emits an edge when a bridge port has exactly one learned MAC, then unresolved peers become `mac-<hash>` device IDs.
+  **Rationale**: A single learned MAC on an access port is usually a host, not infrastructure. Publishing it as a topology node makes access layers look like switch-to-switch fabric and turns inference evidence into false fact.
+  **File**: `internal/discovery/fdb/fdb.go:401-452`, `cmd/topology-exporter/main.go:797-827`.
 
-## Audit findings (2026-05-09)
+- [ ] **Fix FDB/LLDP Deduplication for Missing Remote Ports**: FDB edges lack `DstPort`, while LLDP edges include it; `graph.normalizedGroupKey` includes all four endpoint fields, so observations for the same physical link can land in different reconciliation buckets.
+  **Rationale**: The exporter can emit duplicate `network_topology_edge_info` series for one physical link, with FDB and LLDP disagreeing only because one source cannot know the remote port. That is silent wrong output, not a harmless low-confidence signal.
+  **File**: `cmd/topology-exporter/main.go:734-746`, `internal/graph/graph.go:352-367`, `internal/metrics/topology_collector.go:140-146`.
 
-Multi-angle review covering correctness, scaling, standards, and open-source
-readiness. Items are ordered within each section by severity.
+- [ ] **Stop Publishing Ambiguous Federated Device Merges**: Hub federation strips FQDN suffixes during OOS matching, warns on collisions, and still publishes the merged graph.
+  **Rationale**: `core-sw.dc1.example.com` and `core-sw.dc2.example.com` collapsing into `core-sw` is normal enterprise naming, not an exotic corner case. Publishing a known-ambiguous graph is worse than failing closed.
+  **File**: `internal/federation/hub.go:298-335`, `internal/federation/hub.go:414-418`, `internal/federation/hub.go:583-592`.
 
----
+- [ ] **Fix UTF-8-Unsafe Label Truncation**: `sanitizeLabel` slices at `maxLabelLen` bytes and can split a multi-byte rune.
+  **Rationale**: Invalid UTF-8 labels are a downstream compatibility failure waiting to happen in Grafana, Alertmanager, remote write, and OTel bridges. Sanitizing at the metric layer must produce valid strings, not arbitrary byte fragments.
+  **File**: `internal/metrics/topology_collector.go:14-27`.
 
-## §1 Correctness — Silent Wrong Output
+- [ ] **Cap SNMP `sysName` Before It Becomes a Graph Key**: `NormaliseName` trims and lowercases untrusted SNMP strings but does not enforce the RFC 1213 `sysName` size limit before IDs are used in maps, graph keys, federation state, and snapshots.
+  **Rationale**: Label capping happens too late. A broken or malicious agent can force large allocations before Prometheus ever sees the value.
+  **File**: `internal/discovery/snmp/pdu.go:295-300`, `internal/discovery/snmp/snmp.go:181-186`.
 
-These produce incorrect topology data with no error signal. Fix before any
-public release.
+- [ ] **Remove Silent Credential Profile Skips**: `credentialCandidates` silently drops profiles when `profileToParams` fails, so env-var typos look like generic device failures.
+  **Rationale**: Credential resolution is a security-sensitive operational path. Hiding why a profile was unusable guarantees bad on-call diagnostics and unnecessary credential churn.
+  **File**: `cmd/topology-exporter/main.go:834-884`.
 
-### 1.1 FDB-LLDP deduplication does not work
+- [ ] **Repair Snapshot Writer Leak Semantics**: The bounded snapshot queue prevents infinite queued snapshots, but timed-out writes can still leave a blocked inner goroutine behind when the filesystem call never returns.
+  **Rationale**: A permanent NFS stall should degrade snapshot persistence, not leak goroutines over time until the process needs a restart.
+  **File**: `cmd/topology-exporter/main.go:393-415`, `internal/federation/hub.go:544-611`.
 
-**Claim in PLAN §3** ("enables `graph.Reconcile` to deduplicate LLDP+FDB edges
-for the same link") is false. FDB edges always have empty `DstPort` because
-FDB has no knowledge of the remote port. LLDP edges have a non-empty `DstPort`.
-`graph.normalizedGroupKey` hashes all four endpoint fields; even after Phase 2
-resolves `DstDevice` from MAC to sysName, the `DstPort` mismatch puts FDB and
-LLDP observations into different buckets. The reconciled output contains two
-`network_topology_edge_info` series for the same physical link — one from LLDP
-with a DstPort, one from FDB without — instead of one merged series with the
-LLDP observation winning on rank.
+- [ ] **Remove the Silent CIDR Parser Footgun**: Config validation rejects malformed `discovery.scope.cidr_allow_list` entries, but `ParseCIDRs` itself still silently skips malformed CIDRs and returns the valid remainder.
+  **Rationale**: Today the validated config path saves this from being an active bug; tomorrow a helper reuse can silently distort the polling security boundary. Security-scope parsers should not have a best-effort mode unless it is explicitly named as such.
+  **File**: `internal/discovery/snmp/pdu.go:302-313`, `internal/config/config.go:145-149`, `cmd/topology-exporter/main.go:390-391`.
 
-**Fix:** In `runCycle` (main.go), after `resolveEdgeDstDevices` resolves FDB
-`DstDevice` to sysName, do a second pass to back-fill `DstPort` on FDB edges
-from LLDP observations with matching endpoints. Build an index
-`(SrcDevice, SrcPort, DstDevice) → DstPort` from the LLDP edge set and apply
-it to any FDB edge with `DstPort == ""`. This gives `graph.Reconcile` matching
-`normalizedGroupKey` values so the LLDP edge (rank 2) wins over the FDB edge
-(rank 4) rather than coexisting alongside it.
+- [ ] **Validate Federation Payload Semantics, Not Just Counts**: Hub push handling caps payload bytes and object counts, but accepts device IDs, ports, labels, and edge fields without field-length, UTF-8, duplicate-ID, or topology-semantic validation before storing the spoke payload and rebuilding the combined graph.
+  **Rationale**: mTLS proves which spoke sent the payload; it does not prove the payload is sane. A compromised or buggy spoke can still poison hub memory, produce collision-heavy labels, or publish nonsensical graph state inside the current count limits.
+  **File**: `internal/federation/hub.go:149-159`, `internal/federation/hub.go:214-220`, `internal/federation/hub.go:258-418`.
 
-**Files:** `cmd/topology-exporter/main.go`, `internal/graph/graph_test.go`.
+- [ ] **Correct Operator Credential Metric Documentation**: `docs/operator/cold-start-credentials.md` references `topology_credential_trials_total`, but the implementation exposes `network_topology_credential_trials_total`.
+  **Rationale**: Public operators will grep for the wrong metric during auth rollout. Bad docs on credential troubleshooting are not a paper cut; they prolong outages and increase lockout risk.
+  **File**: `docs/operator/cold-start-credentials.md:15`, `docs/operator/cold-start-credentials.md:29`, `docs/operator/cold-start-credentials.md:36`, `internal/metrics/metrics.go:142-145`.
 
----
+## 3. Architectural & Scaling Overhaul
+- [ ] **Replace FDB Edge Emission With Identity-Gated Link Synthesis**: FDB should produce raw observations, not public topology edges, unless the MAC can be correlated to known infrastructure through LLDP chassis MAC, ARP/IP-MIB helper data, ENTITY-MIB, or explicit operator inventory.
+  **Reference**: Bejerano/Breitbart physical topology discovery principle: bridge tables are evidence for inference, not direct node identity.
 
-### 1.2 Hub `normalizeDeviceName` silently merges devices across sites
+- [ ] **Parallelize IOS VLAN Community FDB Walks With a Per-Device Budget**: `walkVlanCommunityFdbs` opens and walks one SNMP session per VLAN sequentially.
+  **Reference**: Tail-latency control for polling systems; I/O-bound SNMP walks need bounded fan-out and module deadlines, not serial multiplication by VLAN count.
 
-`normalizeDeviceName` strips everything after the first `.` so
-`core-sw.dc1.example.com` and `core-sw.dc2.example.com` both become
-`core-sw`. In a federation where sites share hostname short-names (common in
-enterprises with per-site DNS domains), the OOS-matching loop synthesises
-phantom cross-domain edges between unrelated devices and the device-dedup
-path in `buildCombinedGraph` silently discards the second device. A warning
-is logged but the wrong topology is still published.
+- [ ] **Make Discovery Budgeting Explicit and Observable**: `cycle_budget_fraction` and `timeout_per_module` exist, but the exporter does not expose enough counters for skipped targets, module cancellations, or budget exhaustion by module/device class.
+  **Reference**: Queueing stability: discovery service time must remain below polling interval or the system becomes permanently stale.
 
-**Fix:** Add `FederationHubConfig.StrictDeviceNameMatching bool` (default
-`false` for backwards compatibility). When true, `normalizeDeviceName` is
-replaced with a case-fold-only normalisation with no domain stripping.
-Document the default behaviour and the collision risk in `docs/architecture.md`
-(new LD-22). The existing ambiguity warning remains regardless of mode.
+- [ ] **Add Graph Size Admission Control Outside Hub Mode**: Hub mode can reject graphs over configured device/edge limits, but standalone and spoke cycles can still publish arbitrarily large local graphs.
+  **Reference**: Backpressure before publication; memory and cardinality limits must be enforced at every producer, not only the aggregator.
 
-**Files:** `internal/federation/hub.go`, `internal/config/config.go`,
-`docs/architecture.md`.
+- [ ] **Prove Reconciliation Complexity With Synthetic Scale Tests**: `graph.Reconcile` is approximately `O(E log E)`, but no CI benchmark proves behavior at large enterprise sizes, and hub OOS matching still deserves adversarial duplicate-observation tests.
+  **Reference**: Algorithmic rigor for graph systems; performance contracts must be executable, not asserted in comments.
 
----
+- [ ] **Add Cardinality Budget Enforcement in CI**: Generate synthetic 500, 1,000, and 5,000 device graphs and fail tests when sample count, scrape render time, or heap growth exceeds the declared budget.
+  **Reference**: Prometheus instrumentation best practice: cardinality budgets are testable contracts.
 
-### 1.3 `sanitizeLabel` truncates at byte boundary, producing invalid UTF-8
+- [ ] **Add Memory Residency Guardrails**: Track graph device count, edge count, edge churn, snapshot queue depth, rejected graph updates, and goroutine count under stalled IO.
+  **Reference**: Backpressure-first collector design for long-running polling systems.
 
-```go
-if len(s) > maxLabelLen {
-    return s[:maxLabelLen]   // byte slice — splits multi-byte rune
-}
-```
+- [ ] **Introduce a Two-Phase Graph Assembly Boundary**: Keep raw protocol observations separate from canonical link synthesis, identity resolution, dedupe, confidence arbitration, and endpoint-noise suppression.
+  **Reference**: RFC 8345-style separation of topology nodes/links from protocol observations; NetInventory-style reconciliation rather than direct metric emission from raw walks.
 
-For any label value containing multi-byte UTF-8 characters (Kanji hostnames,
-non-ASCII vendor strings, some Japanese/Chinese NMS integrations), truncation
-at byte 128 can split a rune, producing an invalid UTF-8 suffix. Prometheus
-client_golang accepts these as raw byte strings; some downstream consumers
-(Grafana label matchers, Alertmanager) may reject or silently mangle them.
+## 4. Standards & Compliance Checklist
+- [ ] **IEEE 802.1AB Compliance**: Add explicit LLDP tests for mandatory Chassis ID, Port ID, TTL/liveness assumptions, subtype length validation, binary subtype handling, and malformed row quarantine metrics. The code validates some subtypes, but TTL behavior is assumed from agent table aging rather than proven.
+- [ ] **IEEE 802.1AB Compliance**: Treat LLDP subtype 7 (`local`) and chassis-component/port-component values as binary-capable. Invalid UTF-8 should become hex, not mojibake.
+- [ ] **IEEE 802.1AB Compliance**: Correct the LLDP TTL citation; RFC 2922 is Physical Topology MIB and does not define `lldpRemTable` aging.
+- [ ] **RFC 2922/1213 Compliance**: Publish a standards matrix that clearly states RFC 2922 PTOPO-MIB is not implemented, why LLDP is the practical default, and what behavior operators lose by not polling PTOPO-MIB.
+- [ ] **RFC 2922/1213 Compliance**: Enforce RFC 1213/MIB-II bounds for `sysName`, document `sysUpTime` 497-day rollover, and add tests for abnormal PDU types and lengths.
+- [ ] **RFC 1213 Compliance**: Add a strategy for `sysUpTime` rollover; either document it aggressively or emit a wrap counter backed by persisted previous ticks.
+- [ ] **RFC 2863/IF-MIB Compliance**: Require deterministic fallback behavior when `ifName` is absent and validate that `ifDescr` or numeric fallback cannot create duplicate port identities across modules.
+- [ ] **MIB Citation Hygiene**: Remove contradictory or misleading comments, including the enterprise-prefix ordering comment and the `normalizeSysDescr` comment that says what the regex does without explaining the label-cardinality reason.
 
-**Fix:** After the `strings.Map` pass, truncate at the last valid rune
-boundary at or before `maxLabelLen` bytes using `utf8.ValidString` or
-`strings.ToValidUTF8` + a rune-boundary walk. Cap is still 128 bytes.
+## 5. Prometheus & Observability Polish
+- [ ] **Fix Namespace Drift in Device Metrics**: Rename or compatibility-shim `network_device_info` and `network_device_uptime_seconds` into the `network_topology_` namespace.
+  **Rationale**: Current naming violates the project namespace pattern and forces dashboard authors to memorize special cases.
 
-**Files:** `internal/metrics/topology_collector.go`.
+- [ ] **Use Standard Timestamp Suffixes**: Replace `_unix` gauges with `_timestamp_seconds` variants, with a documented compatibility window.
+  **Rationale**: Prometheus/Grafana tooling recognizes `_timestamp_seconds`; `_unix` is homemade schema drift.
 
----
+- [ ] **Rename `link_type` to `link_kind`**: The code calls the field `LinkKind`, docs discuss link semantics, but the exported label is `link_type`.
+  **Rationale**: Public metric schemas should not expose inconsistent vocabulary.
 
-### 1.4 Uncapped sysName used as map key before sanitization
+- [ ] **Bound Decode-Issue Label Values Structurally**: `DiscoveryDecodeIssues{module,oid,reason}` is safe only while callers pass table-root OIDs. Encode table identity as an enum or allow-list instead of trusting future contributors not to pass full instance OIDs.
+  **Rationale**: One future caller passing per-PDU OIDs turns malformed SNMP rows into unbounded Prometheus series.
 
-`NormaliseName` lowercases and trims whitespace but does not cap length.
-A malicious SNMP agent returning a 64 KB `sysName` causes a 64 KB key to be
-inserted into `ipToID`, `macToID`, and `seenDevices` before `sanitizeLabel`
-caps it at the metric layer. RFC 1213 defines sysName as `SIZE(0..255)`;
-enforcement happens nowhere. On 500 targets each returning a 64 KB sysName
-this is 32 MB of unbounded string allocations per cycle, growing with target
-count.
+- [ ] **Expose Suppression and Budget Counters**: Add counters for FDB observations suppressed, VLAN walks skipped/truncated, module timeout cancellations, cycle-budget target skips, graph updates rejected, and snapshot writes dropped/timed out.
+  **Rationale**: Silent absence of topology is not observability; it is wishful thinking.
 
-**Fix:** Cap `NormaliseName` return value at 256 bytes (one byte over RFC
-maximum, generous for FQDN variants). Alternatively, cap in the Walk caller
-after reading the sysName PDU. Document the cap in the SNMP package comment.
+- [ ] **Add Stable Metric Schema Tests and Release Gates**: Lock exported metric names, labels, and units with schema tests and require changelog migration notes for any rename or removal.
+  **Rationale**: Public users build alerts and dashboards against metric contracts. Breaking them casually is how exporters lose trust.
 
-**Files:** `internal/discovery/snmp/snmp.go` (or `pdu.go`).
+- [ ] **Document Metric Cardinality Assumptions**: For every label with user-controlled or network-controlled values (`device_id`, ports, `spoke_id`, `oid`), document its expected bound and enforce it in tests where possible.
+  **Rationale**: Cardinality safety must be an explicit design constraint, not tribal knowledge hidden in code comments.
 
----
+## 6. Adversarial Review Addendum
+### 6.1 The Fatal Flaw
+The fatal flaw is that the system still lets protocol observations become published topology before they have passed a strict identity, standards, and cardinality boundary. The worst expression is FDB: bridge-table evidence becomes graph edges, unresolved MACs become pseudo-devices, and federation can then redistribute those claims as if they were canonical network truth.
 
-## §2 Open-Source / Metric Schema — Breaking Changes
+### 6.2 The Council's Grievances
+- **Distributed Systems Architect**: Hub federation authenticates spokes with mTLS and binds `spoke_id` to certificate CN, but the trust boundary ends too early: after count checks, the hub stores the spoke payload and rebuilds global topology from raw remote data. A distributed topology system needs schema and semantic validation at each trust boundary, not just transport authentication.
+  **Evidence**: `internal/federation/hub.go:149-159`, `internal/federation/hub.go:175-190`, `internal/federation/hub.go:214-220`.
 
-All items in this section require a semver major version bump and a one-release
-deprecation window where both old and new metric names are emitted
-simultaneously under a `compatibility.legacy_metric_names: true` config flag.
-Update `schema_test.go` and `docs/metrics.md` in the same commit as each
-rename.
+- **Low-Level Specialist**: `TopologyCollector.Collect` walks every device, edge, and boundary observation on every scrape and sanitizes label strings repeatedly. That is acceptable at toy scale, but at 100k edges it becomes scrape-path CPU churn with no cache or precomputed sanitized representation.
+  **Evidence**: `internal/metrics/topology_collector.go:122-180`.
 
----
+- **Slop Forensic Analyst**: The code still contains comments that are either wrong or explain the obvious while hiding the real invariant. The RFC 2922 LLDP TTL citation is false, and `normalizeSysDescr` repeats what the regex does instead of documenting why cardinality is being collapsed.
+  **Evidence**: `internal/discovery/lldp/lldp.go:210-214`, `internal/discovery/snmp/snmp.go:205-210`.
 
-### 2.1 `network_device_*` metrics missing `topology` namespace
+- **Security Breach-Lead**: The credential path fails closed for missing legacy community, rejects MD5/DES in config validation, and uses mTLS for federation, but untrusted SNMP and federation payload strings are still accepted before hard size and UTF-8 normalization at graph boundaries.
+  **Evidence**: `cmd/topology-exporter/main.go:851-865`, `internal/config/config.go:533-557`, `internal/metrics/topology_collector.go:16-27`, `internal/federation/hub.go:149-159`.
 
-`network_device_info` and `network_device_uptime_seconds` break the
-`network_topology_` namespace used by every other metric. A Prometheus user
-joining these metrics against `network_topology_edge_info` must know the
-namespace changed mid-design. Dashboard authors will file issues on day one.
+- **Chaos Engineer**: Snapshot writes are bounded at the queue level, but the timed-out write goroutine can still remain blocked forever. A permanent filesystem stall becomes a slow goroutine leak with warning logs, not a contained failure mode.
+  **Evidence**: `cmd/topology-exporter/main.go:393-415`, `internal/federation/hub.go:544-580`.
 
-**Rename:**
-- `network_device_info` → `network_topology_device_info`
-- `network_device_uptime_seconds` → `network_topology_device_uptime_seconds`
+- **FinOps Controller**: Sequential VLAN community walks multiply SNMP sessions by VLAN count. A campus core with 100 VLANs can burn the module budget on one device before the rest of the topology protocols get useful time.
+  **Evidence**: `internal/discovery/fdb/fdb.go:310-337`.
 
-Update `docs/metrics.md`, `schema_test.go` (`expectedMetricNames`),
-Helm chart `PrometheusRule` alert expressions, and `README.md` metric table.
+- **Compliance/Legal Hawk**: Dependency surface is small, but there is no visible release gate for vulnerability or license scanning. Public release should not rely on manual inspection of `go.mod`.
+  **Evidence**: `go.mod:5-23`.
 
-**Files:** `internal/metrics/topology_collector.go`, `internal/metrics/schema_test.go`,
-`docs/metrics.md`, `deploy/helm/topology-exporter/templates/prometheusrule.yaml`,
-`README.md`.
+- **Brutal Maintainer**: The current plan is the real source of truth for fix ordering, but code comments still carry LD labels, design references, and stale assertions that require archaeology at 3 AM. Incorrect comments are worse than no comments because they create false confidence.
+  **Evidence**: `internal/discovery/lldp/lldp.go:210-214`, `internal/discovery/snmp/snmp.go:331-336`, `PLAN.md`.
 
----
+### 6.3 Survival Score
+- **Scaling**: 58%. The architecture has bounded global parallelism and some cycle-budget controls, but FDB semantics, serial VLAN walks, scrape-time rendering, and missing standalone graph admission controls are still enough to hurt a large enterprise deployment.
+- **Security**: 67%. Credential handling and federation transport are not amateur, but payload validation, string bounds, and diagnostic transparency still fall short of a zero-trust release.
+- **Maintainability**: 61%. Module boundaries are workable, but stale comments, inconsistent metric vocabulary, and protocol observations leaking into canonical graph state make the code harder to reason about than it should be.
 
-### 2.2 Unix-timestamp gauges use non-standard `_unix` suffix
+### 6.4 Additional Non-Negotiable Backlog
+- [ ] **Add Federation Payload Validation Tests**: Build table-driven tests for overlong device IDs, invalid UTF-8, duplicate devices, empty endpoint fields, impossible self-edges, and label values that would be truncated in metrics.
+  **Rationale**: Transport auth without semantic validation lets a compromised spoke poison the hub with authenticated garbage.
 
-Prometheus naming conventions require `_timestamp_seconds` for Unix epoch
-gauges. The `_unix` suffix is unrecognised by standard tooling (unit
-inference in Grafana, `promtool check metrics` warnings).
+- [ ] **Add Scrape-Path Performance Benchmarks**: Benchmark `TopologyCollector.Collect` with synthetic 10k, 50k, and 100k edge graphs and fail CI when render time or allocations exceed the declared scrape budget.
+  **Rationale**: Exporters fail in production when the scrape path becomes the bottleneck, not when the happy-path unit tests pass.
 
-**Rename:**
-- `network_topology_federation_spoke_last_push_unix` →
-  `network_topology_federation_spoke_last_push_timestamp_seconds`
-- `network_topology_snapshot_last_written_unix` →
-  `network_topology_snapshot_last_written_timestamp_seconds`
-
-**Files:** `internal/metrics/metrics.go`, `internal/metrics/schema_test.go`,
-`docs/metrics.md`, `deploy/helm/topology-exporter/templates/prometheusrule.yaml`.
-
----
-
-### 2.3 `link_type` label on `network_topology_edge_info` should be `link_kind`
-
-The edge label is `link_type` but the internal field is `LinkKind` and the
-config vocabulary uses `link_kind`. The mismatch will confuse contributors
-tracing label values to source fields. `link_type` also collides with
-conventional Prometheus use of `type` as a generic dimension label.
-
-**Rename:** `link_type` → `link_kind` on `network_topology_edge_info`.
-
-Update the `edgeInfoDesc` descriptor, `topology_collector.go` emit call,
-`schema_test.go`, `docs/metrics.md`, Helm alert rules, and `README.md`.
-
-**Files:** `internal/metrics/topology_collector.go`, `internal/metrics/schema_test.go`,
-`docs/metrics.md`.
-
----
-
-## §3 Scaling — Enterprise Readiness
-
-### 3.1 FDB VLAN community walks are serial
-
-`walkVlanCommunityFdbs` opens and walks one SNMP session per VLAN
-sequentially:
-
-```go
-for _, vlanID := range vlanIDs {
-    vlanClient, _ := snmputil.Open(vp)
-    walkFdbTableInto(ctx, vlanClient, vlanEntries)
-    vlanClient.Conn.Close()
-}
-```
-
-A Cisco IOS core switch with 100 active VLANs (the default `MaxVlans` cap)
-runs 100 sequential BulkWalks. At 50 ms per walk (conservative for a loaded
-core), that is 5 s of serial SNMP I/O for the FDB module alone on one device.
-An environment with 30 such cores and `Parallelism=10` can have the FDB module
-consume the full cycle budget and cascade-cancel LLDP, CDP, and IS-IS on all
-remaining devices in the slot.
-
-**Fix:** Within `walkVlanCommunityFdbs`, fan out VLAN walks into a bounded
-goroutine pool (suggested default: 8 concurrent sessions per device, derived
-from empirical testing against Cisco 6500/9000 series). Use a mutex-protected
-merge into the shared `entries` map after each walk completes. Cap total
-per-device VLAN walk wall time at `TimeoutPerModule` (existing config) if set.
-
-This is I/O-bound work with no shared state contention (VLAN walks read
-different OID subtrees); the parallelism is safe.
-
-**Files:** `internal/discovery/fdb/fdb.go`.
-
----
-
-### 3.2 `DiscoveryDecodeIssues` `oid` label — document and assert cardinality bound
-
-The metric `network_topology_discovery_decode_issues_total{module, oid, reason}`
-uses `OID` values from `DecodeIssue.OID`. In the current implementation these
-are hardcoded table root OIDs passed by the callers of `WalkToIntMapStrict`
-(e.g., `"1.3.6.1.2.1.14.10.1"` for OSPF neighbour state). The set is bounded
-at compile time (~7 modules × ~4 tables × 2 reasons ≈ 56 unique label sets).
-
-However, the metric signature admits unbounded OIDs — nothing in the type
-system or call sites enforces this. A future caller passing a per-PDU OID
-(e.g., the full instance OID of a failing row) would create one label set per
-PDU across all targets, which at 500 targets × 1,000 anomalous PDUs each
-exceeds Prometheus cardinality limits.
-
-**Fix:** Add a CI-level assertion (similar to `cardinality_test.go`) that
-enumerates all call sites of `WalkToIntMapStrict` and confirms each passes a
-root OID from a known allow-list. Alternatively, add a `TableRootOID string`
-field to `DecodeIssue` (distinct from a per-PDU OID) and use that as the
-metric label, enforcing the constraint structurally. Document the design
-constraint in the `metrics` package comment.
-
-**Files:** `internal/metrics/metrics.go`, `internal/discovery/snmp/pdu.go`,
-a new `internal/metrics/cardinality_labels_test.go` or extension to
-existing `cardinality_test.go`.
-
----
-
-## §4 Standards & Documentation
-
-### 4.1 LLDP chassis subtype 7 (local) binary data produces mojibake device IDs
-
-`decodeChassisID` falls through to `strings.TrimRight(string(raw), "\x00")`
-for all subtypes other than MAC (4) and network-address (5). IEEE 802.1AB
-defines subtype 7 (local) as arbitrary vendor-defined bytes — some vendors
-(certain Cisco WLC firmware, some Huawei data-centre platforms) encode binary
-identifiers in this field. `string(raw)` on binary data produces invalid or
-garbled UTF-8 that survives `sanitizeLabel`'s printability filter as partial
-garbage, resulting in device IDs that cannot be correlated with anything in
-NMS systems.
-
-**Fix:** For subtype 7 (local), detect whether `raw` is valid UTF-8 via
-`utf8.Valid`. If valid, use the string form (covers text-based local subtypes
-like Arista's EOS node ID). If not valid, use `hex.EncodeToString(raw)` as
-the fallback. Apply the same logic to subtype 1 (chassisComponent) which can
-also carry binary data from ENTITY-MIB.
-
-**Files:** `internal/discovery/lldp/lldp.go` (`decodeChassisID`),
-`internal/discovery/lldp/lldp_test.go`.
-
----
-
-### 4.2 sysUpTime rolls over silently at 497 days
-
-`TimeTicks` is a `uint32` counter of hundredths-of-a-second. It wraps to zero
-at `2^32 × 10 ms = 497.1 days`. The code converts it directly:
-
-```go
-if ticks, ok := pdu.Value.(uint32); ok {
-    dev.Uptime = time.Duration(ticks) * 10 * time.Millisecond
-}
-```
-
-After rollover, `network_topology_device_uptime_seconds` drops to near-zero,
-indistinguishable from a reboot event. Any alert on `uptime < threshold` will
-fire falsely for all devices that have been up more than 497 days.
-
-**Fix (minimal):** Document the rollover in the metric help text and in
-`docs/metrics.md`. Alert authors should use `increase()` on a separate reboot
-counter (from the management plane) rather than a threshold on raw uptime.
-
-**Fix (full):** Emit `network_topology_device_sysuptime_wrap_total` as a
-counter that increments when the current `ticks` reading is less than the
-previous reading for the same device. Store the previous ticks value per
-device in the snapshot. The wrapping counter plus the current ticks value
-reconstructs the true monotonic uptime. Update snapshot schema with a
-`SysUptimeTicks` map.
-
-**Files:** `internal/discovery/snmp/snmp.go`, `internal/snapshot/snapshot.go`,
-`internal/metrics/topology_collector.go` (if full fix), `docs/metrics.md`.
-
----
-
-### 4.3 Silent credential profile skip gives no diagnostic
-
-In `credentialCandidates`, when a profile's env var is empty (e.g., operator
-typos `SNMP_COMMUNITY` as `SNMP_COMUNITY`), `profileToParams` returns an
-error and the profile is silently skipped with no log line. If all profiles
-fail this way, `walkSystemWithCredentials` returns "no usable credential
-profiles for IP" with no indication of which profile failed or why. An
-operator staring at a full-failure discovery cycle has no signal to distinguish
-"device unreachable" from "env var typo".
-
-**Fix:** In `credentialCandidates`, log a `Warn` when `profileToParams` fails,
-including the profile name and the error string (which names the env var).
-This is logged at Warn (not Error) because the profile might be intentionally
-absent in some deployment modes.
-
-**Files:** `cmd/topology-exporter/main.go` (`credentialCandidates`).
-
----
-
-### 4.4 RFC 2922 citation error in `lldp.go`
-
-```go
-// TTL liveness: lldpRemTable entries are aged out by the agent per RFC 2922 §3.
-```
-
-RFC 2922 is the Physical Topology MIB. It has no TTL aging provisions for
-`lldpRemTable`. The correct citation is IEEE 802.1AB-2016 §9.6.3 ("LLDP TTL
-and lldpRemTable aging"). The code behaviour is correct; the citation is wrong.
-
-**Fix:** Correct the comment. While there, audit all RFC citations in the
-`lldp` package for accuracy.
-
-**Files:** `internal/discovery/lldp/lldp.go`.
-
----
-
-### 4.5 Self-contradicting comment in `snmp.go` enterprise prefix table
-
-```go
-// Ordering matters: iteration stops at the first match, so longer prefixes
-// must precede any shorter prefix that is also a prefix of the longer one.
-// Entries here share no prefix relationship (each enterprise number is unique),
-// so order within the list does not affect correctness
-```
-
-These sentences contradict each other. The second is correct. Remove the
-first sentence entirely; it introduces false requirements.
-
-**Files:** `internal/discovery/snmp/snmp.go`.
-
----
-
-### 4.6 `normalizeSysDescr` comment describes what, not why
-
-The comment says "Extract first M.N or M.N.P version token." The function
-name and the regex already communicate this. The why — that using the full
-sysDescr string as a Prometheus label creates one series per patch version
-across a device fleet, multiplying cardinality by the number of active
-firmware versions — is not documented anywhere.
-
-**Fix:** Replace the comment with the cardinality rationale. Mention the
-fallback (first 64 raw chars) and why 64 was chosen.
-
-**Files:** `internal/discovery/snmp/snmp.go` (`normalizeSysDescr`).
-
----
-
-## Remediation order
-
-| Priority | Item | Effort | Risk |
-|---|---|---|---|
-| 1 | §1.1 FDB-LLDP dedup | Medium | Low (additive change) |
-| 2 | §1.2 Hub hostname collision | Low | Low (opt-in config flag) |
-| 3 | §1.3 sanitizeLabel UTF-8 | Low | Low |
-| 4 | §1.4 sysName length cap | Low | Low |
-| 5 | §3.1 VLAN walk parallelism | Medium | Medium (concurrency) |
-| 6 | §2.x Metric renames (bundle) | High | High (breaking — needs major version) |
-| 7 | §3.2 Decode OID cardinality | Low | Low |
-| 8 | §4.1 Subtype 7 binary | Low | Low |
-| 9 | §4.2 Uptime rollover | Low–Medium | Low |
-| 10 | §4.3 Credential diagnostic | Trivial | Low |
-| 11 | §4.4–4.6 Docs/comments | Trivial | None |
-
-**Version bump guidance:** §1 and §3–§4 items are non-breaking and can ship
-as patch or minor releases. §2 metric renames are breaking and require a
-coordinated major version bump with a deprecation shim (emit both old and new
-names for one release cycle under `compatibility.legacy_metric_names: true`).
+- [ ] **Add Dependency License and Vulnerability Gates**: Add `govulncheck` and license scanning to CI, and document the accepted license policy for direct and transitive dependencies.
+  **Rationale**: A public infrastructure exporter with no dependency gate is asking reviewers to find supply-chain hygiene problems for you.
