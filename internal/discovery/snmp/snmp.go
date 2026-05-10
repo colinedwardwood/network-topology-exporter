@@ -191,7 +191,7 @@ func Walk(ctx context.Context, p Params) (*discovery.Device, error) {
 			dev.Vendor = vendorFromObjectID(pduOID(pdu))
 		case dotOIDSysUpTime:
 			// sysUpTime wraps to zero after ~497 days; callers cannot distinguish wrap from reboot.
-			if ticks, ok := pdu.Value.(uint32); ok {
+			if ticks, ok := PDUIntStrict(pdu); ok {
 				dev.Uptime = time.Duration(ticks) * 10 * time.Millisecond
 				uptimeSec := dev.Uptime.Seconds()
 				if uptimeSec < 86400 {

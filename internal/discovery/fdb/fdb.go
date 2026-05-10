@@ -350,6 +350,7 @@ func walkVlanCommunityFdbs(ctx context.Context, p snmputil.Params, client *gsnmp
 			vp.Community = fmt.Sprintf("%s@%d", p.Community, vlan)
 			vlanClient, err := snmputil.Open(vp)
 			if err != nil {
+				slog.Debug("fdb: VLAN community open failed", "device", vp.IP, "vlan", vlan, "err", err)
 				return
 			}
 			vlanEntries := make(map[string]*fdbEntry)
@@ -453,6 +454,7 @@ func buildEdges(localDevice string, entries map[string]*fdbEntry, bridgePorts ma
 	for bridgePort, macs := range portMACs {
 		ifIdx, ok := bridgePorts[bridgePort]
 		if !ok {
+			slog.Debug("fdb: bridge port has no ifIndex mapping", "bridge_port", bridgePort)
 			continue
 		}
 		localPort := ifNames[ifIdx]

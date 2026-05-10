@@ -207,7 +207,8 @@ func WalkARPTable(ctx context.Context, client *g.GoSNMP) (map[string]string, err
 			continue
 		}
 		ipStr := suffix[dot+1:] // "a.b.c.d"
-		if net.ParseIP(ipStr) == nil {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
 			continue
 		}
 		var macBytes []byte
@@ -221,7 +222,7 @@ func WalkARPTable(ctx context.Context, client *g.GoSNMP) (map[string]string, err
 			continue
 		}
 		mac := net.HardwareAddr(macBytes).String()
-		result[mac] = ipStr
+		result[mac] = ip.String()
 	}
 	return result, nil
 }
