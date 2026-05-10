@@ -312,10 +312,8 @@ func TestServeDecodeError(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 	_, _ = conn.Write([]byte{0xff, 0xfe, 0xfd, 0x00, 0x01})
 
-	// Give the agent goroutine a moment to process the bad packet, then verify
-	// the agent is still alive by doing a valid GET.
-	time.Sleep(50 * time.Millisecond)
-
+	// The subsequent GET is synchronous: if the agent is alive it replies
+	// immediately, so no sleep is needed to verify liveness after the bad packet.
 	goodClient := newClient(t, addr, "public", 3*time.Second)
 	result, err := goodClient.Get([]string{".1.3.6.1.2.1.1.5.0"})
 	if err != nil {
@@ -339,9 +337,8 @@ func TestServeMultiDecodeError(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 	_, _ = conn.Write([]byte{0xde, 0xad, 0xbe, 0xef})
 
-	// Agent must still respond after the bad packet.
-	time.Sleep(50 * time.Millisecond)
-
+	// The subsequent GET is synchronous: if the agent is alive it replies
+	// immediately, so no sleep is needed to verify liveness after the bad packet.
 	goodClient := newClient(t, addr, "public", 3*time.Second)
 	result, err := goodClient.Get([]string{".1.3.6.1.2.1.1.5.0"})
 	if err != nil {
