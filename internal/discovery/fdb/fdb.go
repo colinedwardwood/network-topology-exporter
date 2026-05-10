@@ -353,11 +353,11 @@ func walkVlanCommunityFdbs(ctx context.Context, p snmputil.Params, client *gsnmp
 				slog.Debug("fdb: VLAN community open failed", "device", vp.IP, "vlan", vlan, "err", err)
 				return
 			}
+			defer func() { _ = vlanClient.Conn.Close() }()
 			vlanEntries := make(map[string]*fdbEntry)
 			if err := walkFdbTableInto(ctx, vlanClient, vlanEntries); err != nil {
 				slog.Debug("fdb: VLAN community walk incomplete", "device", vp.IP, "vlan", vlan, "err", err)
 			}
-			_ = vlanClient.Conn.Close()
 			results[idx] = result{vlanEntries: vlanEntries}
 		}(i, vlanID)
 	}

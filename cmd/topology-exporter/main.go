@@ -280,7 +280,7 @@ func run(ctx context.Context, args []string) int {
 	go func() { workerDone.Wait(); close(drainDone) }()
 	select {
 	case <-drainDone:
-	case <-time.After(cfg.Discovery.TimeoutPerDevice + 5*time.Second):
+	case <-time.After(time.Duration(float64(cfg.Discovery.Interval)*cfg.Discovery.CycleBudgetFraction) + cfg.Discovery.TimeoutPerDevice):
 		logger.Warn("discovery drain timed out, forcing exit")
 	}
 	otlpWg.Wait()
@@ -794,7 +794,7 @@ func runCycle(
 		rawEdges = append(rawEdges, r.edges...)
 		allOOS = append(allOOS, r.outOfScope...)
 	}
-	canonicalEdges := synthesizeEdges(rawEdges, ipToID, allARPMACs, m.FDBSuppressedMACs)
+	canonicalEdges := synthesizeEdges(logger, rawEdges, ipToID, allARPMACs, m.FDBSuppressedMACs)
 
 	// Phase 2 complete; run reconciliation.
 	reconciledEdges, conflicts := graph.Reconcile(canonicalEdges)
@@ -858,6 +858,7 @@ func collectDegradedReasons(edges []discovery.Edge) []string {
 // observations that share the same three-endpoint tuple, and drop observations
 // whose remote endpoint could not be resolved to a known device.
 func synthesizeEdges(
+	logger *slog.Logger,
 	rawEdges []discovery.Edge,
 	ipToID map[string]string,
 	arpMACToIP map[string]string,
@@ -882,7 +883,7 @@ func synthesizeEdges(
 		}
 	}
 
-	edges := resolveEdgeDstDevices(rawEdges, ipToID, macToID, suppressedCounter)
+	edges := resolveEdgeDstDevices(logger, rawEdges, ipToID, macToID, suppressedCounter)
 
 	// Backfill DstPort on FDB edges from LLDP observations with matching endpoints.
 	type epKey struct{ src, srcPort, dst string }
@@ -910,7 +911,7 @@ func synthesizeEdges(
 // For MAC DstDevices: resolves to sysName via the LLDP identity index; unresolved
 // MACs are suppressed (likely hosts, not infrastructure).
 // suppressedCounter is incremented for each suppressed MAC; pass nil to skip.
-func resolveEdgeDstDevices(edges []discovery.Edge, ipToID map[string]string, macToID map[string]string, suppressedCounter prometheus.Counter) []discovery.Edge {
+func resolveEdgeDstDevices(logger *slog.Logger, edges []discovery.Edge, ipToID map[string]string, macToID map[string]string, suppressedCounter prometheus.Counter) []discovery.Edge {
 	result := make([]discovery.Edge, 0, len(edges))
 	for i := range edges {
 		e := edges[i]
@@ -926,7 +927,7 @@ func resolveEdgeDstDevices(edges []discovery.Edge, ipToID map[string]string, mac
 			} else {
 				// Unresolved MAC — likely a host, not infrastructure.
 				// Suppress rather than publish a mac-<hash> pseudo-device.
-				slog.Debug("fdb: suppressing unresolved MAC peer; no LLDP correlation",
+				logger.Debug("fdb: suppressing unresolved MAC peer; no LLDP correlation",
 					"src_device", e.SrcDevice, "src_port", e.SrcPort, "mac", dst)
 				_ = hw
 				if suppressedCounter != nil {
