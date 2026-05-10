@@ -151,6 +151,8 @@ func walkAdjIPAddrs(ctx context.Context, client *gsnmp.GoSNMP, localDevice strin
 		var circKey string
 		if len(adjParts) >= 2 {
 			circKey = adjParts[0] + "." + adjParts[1]
+		} else {
+			slog.Debug("isis: malformed adjKey, SrcPort will be empty", "adj_key", adjKey)
 		}
 		ifName := circIfNames[circKey]
 		edgeDegradedReason := degradedReason

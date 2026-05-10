@@ -45,6 +45,7 @@ package bgp
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"time"
 
@@ -133,11 +134,12 @@ func buildEdges(localDevice string, peers map[string]*bgpPeer, allowedNets []*ne
 	var edges []discovery.Edge
 	var oos []discovery.OutOfScopeNeighbour
 
-	for _, peer := range peers {
+	for ipKey, peer := range peers {
 		if peer.state != bgpStateEstablished {
 			continue
 		}
 		if peer.remoteIP == nil {
+			slog.Debug("bgp: peer missing remote address, skipping", "local_device", localDevice, "peer_key", ipKey)
 			continue
 		}
 
