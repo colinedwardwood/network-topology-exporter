@@ -605,9 +605,27 @@ func (c *Config) validateFederation() error {
 		if c.Federation.Spoke.TLSCACert == "" || c.Federation.Spoke.TLSCert == "" || c.Federation.Spoke.TLSKey == "" {
 			return errors.New("federation.spoke.tls_ca_cert, tls_cert, and tls_key are all required for spoke role (LD-20)")
 		}
+		for _, pair := range []struct{ field, path string }{
+			{"federation.spoke.tls_ca_cert", c.Federation.Spoke.TLSCACert},
+			{"federation.spoke.tls_cert", c.Federation.Spoke.TLSCert},
+			{"federation.spoke.tls_key", c.Federation.Spoke.TLSKey},
+		} {
+			if _, err := os.Stat(pair.path); err != nil {
+				return fmt.Errorf("%s: %w", pair.field, err)
+			}
+		}
 	case "hub":
 		if c.Federation.Hub.TLSCACert == "" || c.Federation.Hub.TLSCert == "" || c.Federation.Hub.TLSKey == "" {
 			return errors.New("federation.hub.tls_ca_cert, tls_cert, and tls_key are all required for hub role (LD-20)")
+		}
+		for _, pair := range []struct{ field, path string }{
+			{"federation.hub.tls_ca_cert", c.Federation.Hub.TLSCACert},
+			{"federation.hub.tls_cert", c.Federation.Hub.TLSCert},
+			{"federation.hub.tls_key", c.Federation.Hub.TLSKey},
+		} {
+			if _, err := os.Stat(pair.path); err != nil {
+				return fmt.Errorf("%s: %w", pair.field, err)
+			}
 		}
 		if c.Federation.Hub.MaxGraphDevices < 0 {
 			return errors.New("federation.hub.max_graph_devices must be >= 0 (0 = unlimited)")

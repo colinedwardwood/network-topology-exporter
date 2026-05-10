@@ -697,21 +697,28 @@ federation:
 	}
 }
 
+// writeTLSStubs creates empty placeholder files for TLS CA cert, cert, and key
+// in dir and returns their paths. Tests use these to satisfy the os.Stat check
+// without needing real PKI material.
+func writeTLSStubs(t *testing.T, dir string) (caPath, certPath, keyPath string) {
+	t.Helper()
+	caPath = filepath.Join(dir, "ca.pem")
+	certPath = filepath.Join(dir, "tls.crt")
+	keyPath = filepath.Join(dir, "tls.key")
+	for _, p := range []string{caPath, certPath, keyPath} {
+		if err := os.WriteFile(p, []byte{}, 0o600); err != nil {
+			t.Fatalf("write TLS stub %s: %v", p, err)
+		}
+	}
+	return caPath, certPath, keyPath
+}
+
 func TestFederationHubSpokeTimeoutTooShort(t *testing.T) {
 	dir := t.TempDir()
+	ca, cert, key := writeTLSStubs(t, dir)
 	path := filepath.Join(dir, "config.yaml")
 	// spoke_timeout = 60s, discovery.interval = 60s → 60s < 2×60s → reject.
-	body := `
-discovery:
-  interval: 60s
-federation:
-  role: hub
-  spoke_timeout: 60s
-  hub:
-    tls_ca_cert: /ca.pem
-    tls_cert: /hub.crt
-    tls_key: /hub.key
-`
+	body := "discovery:\n  interval: 60s\nfederation:\n  role: hub\n  spoke_timeout: 60s\n  hub:\n    tls_ca_cert: " + ca + "\n    tls_cert: " + cert + "\n    tls_key: " + key + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -722,19 +729,10 @@ federation:
 
 func TestFederationHubSpokeTimeoutExactlyTwoIntervals(t *testing.T) {
 	dir := t.TempDir()
+	ca, cert, key := writeTLSStubs(t, dir)
 	path := filepath.Join(dir, "config.yaml")
 	// spoke_timeout = 120s = 2 × 60s → exactly at the boundary, should pass.
-	body := `
-discovery:
-  interval: 60s
-federation:
-  role: hub
-  spoke_timeout: 120s
-  hub:
-    tls_ca_cert: /ca.pem
-    tls_cert: /hub.crt
-    tls_key: /hub.key
-`
+	body := "discovery:\n  interval: 60s\nfederation:\n  role: hub\n  spoke_timeout: 120s\n  hub:\n    tls_ca_cert: " + ca + "\n    tls_cert: " + cert + "\n    tls_key: " + key + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -988,18 +986,9 @@ federation:
 // with spoke_timeout shorter than 2×discovery.interval causes Load to return an error.
 func TestValidateFederationHubSpokeTimeoutTooSmall(t *testing.T) {
 	dir := t.TempDir()
+	ca, cert, key := writeTLSStubs(t, dir)
 	path := filepath.Join(dir, "config.yaml")
-	body := `
-discovery:
-  interval: 60s
-federation:
-  role: hub
-  spoke_timeout: 60s
-  hub:
-    tls_ca_cert: /ca.pem
-    tls_cert: /hub.crt
-    tls_key: /hub.key
-`
+	body := "discovery:\n  interval: 60s\nfederation:\n  role: hub\n  spoke_timeout: 60s\n  hub:\n    tls_ca_cert: " + ca + "\n    tls_cert: " + cert + "\n    tls_key: " + key + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -1587,19 +1576,9 @@ func TestDiscoveryMaxGraphEdgesNegativeFails(t *testing.T) {
 // federation.hub.max_graph_devices causes Load to return an error.
 func TestFederationHubMaxGraphDevicesNegativeFails(t *testing.T) {
 	dir := t.TempDir()
+	ca, cert, key := writeTLSStubs(t, dir)
 	path := filepath.Join(dir, "config.yaml")
-	body := `
-discovery:
-  interval: 60s
-federation:
-  role: hub
-  spoke_timeout: 180s
-  hub:
-    tls_ca_cert: /ca.pem
-    tls_cert: /hub.crt
-    tls_key: /hub.key
-    max_graph_devices: -1
-`
+	body := "discovery:\n  interval: 60s\nfederation:\n  role: hub\n  spoke_timeout: 180s\n  hub:\n    tls_ca_cert: " + ca + "\n    tls_cert: " + cert + "\n    tls_key: " + key + "\n    max_graph_devices: -1\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -1616,19 +1595,9 @@ federation:
 // federation.hub.max_graph_edges causes Load to return an error.
 func TestFederationHubMaxGraphEdgesNegativeFails(t *testing.T) {
 	dir := t.TempDir()
+	ca, cert, key := writeTLSStubs(t, dir)
 	path := filepath.Join(dir, "config.yaml")
-	body := `
-discovery:
-  interval: 60s
-federation:
-  role: hub
-  spoke_timeout: 180s
-  hub:
-    tls_ca_cert: /ca.pem
-    tls_cert: /hub.crt
-    tls_key: /hub.key
-    max_graph_edges: -1
-`
+	body := "discovery:\n  interval: 60s\nfederation:\n  role: hub\n  spoke_timeout: 180s\n  hub:\n    tls_ca_cert: " + ca + "\n    tls_cert: " + cert + "\n    tls_key: " + key + "\n    max_graph_edges: -1\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -1638,5 +1607,169 @@ federation:
 	}
 	if !strings.Contains(err.Error(), "max_graph_edges") {
 		t.Errorf("error %q should mention max_graph_edges", err.Error())
+	}
+}
+
+// ── federation TLS file-existence tests ──────────────────────────────────────
+
+// TestFederationSpokeRejectsNonExistentTLSFiles verifies that a spoke config
+// with syntactically valid but non-existent TLS file paths causes Load to
+// return an error naming the missing field.
+func TestFederationSpokeRejectsNonExistentTLSFiles(t *testing.T) {
+	cases := []struct {
+		name    string
+		ca      string
+		cert    string
+		key     string
+		wantErr string
+	}{
+		{
+			name:    "missing ca cert",
+			ca:      "/nonexistent/ca.pem",
+			cert:    "", // will be replaced with real file
+			key:     "", // will be replaced with real file
+			wantErr: "federation.spoke.tls_ca_cert",
+		},
+		{
+			name:    "missing tls cert",
+			ca:      "", // real
+			cert:    "/nonexistent/spoke.crt",
+			key:     "", // real
+			wantErr: "federation.spoke.tls_cert",
+		},
+		{
+			name:    "missing tls key",
+			ca:      "", // real
+			cert:    "", // real
+			key:     "/nonexistent/spoke.key",
+			wantErr: "federation.spoke.tls_key",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			realCA, realCert, realKey := writeTLSStubs(t, dir)
+			ca := tc.ca
+			if ca == "" {
+				ca = realCA
+			}
+			cert := tc.cert
+			if cert == "" {
+				cert = realCert
+			}
+			key := tc.key
+			if key == "" {
+				key = realKey
+			}
+			cfgPath := filepath.Join(dir, "config.yaml")
+			body := "federation:\n  role: spoke\n  spoke:\n    spoke_id: dc-a\n    hub_url: https://hub:9101\n    tls_ca_cert: " + ca + "\n    tls_cert: " + cert + "\n    tls_key: " + key + "\n"
+			if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			_, err := Load(cfgPath)
+			if err == nil {
+				t.Fatalf("expected error for %s, got nil", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error %q should mention %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestFederationHubRejectsNonExistentTLSFiles verifies that a hub config with
+// syntactically valid but non-existent TLS file paths causes Load to return an
+// error naming the missing field.
+func TestFederationHubRejectsNonExistentTLSFiles(t *testing.T) {
+	cases := []struct {
+		name    string
+		ca      string
+		cert    string
+		key     string
+		wantErr string
+	}{
+		{
+			name:    "missing ca cert",
+			ca:      "/nonexistent/ca.pem",
+			cert:    "",
+			key:     "",
+			wantErr: "federation.hub.tls_ca_cert",
+		},
+		{
+			name:    "missing tls cert",
+			ca:      "",
+			cert:    "/nonexistent/hub.crt",
+			key:     "",
+			wantErr: "federation.hub.tls_cert",
+		},
+		{
+			name:    "missing tls key",
+			ca:      "",
+			cert:    "",
+			key:     "/nonexistent/hub.key",
+			wantErr: "federation.hub.tls_key",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			realCA, realCert, realKey := writeTLSStubs(t, dir)
+			ca := tc.ca
+			if ca == "" {
+				ca = realCA
+			}
+			cert := tc.cert
+			if cert == "" {
+				cert = realCert
+			}
+			key := tc.key
+			if key == "" {
+				key = realKey
+			}
+			cfgPath := filepath.Join(dir, "config.yaml")
+			// spoke_timeout must be >= 2 × interval; use defaults (interval=60s, spoke_timeout=3×60s=180s).
+			body := "federation:\n  role: hub\n  hub:\n    tls_ca_cert: " + ca + "\n    tls_cert: " + cert + "\n    tls_key: " + key + "\n"
+			if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			_, err := Load(cfgPath)
+			if err == nil {
+				t.Fatalf("expected error for %s, got nil", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error %q should mention %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestFederationSpokeValidWithExistingTLSFiles verifies that a fully-configured
+// spoke role with real (stub) TLS files on disk passes validation.
+func TestFederationSpokeValidWithExistingTLSFiles(t *testing.T) {
+	dir := t.TempDir()
+	ca, cert, key := writeTLSStubs(t, dir)
+	cfgPath := filepath.Join(dir, "config.yaml")
+	body := "federation:\n  role: spoke\n  spoke:\n    spoke_id: dc-a\n    hub_url: https://hub:9101\n    tls_ca_cert: " + ca + "\n    tls_cert: " + cert + "\n    tls_key: " + key + "\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(cfgPath); err != nil {
+		t.Fatalf("expected valid spoke config with existing TLS files, got: %v", err)
+	}
+}
+
+// TestFederationHubValidWithExistingTLSFiles verifies that a fully-configured
+// hub role with real (stub) TLS files on disk passes validation.
+func TestFederationHubValidWithExistingTLSFiles(t *testing.T) {
+	dir := t.TempDir()
+	ca, cert, key := writeTLSStubs(t, dir)
+	cfgPath := filepath.Join(dir, "config.yaml")
+	// Use default spoke_timeout (3 × interval = 3 × 60s = 180s ≥ 2 × 60s).
+	body := "federation:\n  role: hub\n  hub:\n    tls_ca_cert: " + ca + "\n    tls_cert: " + cert + "\n    tls_key: " + key + "\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(cfgPath); err != nil {
+		t.Fatalf("expected valid hub config with existing TLS files, got: %v", err)
 	}
 }
