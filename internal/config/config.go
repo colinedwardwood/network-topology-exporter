@@ -415,6 +415,9 @@ func (c *Config) validate() error {
 		if c.Output.OTLP.HeartbeatCycles < 1 {
 			return errors.New("output.otlp.heartbeat_cycles must be >= 1")
 		}
+		if c.Output.OTLP.Timeout < 0 {
+			return errors.New("output.otlp.timeout must be >= 0 (0 uses the 10s default)")
+		}
 	}
 	return nil
 }
