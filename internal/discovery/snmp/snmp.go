@@ -202,9 +202,11 @@ func Walk(ctx context.Context, p Params) (*discovery.Device, error) {
 // sysDescr string, e.g. "15.2.4" in a Cisco IOS sysDescr.
 var sysDescrVersionRe = regexp.MustCompile(`\d+\.\d+[\.\d]*`)
 
-// normalizeSysDescr extracts the first version-like token (digits and dots)
-// from a sysDescr string to reduce Prometheus label cardinality across patch upgrades.
-// Falls back to the first 64 chars of the raw string if no version is found.
+// normalizeSysDescr collapses the sysDescr string to the first version token
+// (M.N or M.N.P) to prevent one Prometheus series per patch release across
+// a device fleet. Using the full sysDescr as a label would multiply series
+// count by the number of distinct firmware versions deployed. Falls back to
+// the first 64 bytes of raw sysDescr when no version token is found.
 func normalizeSysDescr(s string) string {
 	// Extract first M.N or M.N.P version token
 	if m := sysDescrVersionRe.FindString(s); m != "" {
@@ -329,11 +331,8 @@ type enterprisePrefix struct {
 }
 
 // enterprisePrefixes is the ordered list of IANA enterprise OID prefixes.
-// Ordering matters: iteration stops at the first match, so longer prefixes
-// must precede any shorter prefix that is also a prefix of the longer one.
-// Entries here share no prefix relationship (each enterprise number is unique),
-// so order within the list does not affect correctness — it is fixed to make
-// iteration deterministic (D21).
+// Enterprise numbers are disjoint — no entry is a prefix of another, so
+// iteration order does not affect correctness. Order is fixed for determinism.
 //
 // Source: IANA Enterprise Numbers registry
 // (https://www.iana.org/assignments/enterprise-numbers)

@@ -209,9 +209,9 @@ func walkRemEntries(ctx context.Context, client *gsnmp.GoSNMP) (map[remKey]*remE
 
 // buildEdges converts the raw SNMP walks into topology edges.
 //
-// TTL liveness: lldpRemTable entries are aged out by the agent per RFC 2922 §3.
-// Expired entries (TTL elapsed) are automatically removed from the SNMP table
-// before our walk, so no explicit TTL field check is needed here.
+// TTL liveness: lldpRemTable entries are aged out by the LLDP agent per
+// IEEE 802.1AB-2016 §9.6.3. Expired entries are removed before our walk,
+// so no explicit TTL field check is needed here.
 func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[remKey]*remEntry, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
 	var edges []discovery.Edge
 	var oos []discovery.OutOfScopeNeighbour

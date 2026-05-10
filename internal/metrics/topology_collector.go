@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -21,7 +22,12 @@ func sanitizeLabel(s string) string {
 		return -1
 	}, s)
 	if len(s) > maxLabelLen {
-		return s[:maxLabelLen]
+		// Truncate at a rune boundary so we never produce invalid UTF-8.
+		n := maxLabelLen
+		for n > 0 && !utf8.ValidString(s[:n]) {
+			n--
+		}
+		return s[:n]
 	}
 	return s
 }

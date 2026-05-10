@@ -12,7 +12,7 @@ The LD-12 token-bucket trial limiter (`credentials.trial_rate_per_second`, defau
 
 The recommended sequence is single-profile-first, expand-once-stable.
 
-Start with one credential profile that you've already tested manually against a representative device. List it as the only entry under `credentials.profiles:` and as the only entry in `credentials.fallback_order:`. Bring the exporter up. Watch `topology_credential_trials_total{status="ok"}` climb and `{status="failed"}` stay near zero. The cache fills as cycles complete and `network_topology_snapshot_loaded_devices_total` reflects what the snapshot now knows on the next restart.
+Start with one credential profile that you've already tested manually against a representative device. List it as the only entry under `credentials.profiles:` and as the only entry in `credentials.fallback_order:`. Bring the exporter up. Watch `network_topology_credential_trials_total{status="ok"}` climb and `{status="failed"}` stay near zero. The cache fills as cycles complete and `network_topology_snapshot_loaded_devices_total` reflects what the snapshot now knows on the next restart.
 
 Once the cache is stable, add the second profile. The cache means devices that already authenticated under the first profile won't enter the trial path; only devices that failed under the first profile will trial the second. Repeat until every device has a cached profile.
 
@@ -26,13 +26,13 @@ If you do trip a lockout, the recovery sequence is:
 2. Wait the lockout window (vendor-dependent; typically 5–15 minutes for SNMP, longer for SSH).
 3. Reduce `credentials.trial_rate_per_second` to 1.
 4. Bring the exporter up with the single profile that's known to work.
-5. Confirm the cache fills and the metric `topology_credential_trials_total{status="failed"}` stays flat for one full cycle.
+5. Confirm the cache fills and the metric `network_topology_credential_trials_total{status="failed"}` stays flat for one full cycle.
 6. Restore the rate and add other profiles per the cold-start sequence above.
 
 The cache is keyed on `Device.ID` (sysName), so it survives IP renumbering. It does not survive a snapshot version bump (LD-13 falls through to a cold start on schema mismatch); plan for the cold-start sequence again whenever the snapshot schema changes.
 
 ## What to watch
 
-`topology_credential_trials_total{status="failed"}` is the leading indicator. A non-trivial rate after the cache has had time to fill means a device is rejecting every profile and re-entering the trial sequence on every cycle — that device needs an explicit assignment or a new profile.
+`network_topology_credential_trials_total{status="failed"}` is the leading indicator. A non-trivial rate after the cache has had time to fill means a device is rejecting every profile and re-entering the trial sequence on every cycle — that device needs an explicit assignment or a new profile.
 
 `network_topology_graph_stale` should drop from 1 to 0 within one `discovery.interval` of startup. If it stays at 1 longer than two intervals, the first live cycle isn't completing — usually a credential or scope (LD-11) problem rather than a network problem.
