@@ -560,9 +560,6 @@ func (h *Hub) tryPublishMetrics(gen uint64, g discovery.Graph, clearStale bool, 
 	for {
 		last := h.lastPublishedGen.Load()
 		if gen <= last {
-			if clearStale {
-				h.m.GraphStale.Set(0)
-			}
 			return false
 		}
 		if h.lastPublishedGen.CompareAndSwap(last, gen) {
