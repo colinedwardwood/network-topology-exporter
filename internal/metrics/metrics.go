@@ -94,8 +94,8 @@ func New(emitBoundaryObs bool) *Metrics {
 			Help: "1 while serving the LD-13 snapshot on startup; 0 once the first live cycle completes.",
 		}),
 		SnapshotLastWrittenUnix: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "network_topology_snapshot_last_written_unix",
-			Help: "Wall-clock time of the most recent successful LD-13 snapshot write.",
+			Name: "network_topology_snapshot_last_written_timestamp_seconds",
+			Help: "Unix timestamp in seconds of the most recent successful LD-13 snapshot write.",
 		}),
 		SnapshotLoadedDevicesTotal: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "network_topology_snapshot_loaded_devices_total",
@@ -152,8 +152,8 @@ func New(emitBoundaryObs bool) *Metrics {
 			Help: "LD-18 hub mode: 1 while a spoke is active (pushed within federation.spoke_timeout), 0 after eviction.",
 		}, []string{"spoke_id"}),
 		FederationSpokeLastPushUnix: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "network_topology_federation_spoke_last_push_unix",
-			Help: "LD-18 hub mode: wall-clock time of the most recent push from each spoke.",
+			Name: "network_topology_federation_spoke_last_push_timestamp_seconds",
+			Help: "LD-18 hub mode: Unix timestamp in seconds of the most recent push from each spoke.",
 		}, []string{"spoke_id"}),
 		FederationSpokePushFailuresTotal: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "network_topology_federation_spoke_push_failures_total",

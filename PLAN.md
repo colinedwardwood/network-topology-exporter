@@ -80,13 +80,13 @@ The exporter is not public-release ready: it has credible architecture and proto
 - [ ] **MIB Citation Hygiene**: Remove contradictory or misleading comments, including the enterprise-prefix ordering comment and the `normalizeSysDescr` comment that says what the regex does without explaining the label-cardinality reason.
 
 ## 5. Prometheus & Observability Polish
-- [ ] **Fix Namespace Drift in Device Metrics**: Rename or compatibility-shim `network_device_info` and `network_device_uptime_seconds` into the `network_topology_` namespace.
+- [x] **Fix Namespace Drift in Device Metrics**: Renamed `network_device_info` → `network_topology_device_info` and `network_device_uptime_seconds` → `network_topology_device_uptime_seconds`.
   **Rationale**: Current naming violates the project namespace pattern and forces dashboard authors to memorize special cases.
 
-- [ ] **Use Standard Timestamp Suffixes**: Replace `_unix` gauges with `_timestamp_seconds` variants, with a documented compatibility window.
+- [x] **Use Standard Timestamp Suffixes**: Replaced `_unix` gauges with `_timestamp_seconds` variants (`network_topology_snapshot_last_written_timestamp_seconds`, `network_topology_federation_spoke_last_push_timestamp_seconds`).
   **Rationale**: Prometheus/Grafana tooling recognizes `_timestamp_seconds`; `_unix` is homemade schema drift.
 
-- [ ] **Rename `link_type` to `link_kind`**: The code calls the field `LinkKind`, docs discuss link semantics, but the exported label is `link_type`.
+- [x] **Rename `link_type` to `link_kind`**: The `link_type` label on `network_topology_edge_info` is now `link_kind`, matching the internal `LinkKind` field.
   **Rationale**: Public metric schemas should not expose inconsistent vocabulary.
 
 - [ ] **Bound Decode-Issue Label Values Structurally**: `DiscoveryDecodeIssues{module,oid,reason}` is safe only while callers pass table-root OIDs. Encode table identity as an enum or allow-list instead of trusting future contributors not to pass full instance OIDs.

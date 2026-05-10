@@ -172,7 +172,7 @@ func TestTopologyCollectorEdgeMetric(t *testing.T) {
 	const want = `
 # HELP network_topology_edge_info One series per discovered topology edge. Value is always 1.
 # TYPE network_topology_edge_info gauge
-network_topology_edge_info{direction="bidirectional",discovery_proto="lldp",dst_device="dev-b",dst_port="Gi0/2",link_type="ethernet",src_device="dev-a",src_port="Gi0/1"} 1
+network_topology_edge_info{direction="bidirectional",discovery_proto="lldp",dst_device="dev-b",dst_port="Gi0/2",link_kind="ethernet",src_device="dev-a",src_port="Gi0/1"} 1
 `
 	if err := testutil.GatherAndCompare(m.Registry(), strings.NewReader(want), "network_topology_edge_info"); err != nil {
 		t.Fatalf("edge metric mismatch: %v", err)

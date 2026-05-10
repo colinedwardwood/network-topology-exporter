@@ -759,12 +759,12 @@ func TestHubRestoreGraphPublishesMetrics(t *testing.T) {
 	}
 	var deviceSeries int
 	for _, mf := range mfs {
-		if mf.GetName() == "network_device_info" {
+		if mf.GetName() == "network_topology_device_info" {
 			deviceSeries = len(mf.GetMetric())
 		}
 	}
 	if deviceSeries != 1 {
-		t.Errorf("network_device_info series after RestoreGraph = %d, want 1", deviceSeries)
+		t.Errorf("network_topology_device_info series after RestoreGraph = %d, want 1", deviceSeries)
 	}
 }
 
@@ -1528,14 +1528,14 @@ func TestTryPublishMetricsRejectsOversizedGraphDevices(t *testing.T) {
 	}
 
 	// Topology must NOT have been updated — gather metrics and confirm no
-	// network_device_info series were written.
+	// network_topology_device_info series were written.
 	mfs, err := m.Registry().Gather()
 	if err != nil {
 		t.Fatalf("gather: %v", err)
 	}
 	for _, mf := range mfs {
-		if mf.GetName() == "network_device_info" && len(mf.GetMetric()) > 0 {
-			t.Errorf("network_device_info has %d series after rejected update, want 0",
+		if mf.GetName() == "network_topology_device_info" && len(mf.GetMetric()) > 0 {
+			t.Errorf("network_topology_device_info has %d series after rejected update, want 0",
 				len(mf.GetMetric()))
 		}
 	}

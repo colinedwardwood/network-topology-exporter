@@ -258,7 +258,7 @@ If these don't match exactly — different case, domain suffix on one side, vend
 
 The hub loads the same snapshot path as standalone/spoke instances. On startup, `network_topology_graph_stale` is 1 until the first spoke push arrives. If no spoke has pushed within one `discovery.interval` of the hub starting, something is wrong with at least one spoke.
 
-Check `network_topology_federation_spoke_last_push_unix{spoke_id="..."}` to identify which spoke is overdue. A value of 0 means the hub has never received a push from that spoke since starting (no snapshot entry for it either).
+Check `network_topology_federation_spoke_last_push_timestamp_seconds{spoke_id="..."}` to identify which spoke is overdue. A value of 0 means the hub has never received a push from that spoke since starting (no snapshot entry for it either).
 
 ## Alert runbook entries
 

@@ -27,7 +27,7 @@
 ### Observability
 
 - **D12** — OTLP resource now includes `service.version` and `service.instance.id` alongside `service.name`.
-- **D19** — `network_topology_snapshot_last_written_unix` initialised to `time.Now()` at startup; prevents the `GraphStale` alert from firing on fresh pods.
+- **D19** — `network_topology_snapshot_last_written_timestamp_seconds` initialised to `time.Now()` at startup; prevents the `GraphStale` alert from firing on fresh pods.
 - **D20** — Prometheus metric name corrected: `network_topology_discovery_devices` → `network_topology_discovery_devices_total` to match documented name and README.
 
 ### Configuration
@@ -66,7 +66,7 @@
 ### Features
 
 - **LD-09: Clean-room constraint** — GPL-sourced monitoring code may be read for behavioural specification only; the Go implementation is written from specs. Full guardrails in CONTRIBUTING.md.
-- **LD-10: Source-attributed reconciliation** — every edge carries `discovery_proto`, `direction`, `link_type`, and `precedence_rank`; protocol conflicts emit `network_topology_conflict_total` rather than being silently resolved.
+- **LD-10: Source-attributed reconciliation** — every edge carries `discovery_proto`, `direction`, `link_kind`, and `precedence_rank`; protocol conflicts emit `network_topology_conflict_total` rather than being silently resolved.
 - **LD-11: CIDR allow-list scope guard** — the exporter polls only IPs in `discovery.scope.cidr_allow_list`; out-of-scope neighbours emit a log line and increment `network_topology_out_of_scope_neighbours_total`.
 - **LD-12: Credential management** — named profiles, per-IP and per-CIDR assignments, ordered fallback, and a token-bucket trial limiter to prevent device lockout on cold start.
 - **LD-13: Snapshot persistence** — versioned JSON snapshot written atomically after every cycle; `/metrics` serves the previous graph immediately on restart with `network_topology_graph_stale=1`.

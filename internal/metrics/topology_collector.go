@@ -58,13 +58,13 @@ func newTopologyCollector(emitBoundaryObs bool, scrapeDuration, scrapeSamples pr
 		scrapeDuration:  scrapeDuration,
 		scrapeSamples:   scrapeSamples,
 		deviceInfoDesc: prometheus.NewDesc(
-			"network_device_info",
+			"network_topology_device_info",
 			"One series per discovered device. Value is always 1; inventory data is in the labels.",
 			[]string{"device_id", "vendor", "model", "os_version", "site"},
 			nil,
 		),
 		deviceUptimeDesc: prometheus.NewDesc(
-			"network_device_uptime_seconds",
+			"network_topology_device_uptime_seconds",
 			"Per-device uptime from the SNMP SYSTEM group (sysUpTime).",
 			[]string{"device_id"},
 			nil,
@@ -72,7 +72,7 @@ func newTopologyCollector(emitBoundaryObs bool, scrapeDuration, scrapeSamples pr
 		edgeInfoDesc: prometheus.NewDesc(
 			"network_topology_edge_info",
 			"One series per discovered topology edge. Value is always 1.",
-			[]string{"src_device", "src_port", "dst_device", "dst_port", "discovery_proto", "link_type", "direction"},
+			[]string{"src_device", "src_port", "dst_device", "dst_port", "discovery_proto", "link_kind", "direction"},
 			nil,
 		),
 		oosCountDesc: prometheus.NewDesc(
