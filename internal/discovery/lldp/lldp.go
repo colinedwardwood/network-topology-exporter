@@ -271,6 +271,9 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 			remPort = rem.portDesc
 		}
 		if remDevice == "" || remPort == "" {
+			slog.Debug("lldp: unable to resolve neighbour device or port, skipping edge",
+				"local_device", localDevice, "local_port", localPort,
+				"rem_device", remDevice, "rem_port", remPort)
 			continue
 		}
 
