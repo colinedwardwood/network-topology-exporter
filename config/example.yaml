@@ -1,9 +1,9 @@
 # network-topology-exporter — example configuration.
 #
-# Output contract: Prometheus metrics on /metrics, structured JSON log lines
-# to stderr. Change events are log lines; ship them to Loki/Elasticsearch with
-# the collector agent already in your stack (Promtail, Alloy, Fluentd, etc.).
-# See README.md for the full metric reference.
+# Output: Prometheus metrics on /metrics, structured JSON log lines to stderr.
+# Change events are log lines; ship them to Loki/Elasticsearch with the
+# collector agent already in your stack (Promtail, Alloy, Fluentd, etc.).
+# See README.md for the full metric reference and docs/operator/ for runbooks.
 
 # ─── Discovery cycle controls ───────────────────────────────────────────────
 discovery:
@@ -11,17 +11,33 @@ discovery:
   timeout_per_device: 10s
   parallelism: 20
 
+  # Cycle budget: cancel device walks still running after this fraction of
+  # the interval (default 0.8 = 80%). Cancelled targets increment
+  # network_topology_cycle_budget_skips_total.
+  cycle_budget_fraction: 0.8
+
+  # Per-module timeout within a device's total timeout_per_device budget.
+  # Prevents one slow protocol walk from consuming the whole device budget.
+  # 0 = no additional cap (default).
+  # timeout_per_module: 3s
+
   # Polling-scope guard (hard allow-list). The exporter polls only IPs within
-  # this allow-list. LLDP/CDP-discovered neighbours whose IPs fall outside
-  # surface as network_topology_out_of_scope_neighbours_total (and a log line)
-  # but are never polled. Required when targets: is set.
+  # these CIDRs. LLDP/CDP-discovered neighbours outside this range surface as
+  # network_topology_out_of_scope_neighbours_total but are never polled.
+  # Required when targets: is set.
   scope:
     cidr_allow_list:
       - 198.51.100.0/24
 
-  # Unidirectional link expiry: a unidirectional link is removed from the graph
-  # after this many consecutive unconfirmed cycles. Default 3.
+  # Unidirectional link expiry: remove a link that has not been confirmed from
+  # both sides after this many consecutive cycles (default 3).
   unconfirmed_link_ttl_cycles: 3
+
+  # Graph size admission control: reject a local graph update if it exceeds
+  # these limits. 0 = unlimited (default). Counter:
+  #   network_topology_graph_updates_rejected_total
+  # max_graph_devices: 5000
+  # max_graph_edges: 20000
 
 # ─── Per-protocol modules ──────────────────────────────────────────────────
 modules:
@@ -36,15 +52,16 @@ modules:
   cdp:
     enabled: true              # CISCO-CDP-MIB
   bgp:
-    enabled: false             # RFC 1657 BGP4-MIB — v0.2+
+    enabled: false             # RFC 1657 BGP4-MIB
   ospf:
-    enabled: false             # RFC 4750 OSPF-MIB — v0.2+
+    enabled: false             # RFC 4750 OSPF-MIB
   fdb:
     enabled: false             # RFC 4188 BRIDGE-MIB — noisy without filtering; disabled by default
+    # max_vlans: 64            # cap VLAN community-string walks on IOS devices (default 64)
 
-# ─── Credential management ──────────────────────────────────────────────────
+# ─── Credential management ─────────────────────────────────────────────────
 # Named profiles, per-IP/CIDR assignment, ordered fallback, and a global
-# trial rate limit. Secret values are dereferenced from environment variables.
+# trial rate limit. Secret values are read from environment variables.
 # Cold-start lockout runbook: docs/operator/cold-start-credentials.md
 credentials:
   profiles:
@@ -68,24 +85,22 @@ credentials:
   # rate so a fresh exporter does not trigger SNMP auth-lockout policies.
   trial_rate_per_second: 5
 
-# ─── Startup snapshot ───────────────────────────────────────────────────────
+# ─── Startup snapshot ──────────────────────────────────────────────────────
 # Versioned JSON snapshot of the reconciled graph plus the credential cache.
-# Loaded on startup; serves stale-but-valid metrics with
-# network_topology_graph_stale=1 until the first live cycle completes.
-# Snapshot is always active. Set path to override the default location:
-#   /var/lib/network-topology-exporter/snapshot.json
+# Loaded on startup so /metrics serves stale-but-valid data (with
+# network_topology_graph_stale=1) until the first live cycle completes.
 snapshot:
   path: /var/lib/network-topology-exporter/snapshot.json
 
-# ─── Federation ─────────────────────────────────────────────────────────────
+# ─── Federation ────────────────────────────────────────────────────────────
 # Three modes beyond standalone:
 #
 # uncoordinated: adds network_topology_boundary_observation_info metric for
 #   Mimir recording-rule stitching. No inter-instance coordination needed.
 #   Recording rule: count by(peer_a,peer_b,proto)(network_topology_boundary_observation_info) == 2
 #
-# spoke: runs normal discovery + pushes pre-reconciled graph to a hub binary
-#   after each cycle. mTLS is required.
+# spoke: runs normal discovery + pushes pre-reconciled graph to a hub after
+#   each cycle. mTLS is required.
 #
 # hub: pure aggregator — no local SNMP discovery. Receives spoke pushes,
 #   reconciles combined graph, emits unified Prometheus metrics.
@@ -106,16 +121,25 @@ snapshot:
 #   hub:
 #     listen_addr: :9101
 #     tls_ca_cert: /etc/topology-exporter/pki/ca.pem
-#     tls_cert: /etc/topology-exporter/pki/hub.crt
-#     tls_key: /etc/topology-exporter/pki/hub.key
+#     tls_cert:    /etc/topology-exporter/pki/hub.crt
+#     tls_key:     /etc/topology-exporter/pki/hub.key
+#
+#     # Prevent cross-site device name collisions. When true, device names are
+#     # only lowercased for matching (no FQDN suffix stripping). Set this when
+#     # spoke sites use the same short hostnames (e.g. core-sw.dc1 and core-sw.dc2).
+#     # strict_device_name_matching: false
+#
+#     # Graph size admission control for the hub's combined graph.
+#     # max_graph_devices: 10000
+#     # max_graph_edges: 50000
 #
 #   # Spoke-side settings (role: spoke). mTLS is required.
 #   spoke:
 #     spoke_id: dc-a                  # unique identifier; used in hub metric labels
 #     hub_url: https://hub.example.com:9101
 #     tls_ca_cert: /etc/topology-exporter/pki/ca.pem
-#     tls_cert: /etc/topology-exporter/pki/spoke-dc-a.crt
-#     tls_key: /etc/topology-exporter/pki/spoke-dc-a.key
+#     tls_cert:    /etc/topology-exporter/pki/spoke-dc-a.crt
+#     tls_key:     /etc/topology-exporter/pki/spoke-dc-a.key
 
 # output: optional push-mode output paths (complement to /metrics pull)
 # output:
@@ -125,9 +149,8 @@ snapshot:
 #     timeout: 10s
 
 # ─── Per-device enrichment ─────────────────────────────────────────────────
-# Targets provide enrichment metadata (SNMP port, site label, custom labels)
-# for devices discovered within the CIDR allow-list. The CIDR drives what
-# gets polled; targets attach metadata to matching IPs. A target IP outside
+# Targets attach enrichment metadata (SNMP port, site label, custom labels)
+# to devices discovered within the CIDR allow-list. A target IP outside
 # the allow-list is rejected at startup.
 targets:
   - host: 198.51.100.10
