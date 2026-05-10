@@ -80,7 +80,7 @@ func walkCacheTable(ctx context.Context, client *gsnmp.GoSNMP) (map[cacheKey]*ca
 		return nil, err
 	}
 
-	const prefix = ".1.3.6.1.4.1.9.9.23.1.2.1.1."
+	const prefix = "." + oidCDPCacheTable + ".1."
 	entries := make(map[cacheKey]*cacheEntry)
 	for _, pdu := range pdus {
 		suffix, ok := snmputil.TrimOIDPrefix(pdu.Name, prefix)
