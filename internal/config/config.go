@@ -412,6 +412,9 @@ func (c *Config) validate() error {
 		if err := validateHTTPEndpoint(c.Output.OTLP.Endpoint); err != nil {
 			return fmt.Errorf("output.otlp.endpoint: %w", err)
 		}
+		if c.Output.OTLP.HeartbeatCycles < 1 {
+			return errors.New("output.otlp.heartbeat_cycles must be >= 1")
+		}
 	}
 	return nil
 }
@@ -486,6 +489,9 @@ func (c *Config) validateScope() error {
 // every assignment / fallback name resolves to a defined profile, and every
 // profile carries the env-var fields its type requires.
 func (c *Config) validateCredentials() error {
+	if c.Credentials.TrialRatePerSecond < 1 {
+		return errors.New("credentials.trial_rate_per_second must be >= 1")
+	}
 	if len(c.Credentials.Profiles) == 0 {
 		return nil // legacy single-community path; ModuleSNMP.CommunityEnv applies.
 	}
@@ -548,9 +554,6 @@ func (c *Config) validateCredentials() error {
 		if _, ok := known[n]; !ok {
 			return fmt.Errorf("credentials.fallback_order references unknown profile %q", n)
 		}
-	}
-	if c.Credentials.TrialRatePerSecond < 1 {
-		return errors.New("credentials.trial_rate_per_second must be >= 1")
 	}
 	return nil
 }
