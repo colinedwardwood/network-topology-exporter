@@ -2,4 +2,4 @@
 
 ## Open Items
 
-- [ ] **Replace FDB Edge Emission With Identity-Gated Link Synthesis**: FDB should produce raw observations, not public topology edges, unless the MAC can be correlated to known infrastructure through LLDP chassis MAC, ARP/IP-MIB, ENTITY-MIB, or explicit operator inventory. This is a deep architectural rework requiring a two-phase graph assembly boundary (raw observations → canonical link synthesis); scope and design decision required before implementation.
+- [ ] **Formalize Two-Phase Graph Assembly Boundary**: FDB emits raw MAC-addressed edges; `resolveEdgeDstDevices` synthesizes them into canonical device edges using LLDP chassis MAC and ARP table correlation (both now implemented). The remaining work is architectural: move the synthesis step into a named type/package so the boundary between "protocol observations" and "canonical graph" is explicit in the type system rather than implicit in function call order in `runCycle`. This is a refactor for maintainability; the observable behavior is already correct.
