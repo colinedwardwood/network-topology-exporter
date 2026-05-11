@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -81,6 +82,8 @@ func NewHub(cfg config.FederationConfig, m *metrics.Metrics, logger *slog.Logger
 // spoke push arrives (LD-13). The caller must set m.GraphStale=1 before
 // invoking this; the hub clears it after the first successful push.
 func (h *Hub) RestoreGraph(g discovery.Graph) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.publishMetrics(g, false)
 }
 
@@ -326,11 +329,21 @@ func (h *Hub) buildCombinedGraph(spokes map[string]spokeEntry) (discovery.Graph,
 	seenDevices := make(map[string]bool)
 	var allEdges []discovery.Edge
 
-	for _, entry := range spokes {
+	spokeKeys := make([]string, 0, len(spokes))
+	for k := range spokes {
+		spokeKeys = append(spokeKeys, k)
+	}
+	sort.Strings(spokeKeys)
+
+	for _, sk := range spokeKeys {
+		entry := spokes[sk]
 		for _, dev := range entry.payload.Devices {
 			if !seenDevices[dev.ID] {
 				seenDevices[dev.ID] = true
 				allDevices = append(allDevices, dev)
+			} else {
+				h.logger.Warn("hub: duplicate device_id across spokes; using first alphabetically",
+					"device_id", dev.ID, "spoke_id", sk)
 			}
 		}
 		for _, e := range entry.payload.Edges {
