@@ -170,13 +170,13 @@ func buildEdges(localDevice string, ifNames map[int]string, entries map[cacheKey
 }
 
 // cdpNeighborIP extracts the IP address from cdpCacheAddress. addrType 1 is
-// IPv4 (4-byte addr); addrType 2 is IPv6 (16-byte addr). Returns nil for all
-// other address types or unexpected lengths.
+// IPv4 (4-byte addr); addrType 20 is IPv6 (16-byte addr) per CISCO-CDP-MIB.
+// Returns nil for all other address types or unexpected lengths.
 func cdpNeighborIP(e *cacheEntry) net.IP {
 	switch {
 	case e.addrType == 1 && len(e.addr) == 4:
 		return append(net.IP{}, e.addr...)
-	case e.addrType == 2 && len(e.addr) == 16:
+	case e.addrType == 20 && len(e.addr) == 16:
 		return append(net.IP{}, e.addr...)
 	}
 	return nil
