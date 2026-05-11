@@ -229,7 +229,7 @@ func (e *Exporter) PushChanges(ctx context.Context, changes []graph.EdgeChange) 
 		}
 
 		// Prefer "after" edge for attribute values; fall back to "before".
-		var srcDevice, srcPort, dstDevice, dstPort, proto string
+		var srcDevice, srcPort, dstDevice, dstPort, proto, linkKind string
 		switch {
 		case c.After != nil:
 			srcDevice = c.After.SrcDevice
@@ -237,12 +237,14 @@ func (e *Exporter) PushChanges(ctx context.Context, changes []graph.EdgeChange) 
 			dstDevice = c.After.DstDevice
 			dstPort = c.After.DstPort
 			proto = c.After.DiscoveryProto
+			linkKind = c.After.LinkKind
 		case c.Before != nil:
 			srcDevice = c.Before.SrcDevice
 			srcPort = c.Before.SrcPort
 			dstDevice = c.Before.DstDevice
 			dstPort = c.Before.DstPort
 			proto = c.Before.DiscoveryProto
+			linkKind = c.Before.LinkKind
 		}
 
 		var ts time.Time
@@ -267,6 +269,7 @@ func (e *Exporter) PushChanges(ctx context.Context, changes []graph.EdgeChange) 
 				{Key: "dst_device", Value: kvValue{StringValue: dstDevice}},
 				{Key: "dst_port", Value: kvValue{StringValue: dstPort}},
 				{Key: "proto", Value: kvValue{StringValue: proto}},
+				{Key: "link_kind", Value: kvValue{StringValue: linkKind}},
 			},
 		})
 	}
