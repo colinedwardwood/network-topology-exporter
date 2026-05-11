@@ -374,6 +374,9 @@ func (c *Config) validate() error {
 	if c.Discovery.TimeoutPerModule < 0 {
 		return errors.New("discovery.timeout_per_module must be >= 0")
 	}
+	if c.Discovery.TimeoutPerModule > 0 && c.Discovery.TimeoutPerModule >= c.Discovery.TimeoutPerDevice {
+		return errors.New("discovery.timeout_per_module must be less than discovery.timeout_per_device")
+	}
 	if c.Discovery.MaxGraphDevices < 0 {
 		return errors.New("discovery.max_graph_devices must be >= 0 (0 = unlimited)")
 	}
@@ -535,9 +538,12 @@ func (c *Config) validateCredentials() error {
 		c.Credentials.Profiles[i] = p
 		known[p.Name] = p
 	}
-	for _, a := range c.Credentials.Assignments {
+	for i, a := range c.Credentials.Assignments {
 		if a.IP == "" && a.CIDR == "" {
 			return errors.New("credentials.assignments[]: ip or cidr is required")
+		}
+		if a.IP != "" && a.CIDR != "" {
+			return fmt.Errorf("credentials.assignments[%d]: ip and cidr are mutually exclusive", i)
 		}
 		if a.IP != "" && net.ParseIP(a.IP) == nil {
 			return fmt.Errorf("credentials.assignments: invalid ip %q", a.IP)
