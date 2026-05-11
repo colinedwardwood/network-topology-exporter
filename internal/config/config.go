@@ -595,6 +595,9 @@ func normalizePrivProtocol(raw string) (string, error) {
 
 func (c *Config) validateTargets() error {
 	for i, t := range c.Targets {
+		if t.Host == "" {
+			return fmt.Errorf("targets[%d].host must not be empty", i)
+		}
 		if t.Port < 0 || t.Port > 65535 {
 			return fmt.Errorf("targets[%d].port %d is out of range [0, 65535]", i, t.Port)
 		}
