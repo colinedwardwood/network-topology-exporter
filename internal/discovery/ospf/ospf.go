@@ -187,5 +187,9 @@ func parseNbrOID(oid, prefix string) (col int, key string, ok bool) {
 			return 0, "", false
 		}
 	}
+	// Validate addressLessIndex is a non-negative integer.
+	if _, err := strconv.Atoi(parts[4]); err != nil {
+		return 0, "", false
+	}
 	return col, key, true
 }
