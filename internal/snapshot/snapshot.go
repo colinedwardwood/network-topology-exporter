@@ -52,7 +52,11 @@ var (
 // CurrentVersion is the on-disk schema version. Bump when the persisted
 // shape changes; older snapshots are discarded with a warning rather than
 // silently mis-parsed.
-const CurrentVersion = 1
+//
+// Version history:
+//   1 — initial format
+//   2 — EdgeKeyString escapes "|" as "%7C" in UnconfirmedAges keys
+const CurrentVersion = 2
 
 // File is the on-disk representation. Public fields and field tags are part
 // of the persistence contract; treat schema changes the same as a database

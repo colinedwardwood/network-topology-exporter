@@ -182,6 +182,15 @@ func Reconcile(edges []discovery.Edge) ([]discovery.Edge, []Conflict) {
 		} else {
 			chosen.Direction = discovery.DirectionUnidirectional
 		}
+		// Normalise port names on the emitted edge so that Key() and
+		// AgeUnconfirmed produce the same EdgeKey regardless of which
+		// protocol won the precedence race in this cycle (e.g. LLDP
+		// "GigabitEthernet0/1" vs CDP "Gi0/1"). Without this, a winning
+		// protocol change between cycles produces different Key() values,
+		// causing Diff to emit spurious ChangeRemoved+ChangeAdded pairs and
+		// AgeUnconfirmed to lose its counter.
+		chosen.SrcPort = NormalizePortName(chosen.SrcPort)
+		chosen.DstPort = NormalizePortName(chosen.DstPort)
 		result = append(result, chosen)
 		resultByNormKey[k] = chosen
 	}
@@ -417,19 +426,23 @@ func Key(e discovery.Edge) EdgeKey {
 // EdgeKeyString serialises an EdgeKey to the pipe-delimited format used in
 // snapshot.File.UnconfirmedAges ("srcDevice|srcPort|dstDevice|dstPort").
 // The key must be in canonical order (from Key()) for round-trips to be
-// stable.
+// stable. Literal "|" characters in any field are percent-encoded as "%7C"
+// so that EdgeKeyFromString can round-trip without ambiguity.
 func EdgeKeyString(k EdgeKey) string {
-	return k.SrcDevice + "|" + k.SrcPort + "|" + k.DstDevice + "|" + k.DstPort
+	esc := func(s string) string { return strings.ReplaceAll(s, "|", "%7C") }
+	return esc(k.SrcDevice) + "|" + esc(k.SrcPort) + "|" + esc(k.DstDevice) + "|" + esc(k.DstPort)
 }
 
 // EdgeKeyFromString parses the pipe-delimited snapshot format back into an
 // EdgeKey. Returns an error if s does not have exactly three separators.
+// "%7C" in any field is unescaped back to "|".
 func EdgeKeyFromString(s string) (EdgeKey, error) {
 	parts := strings.SplitN(s, "|", 4)
 	if len(parts) != 4 {
 		return EdgeKey{}, fmt.Errorf("graph: invalid edge key %q (want srcDevice|srcPort|dstDevice|dstPort)", s)
 	}
-	return EdgeKey{SrcDevice: parts[0], SrcPort: parts[1], DstDevice: parts[2], DstPort: parts[3]}, nil
+	unesc := func(s string) string { return strings.ReplaceAll(s, "%7C", "|") }
+	return EdgeKey{SrcDevice: unesc(parts[0]), SrcPort: unesc(parts[1]), DstDevice: unesc(parts[2]), DstPort: unesc(parts[3])}, nil
 }
 
 // AgeUnconfirmed advances the LD-14 lifecycle counter by one cycle for every
