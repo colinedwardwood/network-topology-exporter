@@ -59,7 +59,7 @@ func TestBuildEdgesEstablishedNeighbour(t *testing.T) {
 	}
 }
 
-// buildEdges: twoWay(5) neighbour also produces an edge.
+// buildEdges: twoWay(4) neighbour also produces an edge.
 func TestBuildEdgesTwoWayNeighbour(t *testing.T) {
 	rows := map[string]*nbrRow{
 		"10.0.0.2.0": {nbrIP: net.ParseIP("10.0.0.2").To4(), state: stateTwoWay},
@@ -84,6 +84,21 @@ func TestBuildEdgesFiltersDownNeighbour(t *testing.T) {
 	edges, oos := buildEdges("router-a", rows, nil)
 	if len(edges) != 0 {
 		t.Errorf("expected 0 edges for down neighbour, got %d", len(edges))
+	}
+	if len(oos) != 0 {
+		t.Errorf("expected 0 out-of-scope, got %d", len(oos))
+	}
+}
+
+// buildEdges: exchangeStart(5) is not an active adjacency and produces no edge.
+// This is the value that was previously (incorrectly) used for stateTwoWay.
+func TestBuildEdgesFiltersExchangeStartNeighbour(t *testing.T) {
+	rows := map[string]*nbrRow{
+		"192.0.2.1.0": {nbrIP: net.ParseIP("192.0.2.1").To4(), state: 5},
+	}
+	edges, oos := buildEdges("router-a", rows, nil)
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for exchangeStart neighbour, got %d", len(edges))
 	}
 	if len(oos) != 0 {
 		t.Errorf("expected 0 out-of-scope, got %d", len(oos))

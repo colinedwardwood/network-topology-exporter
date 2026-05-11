@@ -6,7 +6,7 @@
 //     1.3.6.1.2.1.14. ospfNbrTable (1.3.6.1.2.1.14.10) contains one row per
 //     OSPF neighbour; the relevant fields are ospfNbrIpAddr (.1),
 //     ospfNbrRtrId (.3), ospfNbrState (.6), and ospfNbrHelloSuppressed (.14).
-//     A neighbour in state full(8) or 2way(5) is an active adjacency.
+//     A neighbour in state full(8) or twoWay(4) is an active adjacency.
 //   - RFC 2328 — OSPF Version 2. Defines the OSPF protocol itself; needed to
 //     understand area adjacency semantics and what ospfNbrState values mean.
 //
@@ -20,7 +20,7 @@
 //
 // # Critical implementation notes
 //
-//  1. Only adjacencies in state full(8) or twoWay(5) are emitted as edges.
+//  1. Only adjacencies in state full(8) or twoWay(4) are emitted as edges.
 //     States init(3), attempt(2), and down(1) represent incomplete or stale
 //     adjacencies and must be filtered before edge construction.
 //
@@ -62,7 +62,7 @@ const (
 )
 
 const (
-	stateTwoWay = 5
+	stateTwoWay = 4
 	stateFull   = 8
 )
 
@@ -72,7 +72,7 @@ type nbrRow struct {
 }
 
 // Walk returns OSPF neighbour edges for the device at p.IP. Only neighbours
-// in state full(8) or twoWay(5) produce edges. Neighbours outside allowedNets
+// in state full(8) or twoWay(4) produce edges. Neighbours outside allowedNets
 // go to the OutOfScopeNeighbour slice; pass nil to skip scope enforcement.
 func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
 	client, err := snmputil.Open(p)
