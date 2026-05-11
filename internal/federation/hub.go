@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -200,6 +201,11 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<20)) // 16 MiB
 	if err := dec.Decode(&payload); err != nil {
 		h.logger.Warn("hub: malformed spoke payload", "error", err)
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			http.Error(w, "request body too large (max 16 MiB)", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
