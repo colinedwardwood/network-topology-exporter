@@ -959,8 +959,11 @@ func resolveEdgeDstDevices(logger *slog.Logger, edges []discovery.Edge, ipToID m
 		} else if hw, err := net.ParseMAC(dst); err == nil {
 			if id, ok := macToID[hw.String()]; ok {
 				e.DstDevice = id
+			} else if e.DiscoveryProto != "fdb" {
+				// Non-FDB protocol (e.g. LLDP) with MAC DstDevice and no sysName:
+				// the link is protocol-confirmed; keep the edge with MAC as DstDevice.
 			} else {
-				// Unresolved MAC — likely a host, not infrastructure.
+				// FDB only: unresolved MAC is likely a host, not infrastructure.
 				// Suppress rather than publish a mac-<hash> pseudo-device.
 				logger.Debug("fdb: suppressing unresolved MAC peer; no LLDP correlation",
 					"src_device", e.SrcDevice, "src_port", e.SrcPort, "mac", dst)
