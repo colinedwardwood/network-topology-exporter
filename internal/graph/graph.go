@@ -161,12 +161,18 @@ func Reconcile(edges []discovery.Edge) ([]discovery.Edge, []Conflict) {
 		bidirectional := len(g.sides) >= 2
 		candidates := g.byRank[g.minRank]
 
-		// Prefer the observation from the canonical (A) side for determinism.
+		// Prefer the observation from the canonical (A) side, then break ties
+		// by DiscoveryProto lexically so the result is stable regardless of
+		// the order discovery modules deliver edges in the input slice.
 		chosen := candidates[0]
 		for _, c := range candidates {
-			if c.SrcDevice == k.SrcDevice {
-				chosen = c
-				break
+			side := c.SrcDevice == k.SrcDevice
+			chosenSide := chosen.SrcDevice == k.SrcDevice
+			switch {
+			case side && !chosenSide:
+				chosen = c // canonical side always beats non-canonical
+			case side == chosenSide && c.DiscoveryProto < chosen.DiscoveryProto:
+				chosen = c // same-side tie: lexically-first proto wins
 			}
 		}
 

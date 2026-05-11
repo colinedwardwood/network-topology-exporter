@@ -980,6 +980,21 @@ func TestHubRunEvictionFiresTickerEviction(t *testing.T) {
 	}
 }
 
+// waitForAddr polls addr with TCP dials until the server is accepting connections
+// or the 2-second deadline expires. Replaces time.Sleep-based readiness checks.
+func waitForAddr(t *testing.T, addr string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if conn, err := net.DialTimeout("tcp", addr, 50*time.Millisecond); err == nil {
+			conn.Close()
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("server did not become ready at %s", addr)
+}
+
 // writeTLSFiles generates a self-signed CA + server cert/key and writes them as
 // PEM files under dir. Returns paths (caPath, certPath, keyPath). Suitable for
 // populating config.FederationHubConfig in Serve() tests.
@@ -1181,13 +1196,16 @@ func TestServeStartsAndShutsDownCleanly(t *testing.T) {
 	dir := t.TempDir()
 	caPath, certPath, keyPath := writeTLSFiles(t, dir)
 
-	// Use a random free port so there is no conflict.
+	// Probe for a free port then release it so Serve can bind the same address.
+	// Note: there is an inherent TOCTOU window between Close and Serve's
+	// net.Listen — this is test-only and accepted as a rare flake rather than a
+	// production concern. The window is kept as small as possible by constructing
+	// the Hub before closing the listener.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("pre-allocate port: %v", err)
 	}
 	addr := ln.Addr().String()
-	_ = ln.Close() // release so Serve can bind it
 
 	h := NewHub(
 		config.FederationConfig{
@@ -1202,12 +1220,15 @@ func TestServeStartsAndShutsDownCleanly(t *testing.T) {
 		metrics.New(false), nil, "",
 	)
 
+	_ = ln.Close() // release immediately before Serve binds to minimise the race window
+
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() { errCh <- h.Serve(ctx) }()
 
-	// Give Serve a moment to start listening, then cancel.
-	time.Sleep(50 * time.Millisecond)
+	// Wait until the server is actually accepting connections before cancelling,
+	// replacing the fixed 50 ms sleep which was non-deterministic.
+	waitForAddr(t, addr)
 	cancel()
 
 	select {

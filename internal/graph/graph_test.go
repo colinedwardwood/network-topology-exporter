@@ -1075,6 +1075,49 @@ func TestReconcileConflictSrcPortDeterministic(t *testing.T) {
 	}
 }
 
+// TestReconcileSameSideTieBreakDeterministic verifies that when two same-rank
+// observations come from the same side (the common case — e.g. both LLDP and
+// CDP report the edge from device A), the winner is always the lexically-first
+// DiscoveryProto regardless of input order. Without the secondary sort,
+// candidates[0] would be whichever observation happened to be appended first,
+// causing non-deterministic Diff churn between cycles.
+func TestReconcileSameSideTieBreakDeterministic(t *testing.T) {
+	// Both observations come from "sw-a" (the canonical/alphabetically-first side).
+	// "cdp" < "lldp" lexically, so cdp must always win regardless of slice order.
+	cdpEdge := discovery.Edge{
+		SrcDevice: "sw-a", SrcPort: "Gi0/1",
+		DstDevice: "sw-b", DstPort: "Gi0/2",
+		DiscoveryProto: "cdp", PrecedenceRank: 1,
+	}
+	lldpEdge := discovery.Edge{
+		SrcDevice: "sw-a", SrcPort: "Gi0/1",
+		DstDevice: "sw-b", DstPort: "Gi0/2",
+		DiscoveryProto: "lldp", PrecedenceRank: 1,
+	}
+
+	// Normal order: cdp first.
+	edges1, _ := Reconcile([]discovery.Edge{cdpEdge, lldpEdge})
+	if len(edges1) != 1 {
+		t.Fatalf("order1: expected 1 edge, got %d", len(edges1))
+	}
+	proto1 := edges1[0].DiscoveryProto
+
+	// Reversed order: lldp first.
+	edges2, _ := Reconcile([]discovery.Edge{lldpEdge, cdpEdge})
+	if len(edges2) != 1 {
+		t.Fatalf("order2: expected 1 edge, got %d", len(edges2))
+	}
+	proto2 := edges2[0].DiscoveryProto
+
+	if proto1 != proto2 {
+		t.Errorf("tie-break is non-deterministic: order1 winner=%q, order2 winner=%q; want both %q",
+			proto1, proto2, "cdp")
+	}
+	if proto1 != "cdp" {
+		t.Errorf("winner = %q, want cdp (lexically first)", proto1)
+	}
+}
+
 // ── Benchmarks ────────────────────────────────────────────────────────────────
 
 // makeEdges generates n raw (pre-reconciliation) edge observations with
