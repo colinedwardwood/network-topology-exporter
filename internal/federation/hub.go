@@ -663,6 +663,9 @@ func (h *Hub) runSnapshotWriter(ctx context.Context) {
 				h.logger.Warn("hub: snapshot write timed out (NFS stall?)", "timeout", h.snapshotWriteTimeout)
 				// writeDone goroutine still running; next iteration will detect this.
 			case <-ctx.Done():
+				if writeDone != nil {
+					<-writeDone
+				}
 				return
 			}
 		}
