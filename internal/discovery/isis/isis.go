@@ -156,7 +156,7 @@ func walkAdjIPAddrs(ctx context.Context, client *gsnmp.GoSNMP, localDevice strin
 		}
 		ifName := circIfNames[circKey]
 		edgeDegradedReason := degradedReason
-		if edgeDegradedReason == "" && circKey != "" && ifName == "" {
+		if edgeDegradedReason == "" && (circKey == "" || ifName == "") {
 			edgeDegradedReason = discovery.DegradedReasonMissingSrcPortMapping
 		}
 		if len(allowedNets) > 0 && !snmputil.IPInNets(ip, allowedNets) {
