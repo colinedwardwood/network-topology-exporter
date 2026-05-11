@@ -90,7 +90,9 @@ func Load(path string) (*File, error) {
 	}
 	var f File
 	if err := json.Unmarshal(b, &f); err != nil {
-		_ = quarantine(path, b)
+		if qErr := quarantine(path, b); qErr != nil {
+			return nil, fmt.Errorf("parse snapshot %q: %w (quarantine also failed: %v)", path, err, qErr)
+		}
 		return nil, fmt.Errorf("parse snapshot %q: %w", path, err)
 	}
 	if f.Version != CurrentVersion {
