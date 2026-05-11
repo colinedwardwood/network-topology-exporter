@@ -564,10 +564,10 @@ func (h *Hub) evictSilentSpokes() {
 // TopologyCollector.Update means concurrent spoke pushes cannot produce an
 // interleaved or empty scrape window.
 func (h *Hub) publishMetrics(g discovery.Graph, clearStale bool) {
-	h.m.Topology.Update(g)
 	if clearStale {
 		h.m.GraphStale.Set(0)
 	}
+	h.m.Topology.Update(g)
 }
 
 // tryPublishMetrics publishes g only when gen is strictly greater than the last
@@ -596,10 +596,10 @@ func (h *Hub) tryPublishMetrics(gen uint64, g discovery.Graph, clearStale bool, 
 				return false
 			}
 			h.m.HubOOSUnmatchedTotal.Set(float64(unmatchedCount))
-			h.m.Topology.Update(g)
 			if clearStale {
 				h.m.GraphStale.Set(0)
 			}
+			h.m.Topology.Update(g)
 			return true
 		}
 	}
