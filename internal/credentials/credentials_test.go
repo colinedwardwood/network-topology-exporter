@@ -291,6 +291,62 @@ func TestRefillLockedCapsBurstAtRate(t *testing.T) {
 	}
 }
 
+// CachedProfile returns a miss and evicts the entry when it is older than cacheTTL.
+func TestCachedProfileTTLExpiry(t *testing.T) {
+	r := newTestResolver(t)
+	r.RecordSuccess("dev-1", "core-v3")
+
+	// Backdate the entry so it appears older than cacheTTL.
+	r.mu.Lock()
+	e := r.cache["dev-1"]
+	e.cachedAt = time.Now().Add(-(cacheTTL + time.Minute))
+	r.cache["dev-1"] = e
+	r.mu.Unlock()
+
+	if p, ok := r.CachedProfile("dev-1"); ok {
+		t.Errorf("expected cache miss for expired entry, got (%q, true)", p)
+	}
+	// Entry should have been evicted.
+	r.mu.RLock()
+	_, still := r.cache["dev-1"]
+	r.mu.RUnlock()
+	if still {
+		t.Error("expired entry was not removed from cache")
+	}
+}
+
+// SnapshotCache omits entries that have exceeded cacheTTL.
+func TestSnapshotCacheOmitsExpiredEntries(t *testing.T) {
+	r := newTestResolver(t)
+	r.RecordSuccess("dev-live", "core-v3")
+	r.RecordSuccess("dev-old", "edge-v2c")
+
+	// Backdate dev-old past the TTL.
+	r.mu.Lock()
+	e := r.cache["dev-old"]
+	e.cachedAt = time.Now().Add(-(cacheTTL + time.Minute))
+	r.cache["dev-old"] = e
+	r.mu.Unlock()
+
+	snap := r.SnapshotCache()
+	if _, ok := snap["dev-live"]; !ok {
+		t.Error("live entry missing from snapshot")
+	}
+	if _, ok := snap["dev-old"]; ok {
+		t.Error("expired entry present in snapshot")
+	}
+}
+
+// LoadCache stamps entries with the current time, so they are immediately valid.
+func TestLoadCacheStampsFreshTimestamp(t *testing.T) {
+	r := newTestResolver(t)
+	r.LoadCache(map[string]string{"dev-1": "core-v3"})
+
+	if p, ok := r.CachedProfile("dev-1"); !ok || p != "core-v3" {
+		t.Errorf("CachedProfile after LoadCache = (%q, %v), want (core-v3, true)", p, ok)
+	}
+}
+
 // LD-12: trial limiter blocks the call site so the cold-start trial rate
 // stays bounded. With rate=2 and burst=2, three back-to-back acquires take
 // at least one full token-refill window.
