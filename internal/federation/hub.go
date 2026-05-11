@@ -722,6 +722,7 @@ func appendEdgePair(edges []discovery.Edge, src, srcPort, dst, dstPort, proto, l
 		Adjacency:      discovery.AdjacencyUnknown,
 		PrecedenceRank: rank,
 		LinkKind:       linkKind,
+		ObservedAt:     time.Now(),
 	}
 	fwd := base
 	fwd.SrcDevice, fwd.SrcPort = src, srcPort
