@@ -462,6 +462,7 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 			lc.logger.Warn("local graph update rejected: exceeds size budget",
 				"devices", len(newGraph.Devices), "max_devices", maxDevices,
 				"edges", len(newGraph.Edges), "max_edges", maxEdges)
+			ages = newAges // advance counters so unconfirmed edges can still expire
 			lc.m.GraphUpdatesRejectedTotal.Inc()
 			// Keep prevGraph as the published graph; skip all downstream updates.
 			return
@@ -601,10 +602,21 @@ func runCycle(
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Error("per-device probe panicked", "target", target.Host, "panic", r)
+					mu.Lock()
+					failCount++
+					mu.Unlock()
+				}
+			}()
 			select {
 			case sem <- struct{}{}:
 			case <-cycleCtx.Done():
 				m.CycleBudgetSkipsTotal.Inc()
+				mu.Lock()
+				failCount++
+				mu.Unlock()
 				return
 			}
 			defer func() { <-sem }()

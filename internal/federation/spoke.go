@@ -119,6 +119,9 @@ func buildSpokeURL(baseURL string) (string, error) {
 	if base.Scheme != "https" {
 		return "", fmt.Errorf("hub URL must use HTTPS, got %q", base.Scheme)
 	}
+	if base.Host == "" {
+		return "", fmt.Errorf("hub URL has no host (missing \"//\"?): %q", baseURL)
+	}
 	if !strings.HasSuffix(base.Path, "/") {
 		base.Path += "/"
 	}
