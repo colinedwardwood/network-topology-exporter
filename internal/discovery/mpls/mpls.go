@@ -60,7 +60,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 
 	adminStatuses, adminStats, adminErr := snmputil.WalkToIntMapStrict(ctx, client, "mpls_te", oidMplsTunnelAdminStatus)
 	degradedReasons := make([]string, 0, 2)
-	if degraded, _ := snmputil.EvaluateRequiredTablePolicy(adminStats, snmputil.RequiredTablePolicy{
+	if degraded, _ := snmputil.EvaluateRequiredTablePolicy(operStats, snmputil.RequiredTablePolicy{
 		MinValidRows:    requiredMinValidRows,
 		MaxInvalidRatio: requiredMaxInvalidRatio,
 	}); degraded {
