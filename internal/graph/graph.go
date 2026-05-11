@@ -330,11 +330,16 @@ func Diff(before, after []discovery.Edge) []EdgeChange {
 		delete(beforeMap, k)
 	}
 
+	var removals []EdgeChange
 	for k := range beforeMap {
 		b := beforeMap[k]
 		bCopy := b
-		changes = append(changes, EdgeChange{Kind: ChangeRemoved, Before: &bCopy})
+		removals = append(removals, EdgeChange{Kind: ChangeRemoved, Before: &bCopy})
 	}
+	slices.SortFunc(removals, func(i, j EdgeChange) int {
+		return compareEdgeKey(Key(*i.Before), Key(*j.Before))
+	})
+	changes = append(changes, removals...)
 
 	return changes
 }
