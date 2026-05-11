@@ -170,6 +170,26 @@ func TestEdgeKeyFromStringError(t *testing.T) {
 	}
 }
 
+// EdgeKeyString / EdgeKeyFromString: a key whose fields contain literal "|"
+// characters must round-trip correctly. Without escaping, the extra "|" would
+// be mistaken for a field separator and produce a wrong key on parse.
+func TestEdgeKeyStringPipeEscaping(t *testing.T) {
+	k := EdgeKey{
+		SrcDevice: "sw-a|core",
+		SrcPort:   "Gi0/1",
+		DstDevice: "sw-b",
+		DstPort:   "Gi0|2",
+	}
+	s := EdgeKeyString(k)
+	got, err := EdgeKeyFromString(s)
+	if err != nil {
+		t.Fatalf("EdgeKeyFromString(%q): %v", s, err)
+	}
+	if got != k {
+		t.Errorf("round-trip mismatch: got %#v, want %#v", got, k)
+	}
+}
+
 // Reconcile: a link reported by both endpoints becomes DirectionBidirectional.
 func TestReconcileBidirectionality(t *testing.T) {
 	fromA := discovery.Edge{
@@ -555,7 +575,8 @@ func TestReconcileCollapsesPortNameEncodings(t *testing.T) {
 	if result[0].Direction != discovery.DirectionBidirectional {
 		t.Errorf("direction = %q, want bidirectional", result[0].Direction)
 	}
-	// Winning observation is LLDP (rank 1 < rank 2); original port names preserved.
+	// Winning observation is LLDP (rank 1 < rank 2); port names are normalised
+	// on output so "Gi0/1" and "Gi0/2" (already short form) are unchanged.
 	if result[0].SrcPort != "Gi0/1" || result[0].DstPort != "Gi0/2" {
 		t.Errorf("ports = (%s, %s), want (Gi0/1, Gi0/2)", result[0].SrcPort, result[0].DstPort)
 	}
