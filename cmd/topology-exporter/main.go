@@ -836,8 +836,33 @@ func runCycle(
 	return discovery.Graph{
 		Devices:    devices,
 		Edges:      reconciledEdges,
-		OutOfScope: allOOS,
+		OutOfScope: deduplicateOOS(allOOS),
 	}, ages, conflicts, int(failCount)
+}
+
+// deduplicateOOS removes duplicate OutOfScopeNeighbour entries that arise when
+// multiple discovery protocols (e.g. LLDP and CDP) both observe the same
+// out-of-scope neighbour on the same device/port. Uniqueness is keyed on
+// (ReportingDevice, ReportingPort, NeighbourHint); the first occurrence is kept
+// so the Proto field reflects the first protocol that reported the neighbour.
+// The returned slice preserves insertion order.
+func deduplicateOOS(oos []discovery.OutOfScopeNeighbour) []discovery.OutOfScopeNeighbour {
+	type oosKey struct {
+		ReportingDevice string
+		ReportingPort   string
+		NeighbourHint   string
+	}
+	seen := make(map[oosKey]struct{}, len(oos))
+	out := make([]discovery.OutOfScopeNeighbour, 0, len(oos))
+	for _, n := range oos {
+		k := oosKey{n.ReportingDevice, n.ReportingPort, n.NeighbourHint}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, n)
+	}
+	return out
 }
 
 func collectDegradedReasons(edges []discovery.Edge) []string {
