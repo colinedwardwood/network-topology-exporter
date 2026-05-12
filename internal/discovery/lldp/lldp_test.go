@@ -106,6 +106,33 @@ func TestBuildEdgesOutOfScope(t *testing.T) {
 	}
 }
 
+// buildEdges: chassisSubtype=5 with IP 0.0.0.0 produces no edge and no OOS entry.
+func TestBuildEdgesUnspecifiedChassisIP(t *testing.T) {
+	locPorts := map[int]locPort{
+		1: {idSubtype: portSubtypeInterfaceName, id: []byte("Gi0/1")},
+	}
+	remEntries := map[remKey]*remEntry{
+		{1, 1}: {
+			chassisSubtype: chassisSubtypeNetworkAddress,
+			chassisID:      []byte{1, 0, 0, 0, 0}, // IANA family 1 (IPv4) + 0.0.0.0
+			portSubtype:    portSubtypeInterfaceName,
+			portID:         []byte("Gi0/2"),
+			sysName:        "unaddressed-peer",
+		},
+	}
+
+	edges, oos, err := buildEdges("local-sw", locPorts, remEntries, nil)
+	if err != nil {
+		t.Fatalf("buildEdges: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected no edges for unspecified chassis IP, got %d", len(edges))
+	}
+	if len(oos) != 0 {
+		t.Errorf("expected no OOS entries for unspecified chassis IP, got %d", len(oos))
+	}
+}
+
 // buildEdges: in-scope neighbor produces an edge with correct fields.
 func TestBuildEdgesNormal(t *testing.T) {
 	_, allowed, _ := net.ParseCIDR("10.0.0.0/8")
