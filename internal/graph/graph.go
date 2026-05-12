@@ -38,6 +38,7 @@ package graph
 
 import (
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"unicode"
@@ -533,6 +534,7 @@ func AgesToEdgeKeys(in map[string]int) map[EdgeKey]int {
 	for s, v := range in {
 		k, err := EdgeKeyFromString(s)
 		if err != nil {
+			slog.Warn("graph: AgesToEdgeKeys: skipping malformed edge key", "key", s)
 			continue
 		}
 		out[k] = v
