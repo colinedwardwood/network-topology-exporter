@@ -57,6 +57,47 @@ func TestBuildEdgesInScope(t *testing.T) {
 	}
 }
 
+// TestBuildEdgesIPv6Neighbor verifies that a CDP cache entry with addrType=20
+// and a valid 16-byte IPv6 address produces an edge when the address falls
+// within the allowed networks.
+func TestBuildEdgesIPv6Neighbor(t *testing.T) {
+	t.Parallel()
+
+	ip6 := net.ParseIP("2001:db8::1").To16()
+	_, allowed, _ := net.ParseCIDR("2001:db8::/32")
+
+	ifNames := map[int]string{5: "GigabitEthernet0/5"}
+	entries := map[cacheKey]*cacheEntry{
+		{5, 1}: {
+			addrType: 20,
+			addr:     ip6,
+			deviceID: "ipv6-peer",
+			devPort:  "Gi0/1",
+		},
+	}
+
+	edges, oos, err := buildEdges("local-sw", ifNames, entries, []*net.IPNet{allowed})
+	if err != nil {
+		t.Fatalf("buildEdges: %v", err)
+	}
+	if len(oos) != 0 {
+		t.Errorf("unexpected out-of-scope entries: %v", oos)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(edges))
+	}
+	e := edges[0]
+	if e.SrcDevice != "local-sw" || e.SrcPort != "GigabitEthernet0/5" {
+		t.Errorf("src = %q/%q, want local-sw/GigabitEthernet0/5", e.SrcDevice, e.SrcPort)
+	}
+	if e.DstDevice != "ipv6-peer" || e.DstPort != "Gi0/1" {
+		t.Errorf("dst = %q/%q, want ipv6-peer/Gi0/1", e.DstDevice, e.DstPort)
+	}
+	if e.DiscoveryProto != "cdp" {
+		t.Errorf("proto = %q, want cdp", e.DiscoveryProto)
+	}
+}
+
 // buildEdges: out-of-scope neighbor is recorded in oos and skipped as an edge.
 func TestBuildEdgesOutOfScope(t *testing.T) {
 	_, allowed, _ := net.ParseCIDR("10.0.0.0/8")

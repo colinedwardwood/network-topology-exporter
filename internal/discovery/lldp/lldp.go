@@ -285,6 +285,14 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 		// LD-11: if the neighbor exposes a network-address chassis ID that
 		// falls outside the allow-list, record it and skip the edge.
 		if remIP := extractChassisIP(rem.chassisSubtype, rem.chassisID); remIP != nil {
+			// Devices that have no assigned IP advertise the unspecified address
+			// (0.0.0.0 for IPv4, :: for IPv6); skip them to avoid emitting an
+			// edge with an invalid DstDevice.
+			if remIP.IsUnspecified() {
+				slog.Debug("lldp: unspecified chassis IP; skipping entry",
+					"device", localDevice, "ip", remIP)
+				continue
+			}
 			if len(allowedNets) > 0 && !snmputil.IPInNets(remIP, allowedNets) {
 				oos = append(oos, discovery.OutOfScopeNeighbour{
 					Proto:           "lldp",
