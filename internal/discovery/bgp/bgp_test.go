@@ -274,6 +274,34 @@ func TestPduIPBytesBranch(t *testing.T) {
 	}
 }
 
+// buildEdges: established peer with remoteIP = 0.0.0.0 (IsUnspecified) → no edge, no OOS.
+func TestBuildEdgesFiltersUnspecifiedIP(t *testing.T) {
+	peers := map[string]*bgpPeer{
+		"0.0.0.0": {state: bgpStateEstablished, remoteIP: net.ParseIP("0.0.0.0").To4()},
+	}
+	edges, oos := buildEdges("rtr-01", peers, nil)
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for unspecified remoteIP, got %d", len(edges))
+	}
+	if len(oos) != 0 {
+		t.Errorf("expected 0 out-of-scope for unspecified remoteIP, got %d", len(oos))
+	}
+}
+
+// buildEdges: established peer with link-local remoteIP (169.254.x.x) → no edge, no OOS.
+func TestBuildEdgesFiltersLinkLocalIP(t *testing.T) {
+	peers := map[string]*bgpPeer{
+		"169.254.1.1": {state: bgpStateEstablished, remoteIP: net.ParseIP("169.254.1.1").To4()},
+	}
+	edges, oos := buildEdges("rtr-01", peers, nil)
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for link-local remoteIP, got %d", len(edges))
+	}
+	if len(oos) != 0 {
+		t.Errorf("expected 0 out-of-scope for link-local remoteIP, got %d", len(oos))
+	}
+}
+
 // buildEdges: established peer with nil remoteIP is skipped silently.
 func TestBuildEdgesNilRemoteIP(t *testing.T) {
 	peers := map[string]*bgpPeer{

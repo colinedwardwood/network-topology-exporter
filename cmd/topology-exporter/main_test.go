@@ -2368,3 +2368,71 @@ func TestDeduplicateOOS(t *testing.T) {
 		})
 	}
 }
+
+// deduplicateDevices: two devices with the same ID → only the first is returned.
+func TestDeduplicateDevicesDuplicateID(t *testing.T) {
+	devices := []discovery.Device{
+		{ID: "sw-01", Site: "site-a"},
+		{ID: "sw-01", Site: "site-b"},
+	}
+	got := deduplicateDevices(devices)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 device after dedup, got %d", len(got))
+	}
+	if got[0].Site != "site-a" {
+		t.Errorf("Site = %q, want site-a (first occurrence kept)", got[0].Site)
+	}
+}
+
+// deduplicateDevices: two devices with different IDs → both are returned.
+func TestDeduplicateDevicesDifferentIDs(t *testing.T) {
+	devices := []discovery.Device{
+		{ID: "sw-01"},
+		{ID: "sw-02"},
+	}
+	got := deduplicateDevices(devices)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 devices, got %d", len(got))
+	}
+}
+
+// mergeOOSFirstSeen: entry present in prevOOS → FirstSeen is restored from prev.
+func TestMergeOOSFirstSeenPreservesExisting(t *testing.T) {
+	original := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	now := time.Now()
+
+	prev := []discovery.OutOfScopeNeighbour{
+		{ReportingDevice: "sw-01", ReportingPort: "Gi0/1", NeighbourHint: "10.0.0.99", FirstSeen: original},
+	}
+	newOOS := []discovery.OutOfScopeNeighbour{
+		{ReportingDevice: "sw-01", ReportingPort: "Gi0/1", NeighbourHint: "10.0.0.99", FirstSeen: now},
+	}
+
+	got := mergeOOSFirstSeen(newOOS, prev)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(got))
+	}
+	if !got[0].FirstSeen.Equal(original) {
+		t.Errorf("FirstSeen = %v, want %v (original from prevOOS)", got[0].FirstSeen, original)
+	}
+}
+
+// mergeOOSFirstSeen: entry not in prevOOS → FirstSeen is unchanged (cycle's time).
+func TestMergeOOSFirstSeenKeepsNewEntry(t *testing.T) {
+	now := time.Now()
+
+	prev := []discovery.OutOfScopeNeighbour{
+		{ReportingDevice: "sw-01", ReportingPort: "Gi0/1", NeighbourHint: "10.0.0.1", FirstSeen: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)},
+	}
+	newOOS := []discovery.OutOfScopeNeighbour{
+		{ReportingDevice: "sw-01", ReportingPort: "Gi0/2", NeighbourHint: "10.0.0.99", FirstSeen: now},
+	}
+
+	got := mergeOOSFirstSeen(newOOS, prev)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(got))
+	}
+	if !got[0].FirstSeen.Equal(now) {
+		t.Errorf("FirstSeen = %v, want %v (cycle time kept for new entry)", got[0].FirstSeen, now)
+	}
+}
