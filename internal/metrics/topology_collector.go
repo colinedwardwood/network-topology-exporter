@@ -171,7 +171,7 @@ func (c *TopologyCollector) Collect(ch chan<- prometheus.Metric) {
 				c.boundaryObsDesc, prometheus.GaugeValue, 1,
 				peerA, peerB,
 				sanitizeLabel(n.ReportingDevice), sanitizeLabel(n.ReportingPort),
-				n.Proto,
+				sanitizeLabel(n.Proto),
 			)
 			samples++
 		}
