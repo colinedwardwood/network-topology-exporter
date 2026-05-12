@@ -530,6 +530,12 @@ func (c *Config) validateCredentials() error {
 			if err != nil {
 				return fmt.Errorf("profile %q: %w", p.Name, err)
 			}
+			if authProto != "" && p.AuthKeyEnv == "" {
+				return fmt.Errorf("snmpv3 profile %q: auth_protocol requires auth_key_env", p.Name)
+			}
+			if privProto != "" && p.PrivKeyEnv == "" {
+				return fmt.Errorf("snmpv3 profile %q: priv_protocol requires priv_key_env", p.Name)
+			}
 			p.AuthProtocol = authProto
 			p.PrivProtocol = privProto
 		default:
