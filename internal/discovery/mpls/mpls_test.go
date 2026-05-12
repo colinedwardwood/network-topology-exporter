@@ -432,6 +432,50 @@ func TestWalkOperStatusInvalidRatioExceededHardFail(t *testing.T) {
 	}
 }
 
+// Walk: up tunnel with egressIP = 0.0.0.0 (IsUnspecified) → no edge, no OOS.
+func TestWalkFiltersUnspecifiedEgressIP(t *testing.T) {
+	oid := tunnelOID("1", "1", "10.0.0.1", "0.0.0.0")
+	pdus := []gsnmp.SnmpPDU{
+		{Name: oid, Type: gsnmp.Integer, Value: mplsTunnelOperUp},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for unspecified egress IP, got %d", len(edges))
+	}
+	if len(oos) != 0 {
+		t.Errorf("expected 0 out-of-scope for unspecified egress IP, got %d", len(oos))
+	}
+}
+
+// Walk: up tunnel with link-local egressIP (169.254.1.1) → no edge, no OOS.
+func TestWalkFiltersLinkLocalEgressIP(t *testing.T) {
+	oid := tunnelOID("1", "1", "10.0.0.1", "169.254.1.1")
+	pdus := []gsnmp.SnmpPDU{
+		{Name: oid, Type: gsnmp.Integer, Value: mplsTunnelOperUp},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for link-local egress IP, got %d", len(edges))
+	}
+	if len(oos) != 0 {
+		t.Errorf("expected 0 out-of-scope for link-local egress IP, got %d", len(oos))
+	}
+}
+
 // ---------- mplsAdminStatusString tests ----------
 
 // mplsAdminStatusString: value 0 → "unknown".

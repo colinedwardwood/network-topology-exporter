@@ -590,6 +590,50 @@ func TestWalkOpenFails(t *testing.T) {
 	}
 }
 
+// Walk: up adjacency with IP = 0.0.0.0 (IsUnspecified) → no edge, no OOS.
+func TestWalkFiltersUnspecifiedAdjIP(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: adjStateBase + adjKey, Type: gsnmp.Integer, Value: isisAdjStateUp},
+		{Name: adjIPBase + adjKey + ".1.4.0.0.0.0", Type: gsnmp.OctetString, Value: []byte{0, 0, 0, 0}},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for unspecified adj IP, got %d", len(edges))
+	}
+	if len(oos) != 0 {
+		t.Errorf("expected 0 out-of-scope for unspecified adj IP, got %d", len(oos))
+	}
+}
+
+// Walk: up adjacency with link-local IPv4 address (169.254.1.1) → no edge, no OOS.
+func TestWalkFiltersLinkLocalAdjIP(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: adjStateBase + adjKey, Type: gsnmp.Integer, Value: isisAdjStateUp},
+		{Name: adjIPBase + adjKey + ".1.4.169.254.1.1", Type: gsnmp.OctetString, Value: []byte{169, 254, 1, 1}},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for link-local adj IP, got %d", len(edges))
+	}
+	if len(oos) != 0 {
+		t.Errorf("expected 0 out-of-scope for link-local adj IP, got %d", len(oos))
+	}
+}
+
 // Walk: cancelled context → error returned from walkAdjStates.
 func TestWalkCancelledContext(t *testing.T) {
 	pdus := []gsnmp.SnmpPDU{

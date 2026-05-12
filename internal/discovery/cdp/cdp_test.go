@@ -447,6 +447,35 @@ func TestWalkCacheTableFails(t *testing.T) {
 	}
 }
 
+// walkCacheTable: a cache entry with ifIdx=0 in the OID suffix is silently
+// skipped and produces no edge. Covers the ifIdx <= 0 guard.
+func TestWalkCacheTableSkipsZeroIfIdx(t *testing.T) {
+	// OID format: prefix + col.ifIndex.neighIndex
+	// Using col=6 (deviceID), ifIndex=0, neighIndex=1.
+	const zeroIfIdxOID = ".1.3.6.1.4.1.9.9.23.1.2.1.1.6.0.1"
+	pdus := []gsnmp.SnmpPDU{
+		{Name: zeroIfIdxOID, Type: gsnmp.OctetString, Value: []byte("peer-sw")},
+	}
+
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	client, err := snmputil.Open(p)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = client.Conn.Close() }()
+
+	entries, err := walkCacheTable(context.Background(), client)
+	if err != nil {
+		t.Fatalf("walkCacheTable: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected 0 entries for ifIdx=0, got %d", len(entries))
+	}
+}
+
 // walkCacheTable: PDUs with too-short or wrong-prefix OID suffixes are silently
 // skipped. Covers the three skip-continue paths inside the parse loop.
 func TestWalkCacheTableSkipsShortOIDs(t *testing.T) {

@@ -296,6 +296,20 @@ func TestBuildEdgesNilNbrIP(t *testing.T) {
 	}
 }
 
+// buildEdges: full(8) neighbour with link-local nbrIP (169.254.x.x) → no edge, no OOS.
+func TestBuildEdgesFiltersLinkLocalNbrIP(t *testing.T) {
+	rows := map[string]*nbrRow{
+		"169.254.1.1.0": {nbrIP: net.ParseIP("169.254.1.1").To4(), state: stateFull},
+	}
+	edges, oos := buildEdges("router-a", rows, nil)
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for link-local nbrIP, got %d", len(edges))
+	}
+	if len(oos) != 0 {
+		t.Errorf("expected 0 out-of-scope for link-local nbrIP, got %d", len(oos))
+	}
+}
+
 // parseNbrOID: OID without the expected prefix returns false.
 func TestParseNbrOIDNoPrefix(t *testing.T) {
 	const prefix = ".1.3.6.1.2.1.14.10.1."
