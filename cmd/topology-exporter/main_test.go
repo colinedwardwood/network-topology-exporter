@@ -2237,3 +2237,98 @@ listen:
 		t.Fatal("run() did not return within 10s after cancel")
 	}
 }
+
+func TestDeduplicateOOS(t *testing.T) {
+	t0 := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Minute)
+
+	tests := []struct {
+		name string
+		in   []discovery.OutOfScopeNeighbour
+		want []discovery.OutOfScopeNeighbour
+	}{
+		{
+			name: "empty slice returns empty slice",
+			in:   nil,
+			want: []discovery.OutOfScopeNeighbour{},
+		},
+		{
+			name: "no duplicates passes through unchanged",
+			in: []discovery.OutOfScopeNeighbour{
+				{ReportingDevice: "sw-01", ReportingPort: "Gi0/1", NeighbourHint: "10.0.0.1", Proto: "lldp"},
+				{ReportingDevice: "sw-01", ReportingPort: "Gi0/2", NeighbourHint: "10.0.0.2", Proto: "cdp"},
+			},
+			want: []discovery.OutOfScopeNeighbour{
+				{ReportingDevice: "sw-01", ReportingPort: "Gi0/1", NeighbourHint: "10.0.0.1", Proto: "lldp"},
+				{ReportingDevice: "sw-01", ReportingPort: "Gi0/2", NeighbourHint: "10.0.0.2", Proto: "cdp"},
+			},
+		},
+		{
+			name: "duplicate from second protocol is dropped, first proto is kept",
+			in: []discovery.OutOfScopeNeighbour{
+				{ReportingDevice: "sw-01", ReportingPort: "Gi0/1", NeighbourHint: "10.0.0.99", Proto: "lldp", FirstSeen: t0, LastSeen: t0},
+				{ReportingDevice: "sw-01", ReportingPort: "Gi0/1", NeighbourHint: "10.0.0.99", Proto: "cdp", FirstSeen: t1, LastSeen: t1},
+			},
+			want: []discovery.OutOfScopeNeighbour{
+				{ReportingDevice: "sw-01", ReportingPort: "Gi0/1", NeighbourHint: "10.0.0.99", Proto: "lldp", FirstSeen: t0, LastSeen: t0},
+			},
+		},
+		{
+			name: "same neighbour on different ports are kept separately",
+			in: []discovery.OutOfScopeNeighbour{
+				{ReportingDevice: "sw-01", ReportingPort: "Gi0/1", NeighbourHint: "10.0.0.99", Proto: "lldp"},
+				{ReportingDevice: "sw-01", ReportingPort: "Gi0/2", NeighbourHint: "10.0.0.99", Proto: "lldp"},
+			},
+			want: []discovery.OutOfScopeNeighbour{
+				{ReportingDevice: "sw-01", ReportingPort: "Gi0/1", NeighbourHint: "10.0.0.99", Proto: "lldp"},
+				{ReportingDevice: "sw-01", ReportingPort: "Gi0/2", NeighbourHint: "10.0.0.99", Proto: "lldp"},
+			},
+		},
+		{
+			name: "same neighbour on same port reported by different devices are kept separately",
+			in: []discovery.OutOfScopeNeighbour{
+				{ReportingDevice: "sw-01", ReportingPort: "Gi0/1", NeighbourHint: "10.0.0.99", Proto: "lldp"},
+				{ReportingDevice: "sw-02", ReportingPort: "Gi0/1", NeighbourHint: "10.0.0.99", Proto: "lldp"},
+			},
+			want: []discovery.OutOfScopeNeighbour{
+				{ReportingDevice: "sw-01", ReportingPort: "Gi0/1", NeighbourHint: "10.0.0.99", Proto: "lldp"},
+				{ReportingDevice: "sw-02", ReportingPort: "Gi0/1", NeighbourHint: "10.0.0.99", Proto: "lldp"},
+			},
+		},
+		{
+			name: "insertion order is preserved after dedup",
+			in: []discovery.OutOfScopeNeighbour{
+				{ReportingDevice: "sw-01", ReportingPort: "Gi0/1", NeighbourHint: "10.0.0.1", Proto: "lldp"},
+				{ReportingDevice: "sw-01", ReportingPort: "Gi0/2", NeighbourHint: "10.0.0.2", Proto: "lldp"},
+				{ReportingDevice: "sw-01", ReportingPort: "Gi0/1", NeighbourHint: "10.0.0.1", Proto: "cdp"}, // dup
+				{ReportingDevice: "sw-01", ReportingPort: "Gi0/3", NeighbourHint: "10.0.0.3", Proto: "lldp"},
+				{ReportingDevice: "sw-01", ReportingPort: "Gi0/2", NeighbourHint: "10.0.0.2", Proto: "cdp"}, // dup
+			},
+			want: []discovery.OutOfScopeNeighbour{
+				{ReportingDevice: "sw-01", ReportingPort: "Gi0/1", NeighbourHint: "10.0.0.1", Proto: "lldp"},
+				{ReportingDevice: "sw-01", ReportingPort: "Gi0/2", NeighbourHint: "10.0.0.2", Proto: "lldp"},
+				{ReportingDevice: "sw-01", ReportingPort: "Gi0/3", NeighbourHint: "10.0.0.3", Proto: "lldp"},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := deduplicateOOS(tc.in)
+			if len(got) != len(tc.want) {
+				t.Fatalf("deduplicateOOS() len = %d, want %d\ngot:  %+v\nwant: %+v", len(got), len(tc.want), got, tc.want)
+			}
+			for i := range tc.want {
+				g, w := got[i], tc.want[i]
+				if g.ReportingDevice != w.ReportingDevice ||
+					g.ReportingPort != w.ReportingPort ||
+					g.NeighbourHint != w.NeighbourHint ||
+					g.Proto != w.Proto ||
+					!g.FirstSeen.Equal(w.FirstSeen) ||
+					!g.LastSeen.Equal(w.LastSeen) {
+					t.Errorf("deduplicateOOS()[%d] = %+v, want %+v", i, g, w)
+				}
+			}
+		})
+	}
+}
