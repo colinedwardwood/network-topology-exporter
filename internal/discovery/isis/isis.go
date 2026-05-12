@@ -145,6 +145,9 @@ func walkAdjIPAddrs(ctx context.Context, client *gsnmp.GoSNMP, localDevice strin
 		if ip == nil {
 			continue
 		}
+		if ip.IsUnspecified() || ip.IsLinkLocalUnicast() {
+			continue
+		}
 		// Derive circuit key: adjKey is "{sysInst}.{circIdx}.{adjIdx}"; circuit
 		// key is the first two components.
 		adjParts := strings.SplitN(adjKey, ".", 3)

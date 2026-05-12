@@ -134,6 +134,9 @@ func buildEdges(localDevice string, peers map[string]*bgpPeer, allowedNets []*ne
 			slog.Debug("bgp: peer missing remote address, skipping", "local_device", localDevice, "peer_key", ipKey)
 			continue
 		}
+		if peer.remoteIP.IsUnspecified() || peer.remoteIP.IsLinkLocalUnicast() {
+			continue
+		}
 
 		if len(allowedNets) > 0 && !snmputil.IPInNets(peer.remoteIP, allowedNets) {
 			oos = append(oos, discovery.OutOfScopeNeighbour{
