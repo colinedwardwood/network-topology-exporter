@@ -56,7 +56,9 @@ var (
 // Version history:
 //   1 — initial format
 //   2 — EdgeKeyString escapes "|" as "%7C" in UnconfirmedAges keys
-const CurrentVersion = 2
+//   3 — EdgeKeyString escapes "%" as "%25" in addition to "|" as "%7C";
+//       "%" must be escaped first to prevent double-encoding.
+const CurrentVersion = 3
 
 // File is the on-disk representation. Public fields and field tags are part
 // of the persistence contract; treat schema changes the same as a database

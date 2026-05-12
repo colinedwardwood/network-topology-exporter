@@ -437,22 +437,30 @@ func Key(e discovery.Edge) EdgeKey {
 // EdgeKeyString serialises an EdgeKey to the pipe-delimited format used in
 // snapshot.File.UnconfirmedAges ("srcDevice|srcPort|dstDevice|dstPort").
 // The key must be in canonical order (from Key()) for round-trips to be
-// stable. Literal "|" characters in any field are percent-encoded as "%7C"
-// so that EdgeKeyFromString can round-trip without ambiguity.
+// stable. Literal "%" characters are percent-encoded as "%25" first, then
+// literal "|" characters are encoded as "%7C", so that EdgeKeyFromString can
+// round-trip without ambiguity.
 func EdgeKeyString(k EdgeKey) string {
-	esc := func(s string) string { return strings.ReplaceAll(s, "|", "%7C") }
+	esc := func(s string) string {
+		s = strings.ReplaceAll(s, "%", "%25")
+		return strings.ReplaceAll(s, "|", "%7C")
+	}
 	return esc(k.SrcDevice) + "|" + esc(k.SrcPort) + "|" + esc(k.DstDevice) + "|" + esc(k.DstPort)
 }
 
 // EdgeKeyFromString parses the pipe-delimited snapshot format back into an
 // EdgeKey. Returns an error if s does not have exactly three separators.
-// "%7C" in any field is unescaped back to "|".
+// "%7C" in any field is unescaped back to "|" first, then "%25" is unescaped
+// back to "%".
 func EdgeKeyFromString(s string) (EdgeKey, error) {
 	parts := strings.SplitN(s, "|", 4)
 	if len(parts) != 4 {
 		return EdgeKey{}, fmt.Errorf("graph: invalid edge key %q (want srcDevice|srcPort|dstDevice|dstPort)", s)
 	}
-	unesc := func(s string) string { return strings.ReplaceAll(s, "%7C", "|") }
+	unesc := func(s string) string {
+		s = strings.ReplaceAll(s, "%7C", "|")
+		return strings.ReplaceAll(s, "%25", "%")
+	}
 	return EdgeKey{SrcDevice: unesc(parts[0]), SrcPort: unesc(parts[1]), DstDevice: unesc(parts[2]), DstPort: unesc(parts[3])}, nil
 }
 
