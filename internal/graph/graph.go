@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 )
@@ -384,6 +385,17 @@ var portPrefixes = []struct{ long, short string }{
 // Ports without a known prefix are returned unchanged, so Junos ge-0/0/0
 // style names pass through without modification.
 func NormalizePortName(name string) string {
+	// Strip control characters (mirrors NormaliseName in pdu.go). Some devices
+	// embed \r, \x01, or other control chars in port name responses; leaving them
+	// in causes edge key instability — "Gi0/1\rgarbage" and "Gi0/1" produce
+	// different EdgeKeys, so the same physical port appears as two separate edges
+	// across polling cycles.
+	name = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, name)
 	lower := strings.ToLower(name)
 	for _, p := range portPrefixes {
 		if strings.HasPrefix(lower, strings.ToLower(p.long)) {
