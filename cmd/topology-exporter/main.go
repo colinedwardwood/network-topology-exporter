@@ -882,13 +882,15 @@ func mergeOOSFirstSeen(newOOS, prevOOS []discovery.OutOfScopeNeighbour) []discov
 		k := oosKey{n.ReportingDevice, n.ReportingPort, n.NeighbourHint}
 		prevFirstSeen[k] = n.FirstSeen
 	}
-	for i := range newOOS {
-		k := oosKey{newOOS[i].ReportingDevice, newOOS[i].ReportingPort, newOOS[i].NeighbourHint}
+	out := make([]discovery.OutOfScopeNeighbour, len(newOOS))
+	copy(out, newOOS)
+	for i := range out {
+		k := oosKey{out[i].ReportingDevice, out[i].ReportingPort, out[i].NeighbourHint}
 		if t, ok := prevFirstSeen[k]; ok {
-			newOOS[i].FirstSeen = t
+			out[i].FirstSeen = t
 		}
 	}
-	return newOOS
+	return out
 }
 
 // deduplicateDevices removes Device entries with duplicate IDs that can arise
