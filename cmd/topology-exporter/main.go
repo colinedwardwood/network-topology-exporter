@@ -448,6 +448,7 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 		if ctx.Err() != nil {
 			return
 		}
+		newGraph.OutOfScope = mergeOOSFirstSeen(newGraph.OutOfScope, prevGraph.OutOfScope)
 		lc.status.Store(&cycleStatus{
 			LastCycleAt:  time.Now(),
 			DeviceErrors: int64(deviceErrors),
@@ -863,6 +864,31 @@ func deduplicateOOS(oos []discovery.OutOfScopeNeighbour) []discovery.OutOfScopeN
 		out = append(out, n)
 	}
 	return out
+}
+
+// mergeOOSFirstSeen preserves FirstSeen timestamps across collection cycles.
+// Each cycle, OutOfScopeNeighbour entries are built fresh with FirstSeen set to
+// time.Now(). This function restores the original FirstSeen from prevOOS for any
+// entry that was already known, keyed on (ReportingDevice, ReportingPort, NeighbourHint).
+// Entries not present in prevOOS keep the cycle's time.Now() as their FirstSeen.
+func mergeOOSFirstSeen(newOOS, prevOOS []discovery.OutOfScopeNeighbour) []discovery.OutOfScopeNeighbour {
+	type oosKey struct {
+		ReportingDevice string
+		ReportingPort   string
+		NeighbourHint   string
+	}
+	prevFirstSeen := make(map[oosKey]time.Time, len(prevOOS))
+	for _, n := range prevOOS {
+		k := oosKey{n.ReportingDevice, n.ReportingPort, n.NeighbourHint}
+		prevFirstSeen[k] = n.FirstSeen
+	}
+	for i := range newOOS {
+		k := oosKey{newOOS[i].ReportingDevice, newOOS[i].ReportingPort, newOOS[i].NeighbourHint}
+		if t, ok := prevFirstSeen[k]; ok {
+			newOOS[i].FirstSeen = t
+		}
+	}
+	return newOOS
 }
 
 func collectDegradedReasons(edges []discovery.Edge) []string {
