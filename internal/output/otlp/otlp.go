@@ -365,8 +365,14 @@ func (e *Exporter) post(ctx context.Context, path string, payload any) error {
 
 		lastErr = fmt.Errorf("otlp: post %s: server returned %d", path, resp.StatusCode)
 
-		// Only retry on 429 and 503.
-		if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode != http.StatusServiceUnavailable {
+		// Only retry on transient errors: 429, 502, 503, 504.
+		switch resp.StatusCode {
+		case http.StatusTooManyRequests,    // 429
+			http.StatusBadGateway,          // 502
+			http.StatusServiceUnavailable,  // 503
+			http.StatusGatewayTimeout:      // 504
+			// retryable — fall through to retry loop
+		default:
 			return lastErr
 		}
 
