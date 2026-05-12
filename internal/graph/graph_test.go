@@ -1240,6 +1240,69 @@ func BenchmarkDiff100Edges(b *testing.B) {
 	}
 }
 
+// TestDiffRemovedDeterministicOrder verifies that ChangeRemoved entries returned
+// by Diff are sorted by EdgeKeyString — i.e. in deterministic order — regardless
+// of the order in which the internal beforeMap is iterated. Prior to the fix,
+// removals were appended in random map-iteration order, causing non-deterministic
+// diff output between calls.
+func TestDiffRemovedDeterministicOrder(t *testing.T) {
+	// Three edges whose canonical EdgeKeyString values sort in a known order:
+	//   a-device|Gi0/1|b-device|Gi0/2  ("a..." comes first)
+	//   b-device|Gi0/1|c-device|Gi0/2
+	//   c-device|Gi0/1|d-device|Gi0/2  ("c..." comes last)
+	edges := []discovery.Edge{
+		{
+			SrcDevice: "a-device", SrcPort: "Gi0/1",
+			DstDevice: "b-device", DstPort: "Gi0/2",
+			DiscoveryProto: "lldp", Direction: discovery.DirectionBidirectional,
+		},
+		{
+			SrcDevice: "b-device", SrcPort: "Gi0/1",
+			DstDevice: "c-device", DstPort: "Gi0/2",
+			DiscoveryProto: "lldp", Direction: discovery.DirectionBidirectional,
+		},
+		{
+			SrcDevice: "c-device", SrcPort: "Gi0/1",
+			DstDevice: "d-device", DstPort: "Gi0/2",
+			DiscoveryProto: "lldp", Direction: discovery.DirectionBidirectional,
+		},
+	}
+
+	// Build a "before" graph with all edges present and an "after" graph with
+	// none, so Diff must emit three ChangeRemoved entries.
+	changes1 := Diff(edges, nil)
+	changes2 := Diff(edges, nil)
+
+	// Both calls must return exactly 3 ChangeRemoved entries.
+	for i, changes := range [][]EdgeChange{changes1, changes2} {
+		if len(changes) != 3 {
+			t.Fatalf("call %d: expected 3 changes, got %d", i+1, len(changes))
+		}
+		for _, c := range changes {
+			if c.Kind != ChangeRemoved {
+				t.Errorf("call %d: expected ChangeRemoved, got %q", i+1, c.Kind)
+			}
+		}
+	}
+
+	// ChangeRemoved entries must be sorted by EdgeKeyString (lexicographic order
+	// on "srcDevice|srcPort|dstDevice|dstPort").
+	wantOrder := []string{
+		EdgeKeyString(Key(edges[0])), // a-device|...
+		EdgeKeyString(Key(edges[1])), // b-device|...
+		EdgeKeyString(Key(edges[2])), // c-device|...
+	}
+	for i, changes := range [][]EdgeChange{changes1, changes2} {
+		for j, change := range changes {
+			got := EdgeKeyString(Key(*change.Before))
+			if got != wantOrder[j] {
+				t.Errorf("call %d: changes[%d] EdgeKeyString = %q, want %q (sorted order)",
+					i+1, j, got, wantOrder[j])
+			}
+		}
+	}
+}
+
 func BenchmarkDiff1000Edges(b *testing.B) {
 	raw := makeEdges(1000)
 	before, _ := Reconcile(raw)
