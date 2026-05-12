@@ -36,10 +36,6 @@
 //     post-18.x). SNMP BGP walks may return empty results on modern gear.
 //     Streaming telemetry (gNMI) is the preferred path for BGP adjacency
 //     on those platforms, but is out of scope for v1.
-//   - iBGP vs eBGP classification is not emitted in v1. bgpPeerRemoteAs is
-//     read from the walk results but the distinction is not reflected in
-//     LinkKind ("ip" is used for all peers). A follow-up can set LinkKind to
-//     "ibgp" or "ebgp" once the graph layer consumes that field.
 package bgp
 
 import (
@@ -66,7 +62,6 @@ const (
 const (
 	colBgpPeerState      = 2
 	colBgpPeerRemoteAddr = 7
-	colBgpPeerRemoteAs   = 9
 )
 
 const bgpStateEstablished = 6
@@ -74,7 +69,6 @@ const bgpStateEstablished = 6
 type bgpPeer struct {
 	state    int
 	remoteIP net.IP
-	remoteAS int
 }
 
 // Walk returns BGP-peer edges for the device at p.IP. Only peers in
@@ -122,8 +116,6 @@ func walkBgpPeerTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*bg
 			peer.state = snmputil.PDUInt(pdu)
 		case colBgpPeerRemoteAddr:
 			peer.remoteIP = snmputil.PDUIPv4(pdu)
-		case colBgpPeerRemoteAs:
-			peer.remoteAS = snmputil.PDUInt(pdu)
 		}
 	}
 	return peers, nil
