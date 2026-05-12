@@ -18,7 +18,9 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
@@ -153,6 +155,16 @@ func init() {
 	}
 }
 
+// sanitizeUTF8 replaces sequences of invalid UTF-8 bytes with the Unicode
+// replacement character so that JSON serialization never fails on SNMP strings
+// sourced from device sysName/ifDescr which may contain arbitrary bytes.
+func sanitizeUTF8(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	return strings.ToValidUTF8(s, "�")
+}
+
 // PushGraph serialises graph.Edges and graph.Devices as OTLP gauge metrics and
 // POSTs them to {endpoint}/v1/metrics.
 func (e *Exporter) PushGraph(ctx context.Context, g discovery.Graph) error {
@@ -161,15 +173,15 @@ func (e *Exporter) PushGraph(ctx context.Context, g discovery.Graph) error {
 	edgePoints := make([]dataPoint, 0, len(g.Edges))
 	for _, edge := range g.Edges {
 		attrs := []kv{
-			{Key: "src_device", Value: kvValue{StringValue: edge.SrcDevice}},
-			{Key: "src_port", Value: kvValue{StringValue: edge.SrcPort}},
-			{Key: "dst_device", Value: kvValue{StringValue: edge.DstDevice}},
-			{Key: "dst_port", Value: kvValue{StringValue: edge.DstPort}},
-			{Key: "proto", Value: kvValue{StringValue: edge.DiscoveryProto}},
-			{Key: "link_kind", Value: kvValue{StringValue: edge.LinkKind}},
+			{Key: "src_device", Value: kvValue{StringValue: sanitizeUTF8(edge.SrcDevice)}},
+			{Key: "src_port", Value: kvValue{StringValue: sanitizeUTF8(edge.SrcPort)}},
+			{Key: "dst_device", Value: kvValue{StringValue: sanitizeUTF8(edge.DstDevice)}},
+			{Key: "dst_port", Value: kvValue{StringValue: sanitizeUTF8(edge.DstPort)}},
+			{Key: "proto", Value: kvValue{StringValue: sanitizeUTF8(edge.DiscoveryProto)}},
+			{Key: "link_kind", Value: kvValue{StringValue: sanitizeUTF8(edge.LinkKind)}},
 		}
 		for k, v := range edge.Metadata {
-			attrs = append(attrs, kv{Key: metadataAttrPrefix + k, Value: kvValue{StringValue: v}})
+			attrs = append(attrs, kv{Key: metadataAttrPrefix + k, Value: kvValue{StringValue: sanitizeUTF8(v)}})
 		}
 		edgePoints = append(edgePoints, dataPoint{
 			Attributes:   attrs,
@@ -182,7 +194,7 @@ func (e *Exporter) PushGraph(ctx context.Context, g discovery.Graph) error {
 	for _, dev := range g.Devices {
 		devicePoints = append(devicePoints, dataPoint{
 			Attributes: []kv{
-				{Key: "device", Value: kvValue{StringValue: dev.ID}},
+				{Key: "device", Value: kvValue{StringValue: sanitizeUTF8(dev.ID)}},
 			},
 			AsDouble:     1.0,
 			TimeUnixNano: now,
@@ -264,12 +276,12 @@ func (e *Exporter) PushChanges(ctx context.Context, changes []graph.EdgeChange) 
 			Body:           logBody{StringValue: "topology change: " + string(c.Kind)},
 			Attributes: []kv{
 				{Key: "change_kind", Value: kvValue{StringValue: string(c.Kind)}},
-				{Key: "src_device", Value: kvValue{StringValue: srcDevice}},
-				{Key: "src_port", Value: kvValue{StringValue: srcPort}},
-				{Key: "dst_device", Value: kvValue{StringValue: dstDevice}},
-				{Key: "dst_port", Value: kvValue{StringValue: dstPort}},
-				{Key: "proto", Value: kvValue{StringValue: proto}},
-				{Key: "link_kind", Value: kvValue{StringValue: linkKind}},
+				{Key: "src_device", Value: kvValue{StringValue: sanitizeUTF8(srcDevice)}},
+				{Key: "src_port", Value: kvValue{StringValue: sanitizeUTF8(srcPort)}},
+				{Key: "dst_device", Value: kvValue{StringValue: sanitizeUTF8(dstDevice)}},
+				{Key: "dst_port", Value: kvValue{StringValue: sanitizeUTF8(dstPort)}},
+				{Key: "proto", Value: kvValue{StringValue: sanitizeUTF8(proto)}},
+				{Key: "link_kind", Value: kvValue{StringValue: sanitizeUTF8(linkKind)}},
 			},
 		})
 	}
