@@ -535,6 +535,47 @@ func (c *isisLazyErrCtx) Err() error {
 	return nil
 }
 
+// Walk: malformed adjKey with only 1 dot-separated component → edge emitted with
+// DegradedReasonMissingSrcPortMapping. This exercises the circKey == "" branch
+// added in the fix to the degraded-reason condition.
+//
+// OID structure: the suffix after the adjIPBase prefix is "col.1.4.ip0.ip1.ip2.ip3"
+// (7 parts). Stripping the last ipv4TailLen=6 parts yields adjKey="col" (1 component).
+// SplitN on "." with limit 3 returns only 1 element, so circKey stays empty.
+func TestWalkMalformedAdjKeyDegradedReason(t *testing.T) {
+	// adjKey "2" has a single component: col=2, no sysInst/circIdx/adjIdx.
+	// State OID: adjStateBase+"2"; IP OID: adjIPBase+"2.1.4.192.0.2.2".
+	const malformedStateKey = "2"
+	pdus := []gsnmp.SnmpPDU{
+		{Name: adjStateBase + malformedStateKey, Type: gsnmp.Integer, Value: isisAdjStateUp},
+		{Name: adjIPBase + malformedStateKey + ".1.4.192.0.2.2", Type: gsnmp.OctetString, Value: []byte{192, 0, 2, 2}},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(oos) != 0 {
+		t.Errorf("expected 0 out-of-scope, got %d", len(oos))
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge (malformed adjKey still emits), got %d", len(edges))
+	}
+	e := edges[0]
+	if e.Metadata == nil {
+		t.Fatal("Metadata is nil, want degraded metadata")
+	}
+	if e.Metadata[discovery.MetadataKeyDegraded] != "true" {
+		t.Errorf("%s = %q, want true", discovery.MetadataKeyDegraded, e.Metadata[discovery.MetadataKeyDegraded])
+	}
+	if e.Metadata[discovery.MetadataKeyDegradedReason] != discovery.DegradedReasonMissingSrcPortMapping {
+		t.Errorf("%s = %q, want %s", discovery.MetadataKeyDegradedReason, e.Metadata[discovery.MetadataKeyDegradedReason], discovery.DegradedReasonMissingSrcPortMapping)
+	}
+}
+
 // Walk: Open fails when the connection cannot be established.
 func TestWalkOpenFails(t *testing.T) {
 	p := snmputil.Params{
