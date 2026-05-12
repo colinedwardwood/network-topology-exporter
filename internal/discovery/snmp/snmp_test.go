@@ -1246,6 +1246,36 @@ func TestNormaliseNameCap(t *testing.T) {
 	}
 }
 
+// NormaliseName: embedded control characters are removed to ensure device ID
+// stability across polling cycles. Some SNMP devices embed \r, \x01, or other
+// control characters in sysName responses; these must not survive into device IDs.
+func TestNormaliseNameStripsControlChars(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		// \r embedded in sysName (e.g. "router1\rgarbage" from a buggy device).
+		{"embedded CR", "router1\rgarbage", "router1garbage"},
+		// SOH control character (\x01).
+		{"embedded SOH", "spine\x01-01", "spine-01"},
+		// NUL in the middle (PDUString only strips trailing NULs; NormaliseName
+		// must strip interior ones too).
+		{"embedded NUL in middle", "sw\x00-core", "sw-core"},
+		// Normal names are unaffected.
+		{"normal lowercase", "core-sw-01", "core-sw-01"},
+		{"normal with spaces trimmed", "  Leaf-02  ", "leaf-02"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := NormaliseName(c.input)
+			if got != c.want {
+				t.Errorf("NormaliseName(%q) = %q, want %q", c.input, got, c.want)
+			}
+		})
+	}
+}
+
 // WalkARPTable: two ipNetToMediaPhysAddress PDUs are decoded to MAC→IP entries.
 func TestWalkARPTable(t *testing.T) {
 	pdus := []gsnmp.SnmpPDU{
