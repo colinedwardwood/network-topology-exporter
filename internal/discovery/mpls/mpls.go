@@ -93,6 +93,9 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 		if !ok {
 			continue
 		}
+		if egressIP.IsUnspecified() || egressIP.IsLinkLocalUnicast() {
+			continue
+		}
 		if len(allowedNets) > 0 && !snmputil.IPInNets(egressIP, allowedNets) {
 			oos = append(oos, discovery.OutOfScopeNeighbour{
 				Proto:           "mpls_te",
