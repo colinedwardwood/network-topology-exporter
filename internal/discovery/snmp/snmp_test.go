@@ -30,6 +30,40 @@ func TestPDUString(t *testing.T) {
 	}
 }
 
+// PDUString: trailing NUL bytes are stripped from both string and []byte values.
+// Some SNMP devices terminate OctetString values with \x00 (e.g. sysName =
+// "router1\x00"). Without stripping, "router1\x00" and "router1" would be
+// treated as different graph keys.
+func TestPDUStringStripsTrailingNUL(t *testing.T) {
+	cases := []struct {
+		name string
+		val  any
+		want string
+	}{
+		// string path: trailing NUL stripped.
+		{"string trailing NUL", "router1\x00", "router1"},
+		// []byte path: trailing NUL stripped.
+		{"[]byte trailing NUL", []byte{'r', 'o', 'u', 't', 'e', 'r', '1', 0x00}, "router1"},
+		// Multiple trailing NULs are all stripped.
+		{"string multiple trailing NULs", "sw-01\x00\x00", "sw-01"},
+		{"[]byte multiple trailing NULs", []byte{'s', 'w', 0x00, 0x00}, "sw"},
+		// NUL in the middle is NOT stripped (TrimRight only removes from the right).
+		{"string NUL in middle preserved", "ro\x00ter", "ro\x00ter"},
+		{"[]byte NUL in middle preserved", []byte{'r', 'o', 0x00, 't', 'e', 'r'}, "ro\x00ter"},
+		// No NUL: value is returned unchanged.
+		{"string no NUL", "spine-01", "spine-01"},
+		{"[]byte no NUL", []byte("spine-01"), "spine-01"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := PDUString(gsnmp.SnmpPDU{Value: c.val})
+			if got != c.want {
+				t.Errorf("PDUString(%q) = %q, want %q", c.val, got, c.want)
+			}
+		})
+	}
+}
+
 // PDUInt: handles int, int32, uint, uint32, returns 0 for other types.
 func TestPDUInt(t *testing.T) {
 	cases := []struct {
