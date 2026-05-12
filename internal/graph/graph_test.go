@@ -5,6 +5,7 @@ import (
 	"math"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -187,6 +188,29 @@ func TestEdgeKeyStringPipeEscaping(t *testing.T) {
 	}
 	if got != k {
 		t.Errorf("round-trip mismatch: got %#v, want %#v", got, k)
+	}
+}
+
+// EdgeKeyString / EdgeKeyFromString: a key whose fields contain a literal "%7C"
+// sequence must round-trip correctly. Without escaping "%" first, the sequence
+// would be decoded as "|" and produce a wrong key on parse.
+func TestEdgeKeyStringPercentEscaping(t *testing.T) {
+	k := EdgeKey{
+		SrcDevice: "router%7Ctest",
+		SrcPort:   "Gi0/1",
+		DstDevice: "sw-b",
+		DstPort:   "Gi0/2",
+	}
+	s := EdgeKeyString(k)
+	got, err := EdgeKeyFromString(s)
+	if err != nil {
+		t.Fatalf("EdgeKeyFromString(%q): %v", s, err)
+	}
+	if got != k {
+		t.Errorf("round-trip mismatch: got %#v, want %#v", got, k)
+	}
+	if !strings.Contains(s, "%25") {
+		t.Errorf("expected %% to be percent-encoded in %q", s)
 	}
 }
 
