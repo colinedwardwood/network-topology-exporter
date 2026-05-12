@@ -1583,6 +1583,162 @@ func TestTryPublishMetricsRejectsOversizedGraphDevices(t *testing.T) {
 	}
 }
 
+// TestHubHandlePushRejectedGraphDoesNotMarkSpokeUp verifies that when
+// tryPublishMetrics rejects the combined graph (size budget exceeded), the spoke
+// is NOT registered in h.spokes and FederationSpokeUp is NOT set to 1.
+// This guards against the inconsistency where a spoke appears "up" in Prometheus
+// but contributes zero edges to the topology because its graph was rejected.
+func TestHubHandlePushRejectedGraphDoesNotMarkSpokeUp(t *testing.T) {
+	m := metrics.New(false)
+	h := NewHub(
+		config.FederationConfig{
+			SpokeTimeout: 5 * time.Minute,
+			Hub: config.FederationHubConfig{
+				// Set a tight edge budget so the combined graph is rejected.
+				// The spoke payload will have more edges than this limit.
+				MaxGraphEdges: 1,
+			},
+		},
+		m, nil, "",
+	)
+
+	// Build a payload whose edges will exceed MaxGraphEdges after reconciliation.
+	payload := SpokePayload{
+		SpokeID: "dc-rejected",
+		CycleAt: time.Now(),
+		Devices: []discovery.Device{
+			{ID: "sw-a"},
+			{ID: "sw-b"},
+			{ID: "sw-c"},
+		},
+		Edges: []discovery.Edge{
+			{
+				SrcDevice: "sw-a", SrcPort: "Gi0/1",
+				DstDevice: "sw-b", DstPort: "Gi0/2",
+				DiscoveryProto: "lldp",
+				Direction:      discovery.DirectionBidirectional,
+				LinkKind:       "ethernet",
+			},
+			{
+				SrcDevice: "sw-b", SrcPort: "Gi0/3",
+				DstDevice: "sw-c", DstPort: "Gi0/4",
+				DiscoveryProto: "lldp",
+				Direction:      discovery.DirectionBidirectional,
+				LinkKind:       "ethernet",
+			},
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.handlePush(rec, req)
+
+	// handlePush should still return 204 — rejection is a hub-internal decision,
+	// not an error the spoke should retry with the same data.
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Spoke must NOT be registered in h.spokes.
+	h.mu.Lock()
+	_, present := h.spokes["dc-rejected"]
+	h.mu.Unlock()
+	if present {
+		t.Error("spoke dc-rejected should NOT be in h.spokes when graph publish was rejected")
+	}
+
+	// FederationSpokeUp must NOT be set to 1.
+	if got := testutil.ToFloat64(m.FederationSpokeUp.WithLabelValues("dc-rejected")); got != 0 {
+		t.Errorf("FederationSpokeUp{dc-rejected} = %v, want 0 when graph was rejected", got)
+	}
+
+	// GraphUpdatesRejectedTotal must have been incremented.
+	if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal); got != 1 {
+		t.Errorf("GraphUpdatesRejectedTotal = %v, want 1", got)
+	}
+}
+
+// TestHubHandlePushRejectedGraphRollsBackPreviousEntry verifies that when a
+// spoke's push is rejected due to graph size limits, the spoke's PREVIOUS entry
+// in h.spokes is restored rather than overwritten with the new payload.
+func TestHubHandlePushRejectedGraphRollsBackPreviousEntry(t *testing.T) {
+	m := metrics.New(false)
+	h := NewHub(
+		config.FederationConfig{
+			SpokeTimeout: 5 * time.Minute,
+			Hub: config.FederationHubConfig{MaxGraphEdges: 1},
+		},
+		m, nil, "",
+	)
+
+	// Seed a prior entry with one device — within the tight edge budget (no edges).
+	prior := spokeEntry{
+		payload: SpokePayload{
+			SpokeID: "dc-rollback",
+			Devices: []discovery.Device{{ID: "sw-prior"}},
+			Edges:   []discovery.Edge{},
+		},
+		lastSeen: time.Now().Add(-time.Minute),
+	}
+	h.mu.Lock()
+	h.spokes["dc-rollback"] = prior
+	h.mu.Unlock()
+
+	// Push a new payload that will exceed MaxGraphEdges.
+	payload := SpokePayload{
+		SpokeID: "dc-rollback",
+		CycleAt: time.Now(),
+		Devices: []discovery.Device{{ID: "sw-a"}, {ID: "sw-b"}, {ID: "sw-c"}},
+		Edges: []discovery.Edge{
+			{
+				SrcDevice: "sw-a", SrcPort: "Gi0/1",
+				DstDevice: "sw-b", DstPort: "Gi0/2",
+				DiscoveryProto: "lldp",
+				Direction:      discovery.DirectionBidirectional,
+				LinkKind:       "ethernet",
+			},
+			{
+				SrcDevice: "sw-b", SrcPort: "Gi0/3",
+				DstDevice: "sw-c", DstPort: "Gi0/4",
+				DiscoveryProto: "lldp",
+				Direction:      discovery.DirectionBidirectional,
+				LinkKind:       "ethernet",
+			},
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.handlePush(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// The spoke entry should have been rolled back to the prior payload.
+	h.mu.Lock()
+	entry, ok := h.spokes["dc-rollback"]
+	h.mu.Unlock()
+
+	if !ok {
+		t.Fatal("spoke dc-rollback should still be in h.spokes with the prior entry after rollback")
+	}
+	if len(entry.payload.Devices) != 1 || entry.payload.Devices[0].ID != "sw-prior" {
+		t.Errorf("h.spokes[dc-rollback].payload.Devices = %v, want prior entry [{sw-prior}]",
+			entry.payload.Devices)
+	}
+}
+
 // TestValidateSpokePayload covers the semantic validation rules enforced by
 // validateSpokePayload: empty/overlong/invalid-UTF-8/duplicate device IDs,
 // required edge fields, self-edges, and overlong/invalid-UTF-8 port names.

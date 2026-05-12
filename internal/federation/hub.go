@@ -273,12 +273,17 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Build the combined graph with the new spoke included, but defer writing
+	// h.spokes and updating the spoke-up metrics until after tryPublishMetrics
+	// confirms the graph was accepted. This prevents a spoke from appearing "up"
+	// in Prometheus when the combined graph exceeds the size budget and is never
+	// published — which would otherwise make the spoke look healthy while
+	// contributing zero edges to the topology.
 	h.mu.Lock()
+	prevEntry, hadPrev := h.spokes[payload.SpokeID]
 	h.spokes[payload.SpokeID] = spokeEntry{payload: payload, lastSeen: now}
 	spokes := h.spokesSnapshot()
 	gen := h.publishGen.Add(1)
-	h.m.FederationSpokeUp.WithLabelValues(payload.SpokeID).Set(1)
-	h.m.FederationSpokeLastPushUnix.WithLabelValues(payload.SpokeID).Set(float64(now.Unix()))
 	h.mu.Unlock()
 	combined, unmatchedCount := h.buildCombinedGraph(spokes)
 
@@ -289,11 +294,24 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 	// false, which would otherwise leave firstLive=true with no Topology update.
 	wasFirst := !h.firstLive.Load()
 	published := h.tryPublishMetrics(gen, combined, wasFirst, unmatchedCount)
-	if published && wasFirst {
-		h.firstLive.Store(true)
-	}
 	if published {
+		// Graph was accepted: commit the spoke registration and update liveness metrics.
+		h.m.FederationSpokeUp.WithLabelValues(payload.SpokeID).Set(1)
+		h.m.FederationSpokeLastPushUnix.WithLabelValues(payload.SpokeID).Set(float64(now.Unix()))
+		if wasFirst {
+			h.firstLive.Store(true)
+		}
 		h.writeSnapshotAsync(combined)
+	} else {
+		// Graph was rejected (size budget exceeded or CAS lost): roll back the
+		// spoke entry so h.spokes reflects only previously-accepted state.
+		h.mu.Lock()
+		if hadPrev {
+			h.spokes[payload.SpokeID] = prevEntry
+		} else {
+			delete(h.spokes, payload.SpokeID)
+		}
+		h.mu.Unlock()
 	}
 
 	h.logger.Info("hub: spoke push accepted",
