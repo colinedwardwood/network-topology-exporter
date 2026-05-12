@@ -1151,6 +1151,75 @@ func TestWalkBasePortTablePortStrEmpty(t *testing.T) {
 	}
 }
 
+// walkBasePortTable: bridge port index 0 is invalid per RFC 4188 and must be
+// skipped. Port index 1 in the same response is valid and must be stored.
+func TestWalkBasePortTablePortZeroSkipped(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		// port 0 → ifIndex 99: should be skipped (invalid RFC 4188 index)
+		{Name: ".1.3.6.1.2.1.17.1.4.1.2.0", Type: gsnmp.Integer, Value: 99},
+		// port 1 → ifIndex 2: should be stored
+		{Name: ".1.3.6.1.2.1.17.1.4.1.2.1", Type: gsnmp.Integer, Value: 2},
+	}
+	client := openClientToAgent(t, "public", pdus)
+	ports, err := walkBasePortTable(context.Background(), client)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := ports[0]; ok {
+		t.Errorf("port 0 must not appear in ports map (RFC 4188: indices are 1-based)")
+	}
+	if ifIdx, ok := ports[1]; !ok || ifIdx != 2 {
+		t.Errorf("expected ports[1] = 2, got %d (ok=%v)", ifIdx, ok)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// buildEdges: special MAC filtering
+// ---------------------------------------------------------------------------
+
+// buildEdges: broadcast MAC (ff:ff:ff:ff:ff:ff) produces no edge.
+func TestBuildEdgesBroadcastMACFiltered(t *testing.T) {
+	entries := map[string]*fdbEntry{
+		"255.255.255.255.255.255": {mac: []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, port: 1, status: fdbStatusLearned},
+	}
+	bridgePorts := map[int]int{1: 2}
+	ifNames := map[int]string{2: "Gi0/1"}
+
+	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
+	if len(edges) != 0 {
+		t.Fatalf("expected 0 edges for broadcast MAC, got %d: %v", len(edges), edges)
+	}
+}
+
+// buildEdges: all-zeros MAC (00:00:00:00:00:00) produces no edge.
+func TestBuildEdgesAllZerosMACFiltered(t *testing.T) {
+	entries := map[string]*fdbEntry{
+		"0.0.0.0.0.0": {mac: []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, port: 1, status: fdbStatusLearned},
+	}
+	bridgePorts := map[int]int{1: 2}
+	ifNames := map[int]string{2: "Gi0/1"}
+
+	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
+	if len(edges) != 0 {
+		t.Fatalf("expected 0 edges for all-zeros MAC, got %d: %v", len(edges), edges)
+	}
+}
+
+// buildEdges: multicast MAC (I/G bit set on first byte) produces no edge.
+// 01:00:5e:00:00:01 is a well-known IPv4 multicast MAC.
+func TestBuildEdgesMulticastMACFiltered(t *testing.T) {
+	entries := map[string]*fdbEntry{
+		"1.0.94.0.0.1": {mac: []byte{0x01, 0x00, 0x5e, 0x00, 0x00, 0x01}, port: 1, status: fdbStatusLearned},
+	}
+	bridgePorts := map[int]int{1: 2}
+	ifNames := map[int]string{2: "Gi0/1"}
+
+	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
+	if len(edges) != 0 {
+		t.Fatalf("expected 0 edges for multicast MAC, got %d: %v", len(edges), edges)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // walkStpPortStates() coverage gaps
 // ---------------------------------------------------------------------------
