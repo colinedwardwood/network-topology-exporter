@@ -835,7 +835,7 @@ func runCycle(
 	}
 
 	return discovery.Graph{
-		Devices:    devices,
+		Devices:    deduplicateDevices(devices),
 		Edges:      reconciledEdges,
 		OutOfScope: deduplicateOOS(allOOS),
 	}, ages, conflicts, int(failCount)
@@ -889,6 +889,23 @@ func mergeOOSFirstSeen(newOOS, prevOOS []discovery.OutOfScopeNeighbour) []discov
 		}
 	}
 	return newOOS
+}
+
+// deduplicateDevices removes Device entries with duplicate IDs that can arise
+// when the same physical device is polled via multiple target addresses (e.g.
+// primary IP and loopback IP both resolving to the same sysName). The first
+// occurrence of each ID is kept; insertion order is preserved.
+func deduplicateDevices(devices []discovery.Device) []discovery.Device {
+	seen := make(map[string]struct{}, len(devices))
+	out := make([]discovery.Device, 0, len(devices))
+	for _, d := range devices {
+		if _, ok := seen[d.ID]; ok {
+			continue
+		}
+		seen[d.ID] = struct{}{}
+		out = append(out, d)
+	}
+	return out
 }
 
 func collectDegradedReasons(edges []discovery.Edge) []string {
