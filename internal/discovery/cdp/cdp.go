@@ -96,6 +96,9 @@ func walkCacheTable(ctx context.Context, client *gsnmp.GoSNMP) (map[cacheKey]*ca
 		if !ok {
 			continue
 		}
+		if ifIdx <= 0 {
+			continue
+		}
 		neighIdx, err := strconv.Atoi(neighStr)
 		if err != nil {
 			continue
