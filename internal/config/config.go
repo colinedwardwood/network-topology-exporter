@@ -411,15 +411,15 @@ func (c *Config) validate() error {
 	if err := c.validateFederation(); err != nil {
 		return err
 	}
+	if c.Output.OTLP.Timeout < 0 {
+		return fmt.Errorf("output.otlp.timeout must be >= 0 (0 uses the default)")
+	}
 	if c.Output.OTLP.Enabled {
 		if err := validateHTTPEndpoint(c.Output.OTLP.Endpoint); err != nil {
 			return fmt.Errorf("output.otlp.endpoint: %w", err)
 		}
 		if c.Output.OTLP.HeartbeatCycles < 1 {
 			return errors.New("output.otlp.heartbeat_cycles must be >= 1")
-		}
-		if c.Output.OTLP.Timeout < 0 {
-			return errors.New("output.otlp.timeout must be >= 0 (0 uses the 10s default)")
 		}
 	}
 	return nil
@@ -623,6 +623,9 @@ func (c *Config) validateTargets() error {
 
 // validateFederation enforces LD-15–LD-20 constraints on the federation config.
 func (c *Config) validateFederation() error {
+	if c.Federation.SpokeTimeout < 0 {
+		return fmt.Errorf("federation.spoke_timeout must be >= 0 (0 uses the default of 3× discovery.interval)")
+	}
 	switch c.Federation.Role {
 	case "standalone", "uncoordinated":
 		// no extra required fields
