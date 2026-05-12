@@ -1125,7 +1125,13 @@ func profileToParams(ip net.IP, port uint16, timeout time.Duration, p config.Cre
 			return params, fmt.Errorf("env %q is empty", p.UsernameEnv)
 		}
 		params.AuthKey = os.Getenv(p.AuthKeyEnv)
+		if p.AuthKeyEnv != "" && params.AuthKey == "" {
+			return params, fmt.Errorf("env %q is empty or unset", p.AuthKeyEnv)
+		}
 		params.PrivKey = os.Getenv(p.PrivKeyEnv)
+		if p.PrivKeyEnv != "" && params.PrivKey == "" {
+			return params, fmt.Errorf("env %q is empty or unset", p.PrivKeyEnv)
+		}
 		// Auth/priv protocol names are config-level (not secret); passed as
 		// strings so main.go doesn't need to import gosnmp directly.
 		params.AuthProto = p.AuthProtocol
