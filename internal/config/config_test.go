@@ -202,7 +202,9 @@ credentials:
       type: snmp_v3
       username_env: SNMP_V3_USER
       auth_protocol: sha-256
+      auth_key_env: SNMP_V3_AUTH_KEY
       priv_protocol: aes-256
+      priv_key_env: SNMP_V3_PRIV_KEY
   fallback_order: [core-v3]
 `
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -1755,6 +1757,54 @@ func TestFederationSpokeValidWithExistingTLSFiles(t *testing.T) {
 	}
 	if _, err := Load(cfgPath); err != nil {
 		t.Fatalf("expected valid spoke config with existing TLS files, got: %v", err)
+	}
+}
+
+// TestCredentialsRejectV3AuthProtocolWithoutAuthKeyEnv verifies that an SNMPv3
+// profile with auth_protocol set but no auth_key_env causes Load to return an error.
+func TestCredentialsRejectV3AuthProtocolWithoutAuthKeyEnv(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+credentials:
+  profiles:
+    - name: core-v3
+      type: snmp_v3
+      username_env: SNMP_V3_USER
+      auth_protocol: SHA-256
+  fallback_order: [core-v3]
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for snmp_v3 profile with auth_protocol but no auth_key_env")
+	}
+}
+
+// TestCredentialsRejectV3PrivProtocolWithoutPrivKeyEnv verifies that an SNMPv3
+// profile with priv_protocol set but no priv_key_env causes Load to return an error.
+func TestCredentialsRejectV3PrivProtocolWithoutPrivKeyEnv(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+credentials:
+  profiles:
+    - name: core-v3
+      type: snmp_v3
+      username_env: SNMP_V3_USER
+      auth_protocol: SHA-256
+      auth_key_env: SNMP_V3_AUTH_KEY
+      priv_protocol: AES
+  fallback_order: [core-v3]
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for snmp_v3 profile with priv_protocol but no priv_key_env")
 	}
 }
 
