@@ -1014,6 +1014,63 @@ func TestValidateFederationUnknownRole(t *testing.T) {
 	}
 }
 
+// TestValidateTargetsDuplicateHostPort verifies that two targets with the same
+// host:port pair are rejected at validation time.
+func TestValidateTargetsDuplicateHostPort(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+discovery:
+  scope:
+    cidr_allow_list:
+      - 198.51.100.0/24
+targets:
+  - host: 198.51.100.10
+    port: 161
+  - host: 198.51.100.20
+    port: 161
+  - host: 198.51.100.10
+    port: 161
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for duplicate host:port, got nil")
+	}
+	if !strings.Contains(err.Error(), "duplicates") {
+		t.Errorf("error %q should mention 'duplicates'", err.Error())
+	}
+	if !strings.Contains(err.Error(), "198.51.100.10") {
+		t.Errorf("error %q should identify the duplicate host", err.Error())
+	}
+}
+
+// TestValidateTargetsSameHostDifferentPort verifies that two targets sharing the
+// same host but different ports are accepted (not considered duplicates).
+func TestValidateTargetsSameHostDifferentPort(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+discovery:
+  scope:
+    cidr_allow_list:
+      - 198.51.100.0/24
+targets:
+  - host: 198.51.100.10
+    port: 161
+  - host: 198.51.100.10
+    port: 1161
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("expected same host with different ports to be valid, got: %v", err)
+	}
+}
+
 func TestFederationKnownLinkOptionalLinkKind(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

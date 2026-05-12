@@ -600,6 +600,11 @@ func normalizePrivProtocol(raw string) (string, error) {
 }
 
 func (c *Config) validateTargets() error {
+	type hostPort struct {
+		host string
+		port int
+	}
+	seen := make(map[hostPort]int, len(c.Targets))
 	for i, t := range c.Targets {
 		if t.Host == "" {
 			return fmt.Errorf("targets[%d].host must not be empty", i)
@@ -607,6 +612,11 @@ func (c *Config) validateTargets() error {
 		if t.Port < 1 || t.Port > 65535 {
 			return fmt.Errorf("targets[%d].port %d is out of range [1, 65535]", i, t.Port)
 		}
+		key := hostPort{host: t.Host, port: t.Port}
+		if first, dup := seen[key]; dup {
+			return fmt.Errorf("targets[%d] duplicates targets[%d] (host:port %s:%d)", i, first, t.Host, t.Port)
+		}
+		seen[key] = i
 	}
 	return nil
 }
