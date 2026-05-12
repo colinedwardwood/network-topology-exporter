@@ -65,9 +65,16 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 		}
 	}
 
-	edges, oos, err := walkAdjIPAddrs(ctx, client, localDevice, states, circIfNames, discovery.JoinReasonCodes(degradedReasons), allowedNets)
+	edges, oos, sawIPv6, err := walkAdjIPAddrs(ctx, client, localDevice, states, circIfNames, discovery.JoinReasonCodes(degradedReasons), allowedNets)
 	if err != nil {
 		return nil, nil, fmt.Errorf("isis adjIPAddr %s: %w", p.IP, err)
+	}
+	if sawIPv6 {
+		degradedReasons = append(degradedReasons, discovery.DegradedReasonUnsupportedIPVersion)
+		updatedReason := discovery.JoinReasonCodes(degradedReasons)
+		for i := range edges {
+			edges[i].Metadata = isisMetadata(updatedReason)
+		}
 	}
 	return edges, oos, nil
 }
@@ -116,15 +123,17 @@ func walkCircuitIfNames(ctx context.Context, client *gsnmp.GoSNMP) (map[string]s
 	return result, degradedReason, nil
 }
 
-func walkAdjIPAddrs(ctx context.Context, client *gsnmp.GoSNMP, localDevice string, states map[string]int, circIfNames map[string]string, degradedReason string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
+func walkAdjIPAddrs(ctx context.Context, client *gsnmp.GoSNMP, localDevice string, states map[string]int, circIfNames map[string]string, degradedReason string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, bool, error) {
 	pdus, err := snmputil.BulkWalk(ctx, client, oidISISAdjIPAddr)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	const prefix = "." + oidISISAdjIPAddr + "."
 	now := time.Now()
 	var edges []discovery.Edge
 	var oos []discovery.OutOfScopeNeighbour
+	loggedIPv6Skip := false
+	sawIPv6 := false
 
 	for _, pdu := range pdus {
 		suffix, ok := snmputil.TrimOIDPrefix(pdu.Name, prefix)
@@ -133,6 +142,18 @@ func walkAdjIPAddrs(ctx context.Context, client *gsnmp.GoSNMP, localDevice strin
 		}
 		parts := strings.Split(suffix, ".")
 		const ipv4TailLen = 6
+		const ipv6TailLen = 18 // ipSubType(1) + ipLen(1) + 16 addr octets
+		if len(parts) > ipv6TailLen &&
+			parts[len(parts)-ipv6TailLen] == "2" &&
+			parts[len(parts)-ipv6TailLen+1] == "16" {
+			sawIPv6 = true
+			if !loggedIPv6Skip {
+				adjKey := strings.Join(parts[:len(parts)-ipv6TailLen], ".")
+				slog.Debug("isis: IPv6 adjacency skipped (IPv6 not supported)", "device", localDevice, "adj_key", adjKey)
+				loggedIPv6Skip = true
+			}
+			continue
+		}
 		if len(parts) <= ipv4TailLen || parts[len(parts)-ipv4TailLen] != "1" || parts[len(parts)-ipv4TailLen+1] != "4" {
 			continue
 		}
@@ -187,7 +208,7 @@ func walkAdjIPAddrs(ctx context.Context, client *gsnmp.GoSNMP, localDevice strin
 			Metadata:       isisMetadata(edgeDegradedReason),
 		})
 	}
-	return edges, oos, nil
+	return edges, oos, sawIPv6, nil
 }
 
 func isisMetadata(degradedReason string) map[string]string {

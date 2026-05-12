@@ -634,6 +634,75 @@ func TestWalkFiltersLinkLocalAdjIP(t *testing.T) {
 	}
 }
 
+// Walk: IPv6 adjacency PDU (ipSubType=2, ipLen=16) is skipped, sawIPv6=true propagates
+// DegradedReasonUnsupportedIPVersion onto any emitted IPv4 edges, and an IPv4 peer in
+// the same walk still produces an edge.
+func TestWalkIPv6AdjacencySkipped(t *testing.T) {
+	// sysInst=0, circIdx=1, adjIdx=1: state up for both adjKeys.
+	const adjKeyIPv4 = "0.1.1"
+	const adjKeyIPv6 = "0.1.2"
+	// IPv6 OID suffix: adjKey + ".2.16." + 16 zero octets.
+	ipv6Suffix := adjKeyIPv6 + ".2.16.32.1.13.184.0.0.0.0.0.0.0.0.0.0.0.1"
+	pdus := []gsnmp.SnmpPDU{
+		{Name: adjStateBase + adjKeyIPv4, Type: gsnmp.Integer, Value: isisAdjStateUp},
+		{Name: adjStateBase + adjKeyIPv6, Type: gsnmp.Integer, Value: isisAdjStateUp},
+		{Name: adjIPBase + adjKeyIPv4 + ".1.4.192.0.2.1", Type: gsnmp.OctetString, Value: []byte{192, 0, 2, 1}},
+		// IPv6 PDU: 16-octet value for 2001:db8::1; should be skipped.
+		{Name: adjIPBase + ipv6Suffix, Type: gsnmp.OctetString, Value: []byte{32, 1, 13, 184, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(oos) != 0 {
+		t.Errorf("expected 0 out-of-scope, got %d", len(oos))
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge (IPv4 only), got %d", len(edges))
+	}
+	e := edges[0]
+	if e.DstDevice != "192.0.2.1" {
+		t.Errorf("DstDevice = %q, want 192.0.2.1", e.DstDevice)
+	}
+	if e.Metadata == nil {
+		t.Fatal("Metadata is nil, want degraded metadata for unsupported IP version")
+	}
+	if e.Metadata[discovery.MetadataKeyDegraded] != "true" {
+		t.Errorf("%s = %q, want true", discovery.MetadataKeyDegraded, e.Metadata[discovery.MetadataKeyDegraded])
+	}
+	if e.Metadata[discovery.MetadataKeyDegradedReason] != discovery.DegradedReasonUnsupportedIPVersion {
+		t.Errorf("%s = %q, want %s", discovery.MetadataKeyDegradedReason, e.Metadata[discovery.MetadataKeyDegradedReason], discovery.DegradedReasonUnsupportedIPVersion)
+	}
+}
+
+// Walk: IPv6-only adjacencies (no IPv4 peers) → no edges, no OOS, no error.
+func TestWalkIPv6OnlyAdjacencies(t *testing.T) {
+	const adjKeyIPv6 = "0.1.1"
+	ipv6Suffix := adjKeyIPv6 + ".2.16.32.1.13.184.0.0.0.0.0.0.0.0.0.0.0.1"
+	pdus := []gsnmp.SnmpPDU{
+		{Name: adjStateBase + adjKeyIPv6, Type: gsnmp.Integer, Value: isisAdjStateUp},
+		{Name: adjIPBase + ipv6Suffix, Type: gsnmp.OctetString, Value: []byte{32, 1, 13, 184, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for IPv6-only adjacencies, got %d", len(edges))
+	}
+	if len(oos) != 0 {
+		t.Errorf("expected 0 out-of-scope, got %d", len(oos))
+	}
+}
+
 // Walk: cancelled context → error returned from walkAdjStates.
 func TestWalkCancelledContext(t *testing.T) {
 	pdus := []gsnmp.SnmpPDU{

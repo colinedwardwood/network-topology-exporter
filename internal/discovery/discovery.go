@@ -50,6 +50,7 @@ const (
 	DegradedReasonMissingSrcPortMapping      = "missing_srcport_mapping"
 	DegradedReasonMissingAdminStatusWalk     = "missing_admin_status_walk"
 	DegradedReasonInvalidAdminStatusDecode   = "invalid_admin_status_decode"
+	DegradedReasonUnsupportedIPVersion       = "unsupported_ip_version"
 )
 
 // PolicyError marks a module-level policy failure with a machine-readable reason.
