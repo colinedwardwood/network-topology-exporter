@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
@@ -577,5 +578,160 @@ func TestSchemaURLPresent(t *testing.T) {
 	const wantURL = "https://opentelemetry.io/schemas/1.21.0"
 	if schemaURL != wantURL {
 		t.Errorf("schemaUrl = %q, want %q", schemaURL, wantURL)
+	}
+}
+
+// TestPushGraphInvalidUTF8 verifies that edge and device fields containing
+// invalid UTF-8 bytes are sanitized before JSON serialization. An SNMP device
+// may return arbitrary bytes in sysName or ifDescr; without sanitization
+// json.Marshal would produce invalid JSON or fail entirely.
+func TestPushGraphInvalidUTF8(t *testing.T) {
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody = decodeBody(t, r)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+
+	// Embed invalid UTF-8 bytes directly in the string fields.
+	// 0xff and 0xfe are never valid in UTF-8; they should be replaced with "".
+	badSrc := "sw-\xffa"        // invalid byte mid-string
+	badDst := "\xfe\xffsw-b"    // invalid bytes at start
+	badPort := "Gi0/\xff"        // invalid byte at end
+	badDevice := "core-\xff\xfe" // invalid bytes in device ID
+
+	g := discovery.Graph{
+		Edges: []discovery.Edge{
+			{
+				SrcDevice:      badSrc,
+				SrcPort:        badPort,
+				DstDevice:      badDst,
+				DstPort:        "Gi0/2",
+				DiscoveryProto: "lldp",
+				LinkKind:       "ethernet",
+			},
+		},
+		Devices: []discovery.Device{
+			{ID: badDevice},
+		},
+	}
+
+	if err := exp.PushGraph(context.Background(), g); err != nil {
+		t.Fatalf("PushGraph with invalid UTF-8: %v", err)
+	}
+
+	metrics := drillMetrics(t, gotBody)
+
+	edgePoints, ok := metrics["network_topology_edge"]
+	if !ok || len(edgePoints) != 1 {
+		t.Fatalf("expected 1 edge data point, got %v", edgePoints)
+	}
+
+	pt := edgePoints[0]
+
+	// Each sanitized value must be valid UTF-8 and must not equal the raw input.
+	for key, raw := range map[string]string{
+		"src_device": badSrc,
+		"src_port":   badPort,
+		"dst_device": badDst,
+	} {
+		got, ok := pt[key].(string)
+		if !ok {
+			t.Errorf("attribute %q missing or not a string", key)
+			continue
+		}
+		if got == raw {
+			t.Errorf("attribute %q was not sanitized: got %q (same as input)", key, got)
+		}
+		if !utf8.ValidString(got) {
+			t.Errorf("attribute %q is still invalid UTF-8 after sanitization: %q", key, got)
+		}
+		// The replacement character must be present.
+		if !strings.Contains(got, "�") {
+			t.Errorf("attribute %q expected replacement char '\\ufffd', got %q", key, got)
+		}
+	}
+
+	devicePoints, ok := metrics["network_topology_device"]
+	if !ok || len(devicePoints) != 1 {
+		t.Fatalf("expected 1 device data point, got %v", devicePoints)
+	}
+	devID, ok := devicePoints[0]["device"].(string)
+	if !ok {
+		t.Fatal("device attribute missing or not a string")
+	}
+	if devID == badDevice {
+		t.Errorf("device ID was not sanitized: got %q", devID)
+	}
+	if !utf8.ValidString(devID) {
+		t.Errorf("device ID is still invalid UTF-8: %q", devID)
+	}
+}
+
+// TestPushChangesInvalidUTF8 verifies that edge change fields with invalid
+// UTF-8 bytes are sanitized before JSON serialization in PushChanges.
+func TestPushChangesInvalidUTF8(t *testing.T) {
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody = decodeBody(t, r)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+
+	badSrc := "sw-\xff"
+	badDst := "\xfesw-b"
+
+	after := &discovery.Edge{
+		SrcDevice:      badSrc,
+		SrcPort:        "Gi0/1",
+		DstDevice:      badDst,
+		DstPort:        "Gi0/2",
+		DiscoveryProto: "lldp",
+		ObservedAt:     time.Now(),
+	}
+	changes := []graph.EdgeChange{
+		{Kind: graph.ChangeAdded, After: after},
+	}
+
+	if err := exp.PushChanges(context.Background(), changes); err != nil {
+		t.Fatalf("PushChanges with invalid UTF-8: %v", err)
+	}
+
+	records := drillLogs(t, gotBody)
+	if len(records) != 1 {
+		t.Fatalf("log records = %d, want 1", len(records))
+	}
+
+	// Extract attributes from the log record.
+	attrSlice := records[0]["attributes"].([]any)
+	attrMap := make(map[string]string, len(attrSlice))
+	for _, a := range attrSlice {
+		kv := a.(map[string]any)
+		key := kv["key"].(string)
+		val := kv["value"].(map[string]any)["stringValue"].(string)
+		attrMap[key] = val
+	}
+
+	for key, raw := range map[string]string{
+		"src_device": badSrc,
+		"dst_device": badDst,
+	} {
+		got, ok := attrMap[key]
+		if !ok {
+			t.Errorf("log attribute %q missing", key)
+			continue
+		}
+		if got == raw {
+			t.Errorf("log attribute %q was not sanitized: got %q", key, got)
+		}
+		if !utf8.ValidString(got) {
+			t.Errorf("log attribute %q is still invalid UTF-8: %q", key, got)
+		}
 	}
 }
