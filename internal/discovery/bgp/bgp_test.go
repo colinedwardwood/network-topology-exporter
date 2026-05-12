@@ -15,7 +15,7 @@ import (
 
 func TestBuildEdgesEstablishedPeer(t *testing.T) {
 	peers := map[string]*bgpPeer{
-		"10.0.0.1": {state: bgpStateEstablished, remoteIP: net.ParseIP("10.0.0.1").To4(), remoteAS: 65001},
+		"10.0.0.1": {state: bgpStateEstablished, remoteIP: net.ParseIP("10.0.0.1").To4()},
 	}
 
 	edges, oos := buildEdges("rtr-01", peers, nil)
@@ -61,9 +61,9 @@ func TestBuildEdgesEstablishedPeer(t *testing.T) {
 // buildEdges: peers in non-established states are filtered out.
 func TestBuildEdgesFiltersNonEstablished(t *testing.T) {
 	peers := map[string]*bgpPeer{
-		"10.0.0.1": {state: 3, remoteIP: net.ParseIP("10.0.0.1").To4(), remoteAS: 65001}, // active
-		"10.0.0.2": {state: 1, remoteIP: net.ParseIP("10.0.0.2").To4(), remoteAS: 65002}, // idle
-		"10.0.0.3": {state: bgpStateEstablished, remoteIP: net.ParseIP("10.0.0.3").To4(), remoteAS: 65003},
+		"10.0.0.1": {state: 3, remoteIP: net.ParseIP("10.0.0.1").To4()}, // active
+		"10.0.0.2": {state: 1, remoteIP: net.ParseIP("10.0.0.2").To4()}, // idle
+		"10.0.0.3": {state: bgpStateEstablished, remoteIP: net.ParseIP("10.0.0.3").To4()},
 	}
 
 	edges, oos := buildEdges("rtr-01", peers, nil)
@@ -81,8 +81,8 @@ func TestBuildEdgesFiltersNonEstablished(t *testing.T) {
 // buildEdges: two established peers → two edges.
 func TestBuildEdgesMultiplePeers(t *testing.T) {
 	peers := map[string]*bgpPeer{
-		"192.168.1.1": {state: bgpStateEstablished, remoteIP: net.ParseIP("192.168.1.1").To4(), remoteAS: 65010},
-		"192.168.1.2": {state: bgpStateEstablished, remoteIP: net.ParseIP("192.168.1.2").To4(), remoteAS: 65011},
+		"192.168.1.1": {state: bgpStateEstablished, remoteIP: net.ParseIP("192.168.1.1").To4()},
+		"192.168.1.2": {state: bgpStateEstablished, remoteIP: net.ParseIP("192.168.1.2").To4()},
 	}
 
 	edges, oos := buildEdges("rtr-02", peers, nil)
@@ -108,8 +108,8 @@ func TestBuildEdgesMultiplePeers(t *testing.T) {
 func TestBuildEdgesOutOfScope(t *testing.T) {
 	_, allowNet, _ := net.ParseCIDR("10.0.0.0/24")
 	peers := map[string]*bgpPeer{
-		"10.0.0.1":   {state: bgpStateEstablished, remoteIP: net.ParseIP("10.0.0.1").To4(), remoteAS: 65001},
-		"172.16.0.1": {state: bgpStateEstablished, remoteIP: net.ParseIP("172.16.0.1").To4(), remoteAS: 65002},
+		"10.0.0.1":   {state: bgpStateEstablished, remoteIP: net.ParseIP("10.0.0.1").To4()},
+		"172.16.0.1": {state: bgpStateEstablished, remoteIP: net.ParseIP("172.16.0.1").To4()},
 	}
 
 	edges, oos := buildEdges("rtr-01", peers, []*net.IPNet{allowNet})
@@ -171,7 +171,6 @@ func TestWalkEndToEnd(t *testing.T) {
 //
 //	col 2 (state)      = 6 (established)
 //	col 7 (remoteAddr) = 10.0.0.1
-//	col 9 (remoteAs)   = 65001
 func buildBgpAgentPDUs() []gsnmp.SnmpPDU {
 	const base = ".1.3.6.1.2.1.15.3.1."
 	const peer = "10.0.0.1"
@@ -179,7 +178,6 @@ func buildBgpAgentPDUs() []gsnmp.SnmpPDU {
 	return []gsnmp.SnmpPDU{
 		{Name: base + "2." + peer, Type: gsnmp.Integer, Value: bgpStateEstablished},
 		{Name: base + "7." + peer, Type: gsnmp.IPAddress, Value: []byte{10, 0, 0, 1}},
-		{Name: base + "9." + peer, Type: gsnmp.Integer, Value: 65001},
 	}
 }
 
