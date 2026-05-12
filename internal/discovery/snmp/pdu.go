@@ -252,13 +252,16 @@ func walkIntIndexedStrings(ctx context.Context, client *g.GoSNMP, oid string) (m
 }
 
 // PDUString extracts a string value from a PDU. It handles both string and
-// []byte value types, returning "" for any other type.
+// []byte value types, returning "" for any other type. Trailing NUL bytes
+// (\x00) are stripped; some SNMP devices (e.g. certain Cisco IOS versions)
+// terminate OctetString values with a NUL, which would otherwise cause device
+// IDs to diverge from their non-NUL counterparts when used as graph keys.
 func PDUString(pdu g.SnmpPDU) string {
 	switch v := pdu.Value.(type) {
 	case string:
-		return v
+		return strings.TrimRight(v, "\x00")
 	case []byte:
-		return string(v)
+		return strings.TrimRight(string(v), "\x00")
 	}
 	return ""
 }
