@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"unicode"
 
 	g "github.com/gosnmp/gosnmp"
 )
@@ -369,6 +370,15 @@ func IPInNets(ip net.IP, nets []*net.IPNet) bool {
 // normalise sysName / device-ID values from SNMP PDUs consistently across
 // LLDP, CDP, and the SYSTEM group walker.
 func NormaliseName(s string) string {
+	// Strip embedded control characters (NUL bytes already handled by PDUString).
+	// Some devices embed \r, \x01, or other control chars in sysName responses;
+	// leaving them in would cause device ID instability across polling cycles.
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
 	s = strings.ToLower(strings.TrimSpace(s))
 	// RFC 1213 defines sysName as SIZE(0..255); cap here before the string
 	// becomes a map key, graph ID, or federation payload field.
