@@ -151,7 +151,7 @@ func (c *TopologyCollector) Collect(ch chan<- prometheus.Metric) {
 			c.edgeInfoDesc, prometheus.GaugeValue, 1,
 			sanitizeLabel(e.SrcDevice), sanitizeLabel(e.SrcPort),
 			sanitizeLabel(e.DstDevice), sanitizeLabel(e.DstPort),
-			e.DiscoveryProto, sanitizeLabel(e.LinkKind), string(e.Direction),
+			sanitizeLabel(e.DiscoveryProto), sanitizeLabel(e.LinkKind), string(e.Direction),
 		)
 		samples++
 	}
