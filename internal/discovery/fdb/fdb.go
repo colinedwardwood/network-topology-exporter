@@ -394,6 +394,11 @@ func walkBasePortTable(ctx context.Context, client *gsnmp.GoSNMP) (map[int]int, 
 		if err != nil {
 			continue
 		}
+		// RFC 4188: bridge port indices are 1-based; port 0 is invalid.
+		if portNum <= 0 {
+			slog.Debug("fdb: skipping invalid bridge port index", "port", portNum)
+			continue
+		}
 		ports[portNum] = snmputil.PDUInt(pdu)
 	}
 	return ports, nil
@@ -428,6 +433,25 @@ func walkStpPortStates(ctx context.Context, client *gsnmp.GoSNMP) (map[int]int, 
 	return states, nil
 }
 
+// isSpecialMAC returns true for MAC addresses that should never appear as
+// learned FDB entries: broadcast (ff:ff:ff:ff:ff:ff), all-zeros
+// (00:00:00:00:00:00), and multicast (IEEE 802.3 I/G bit: byte[0]&0x01 != 0).
+// Per IEEE 802.3, multicast and broadcast frames are flooded, not learned;
+// all-zeros is reserved. None should produce topology edges.
+func isSpecialMAC(mac []byte) bool {
+	if mac[0]&0x01 != 0 { // multicast or broadcast (I/G bit set)
+		return true
+	}
+	allZero := true
+	for _, b := range mac {
+		if b != 0x00 {
+			allZero = false
+			break
+		}
+	}
+	return allZero
+}
+
 // buildEdges applies the Bejerano direct/indirect classification: a port with
 // exactly one learned MAC is AdjacencyDirect (one device); a port with multiple
 // MACs is AdjacencyIndirect (downstream switch or trunk). Ports with a known
@@ -439,6 +463,9 @@ func buildEdges(localDevice string, entries map[string]*fdbEntry, bridgePorts ma
 	portMACs := make(map[int][]net.HardwareAddr)
 	for _, e := range entries {
 		if e.status != fdbStatusLearned || len(e.mac) != 6 {
+			continue
+		}
+		if isSpecialMAC(e.mac) {
 			continue
 		}
 		if state, ok := stpStates[e.port]; ok && state != stpStateForwarding {
