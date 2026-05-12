@@ -1011,6 +1011,71 @@ func TestNormalizePortNameAllDigitSuffix(t *testing.T) {
 	}
 }
 
+// TestNormalizePortNameControlCharsStripped verifies that embedded control
+// characters are removed before prefix matching. A device returning
+// "Gi0/1\rgarbage" must produce the same key as "Gi0/1"; otherwise the same
+// physical port appears as two separate edges across polling cycles.
+func TestNormalizePortNameControlCharsStripped(t *testing.T) {
+	cases := []struct {
+		desc string
+		in   string
+		want string
+	}{
+		{
+			desc: `embedded \r is stripped (same result as clean name)`,
+			in:   "Gi0/1\rgarbage",
+			want: "Gi0/1garbage", // \r removed, suffix appended
+		},
+		{
+			desc: `embedded \r on long-form normalises same as clean long-form`,
+			in:   "GigabitEthernet0/1\r",
+			want: "Gi0/1",
+		},
+		{
+			desc: `embedded \x01 is stripped`,
+			in:   "Gi0/1\x01",
+			want: "Gi0/1",
+		},
+		{
+			desc: `port with \r mid-name and known prefix still normalises`,
+			in:   "GigabitEthernet0/1\rextra",
+			want: "Gi0/1extra",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			got := NormalizePortName(tc.in)
+			if got != tc.want {
+				t.Errorf("NormalizePortName(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNormalizePortNameControlCharEdgeKeyStability verifies the core bug fix:
+// when Reconcile receives two observations for the same port — one with an
+// embedded \r and one without — they collapse to a single edge rather than
+// appearing as two separate edges.
+func TestNormalizePortNameControlCharEdgeKeyStability(t *testing.T) {
+	clean := discovery.Edge{
+		SrcDevice: "sw-a", SrcPort: "Gi0/1",
+		DstDevice: "sw-b", DstPort: "Gi0/2",
+		DiscoveryProto: "lldp", PrecedenceRank: 1,
+	}
+	withCR := discovery.Edge{
+		SrcDevice: "sw-a", SrcPort: "Gi0/1\r",
+		DstDevice: "sw-b", DstPort: "Gi0/2",
+		DiscoveryProto: "cdp", PrecedenceRank: 2,
+	}
+	edges, conflicts := Reconcile([]discovery.Edge{clean, withCR})
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 reconciled edge (\\r variant collapses with clean), got %d: %v", len(edges), edges)
+	}
+	if len(conflicts) != 0 {
+		t.Errorf("expected 0 conflicts, got %d: %v", len(conflicts), conflicts)
+	}
+}
+
 // TestDiffBothEmpty verifies that Diff with two empty (non-nil) slices returns nil.
 func TestDiffBothEmpty(t *testing.T) {
 	changes := Diff([]discovery.Edge{}, []discovery.Edge{})
