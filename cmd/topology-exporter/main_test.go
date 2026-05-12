@@ -271,6 +271,42 @@ func TestProfileToParams(t *testing.T) {
 		}
 	})
 
+	t.Run("v3_empty_auth_key_env", func(t *testing.T) {
+		t.Setenv("TEST_V3_USER_AUTHTEST", "admin")
+		// TEST_V3_AUTH_KEY_UNSET is deliberately never set.
+		p := config.CredentialProfile{
+			Type:        config.ProfileTypeSNMPv3,
+			UsernameEnv: "TEST_V3_USER_AUTHTEST",
+			AuthKeyEnv:  "TEST_V3_AUTH_KEY_UNSET",
+		}
+		_, err := profileToParams(ip, port, timeout, p)
+		if err == nil {
+			t.Fatal("expected error for unset auth_key_env, got nil")
+		}
+		if want := `env "TEST_V3_AUTH_KEY_UNSET" is empty or unset`; err.Error() != want {
+			t.Errorf("err = %q, want %q", err.Error(), want)
+		}
+	})
+
+	t.Run("v3_empty_priv_key_env", func(t *testing.T) {
+		t.Setenv("TEST_V3_USER_PRIVTEST", "admin")
+		t.Setenv("TEST_V3_AUTH_KEY_PRIVTEST", "authsecret")
+		// TEST_V3_PRIV_KEY_UNSET is deliberately never set.
+		p := config.CredentialProfile{
+			Type:        config.ProfileTypeSNMPv3,
+			UsernameEnv: "TEST_V3_USER_PRIVTEST",
+			AuthKeyEnv:  "TEST_V3_AUTH_KEY_PRIVTEST",
+			PrivKeyEnv:  "TEST_V3_PRIV_KEY_UNSET",
+		}
+		_, err := profileToParams(ip, port, timeout, p)
+		if err == nil {
+			t.Fatal("expected error for unset priv_key_env, got nil")
+		}
+		if want := `env "TEST_V3_PRIV_KEY_UNSET" is empty or unset`; err.Error() != want {
+			t.Errorf("err = %q, want %q", err.Error(), want)
+		}
+	})
+
 	t.Run("unknown_type", func(t *testing.T) {
 		p := config.CredentialProfile{Type: "snmp_v1"}
 		_, err := profileToParams(ip, port, timeout, p)
