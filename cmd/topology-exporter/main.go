@@ -495,7 +495,6 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 		}
 		prevGraph = newGraph
 		ages = newAges
-		lc.m.Topology.Update(newGraph)
 		if lc.otlpExp != nil && (len(changes) > 0 || cycleNum%lc.cfg.Output.OTLP.HeartbeatCycles == 0) {
 			g := newGraph
 			lc.otlpPush(ctx, func(ctx context.Context) error {
@@ -503,6 +502,7 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 			}, "otlp push failed")
 		}
 		lc.m.GraphStale.Set(0)
+		lc.m.Topology.Update(newGraph)
 		if lc.ready != nil {
 			lc.ready.CompareAndSwap(false, true)
 		}
