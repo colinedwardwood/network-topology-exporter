@@ -127,7 +127,7 @@ func buildEdges(localDevice string, rows map[string]*nbrRow, allowedNets []*net.
 		}
 		// Unnumbered P2P links report 0.0.0.0 as ospfNbrIpAddr; skip them to
 		// avoid emitting an edge with DstDevice="0.0.0.0".
-		if row.nbrIP.IsUnspecified() || row.nbrIP.IsLinkLocalUnicast() {
+		if row.nbrIP.IsUnspecified() || row.nbrIP.IsLinkLocalUnicast() || row.nbrIP.IsLoopback() {
 			continue
 		}
 		if row.state != stateFull && row.state != stateTwoWay {
