@@ -414,12 +414,12 @@ func (c *Config) validate() error {
 	if c.Output.OTLP.Timeout < 0 {
 		return fmt.Errorf("output.otlp.timeout must be >= 0 (0 uses the default)")
 	}
+	if c.Output.OTLP.HeartbeatCycles < 1 {
+		return errors.New("output.otlp.heartbeat_cycles must be >= 1")
+	}
 	if c.Output.OTLP.Enabled {
 		if err := validateHTTPEndpoint(c.Output.OTLP.Endpoint); err != nil {
 			return fmt.Errorf("output.otlp.endpoint: %w", err)
-		}
-		if c.Output.OTLP.HeartbeatCycles < 1 {
-			return errors.New("output.otlp.heartbeat_cycles must be >= 1")
 		}
 	}
 	return nil
