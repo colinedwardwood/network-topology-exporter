@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,6 +19,13 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
 )
+
+// fatalPushError wraps an error that should not be retried (e.g. a 4xx
+// response from the hub). Push checks for this type and aborts immediately
+// rather than exhausting all retry attempts.
+type fatalPushError struct{ err error }
+
+func (e fatalPushError) Error() string { return e.err.Error() }
 
 // Spoke pushes the local domain's pre-reconciled graph to the hub after each
 // discovery cycle per LD-17. Transport is push per LD-16. mTLS is required
@@ -89,6 +97,13 @@ func (s *Spoke) Push(ctx context.Context, payload SpokePayload) error {
 		if err = s.post(ctx, b); err == nil {
 			return nil
 		}
+		var fatal fatalPushError
+		if errors.As(err, &fatal) {
+			if s.m != nil {
+				s.m.FederationSpokePushFailuresTotal.Inc()
+			}
+			return err
+		}
 		s.logger.Warn("spoke: push attempt failed",
 			"attempt", attempt,
 			"max", maxAttempts,
@@ -140,8 +155,14 @@ func (s *Spoke) post(ctx context.Context, body []byte) error {
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("hub returned HTTP %d", resp.StatusCode)
+	if resp.StatusCode == http.StatusNoContent {
+		return nil
 	}
-	return nil
+	err = fmt.Errorf("hub returned HTTP %d", resp.StatusCode)
+	// 4xx errors (except 429 Too Many Requests) are client errors that will
+	// not succeed on retry, so wrap them as fatal to stop the retry loop.
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
+		return fatalPushError{err}
+	}
+	return err
 }
