@@ -675,10 +675,23 @@ func (c *Config) validateFederation() error {
 	default:
 		return fmt.Errorf("federation.role must be standalone, uncoordinated, spoke, or hub; got %q", c.Federation.Role)
 	}
+	seen := make(map[string]int)
 	for i, link := range c.Federation.KnownInterDomainLinks {
 		if link.LocalDevice == "" || link.LocalPort == "" || link.RemoteDevice == "" || link.RemotePort == "" {
 			return fmt.Errorf("federation.known_inter_domain_links[%d]: local_device, local_port, remote_device, and remote_port are all required", i)
 		}
+		if link.LocalDevice == link.RemoteDevice {
+			return fmt.Errorf("federation.known_inter_domain_links[%d]: local_device and remote_device must differ", i)
+		}
+		fwd := link.LocalDevice + "|" + link.LocalPort + "|" + link.RemoteDevice + "|" + link.RemotePort
+		rev := link.RemoteDevice + "|" + link.RemotePort + "|" + link.LocalDevice + "|" + link.LocalPort
+		for _, key := range []string{fwd, rev} {
+			if seenIdx, ok := seen[key]; ok {
+				return fmt.Errorf("federation.known_inter_domain_links[%d]: duplicate of entry [%d]", i, seenIdx)
+			}
+		}
+		seen[fwd] = i
+		seen[rev] = i
 	}
 	return nil
 }
