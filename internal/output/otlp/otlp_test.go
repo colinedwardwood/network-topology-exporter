@@ -671,6 +671,46 @@ func TestPushGraphInvalidUTF8(t *testing.T) {
 	}
 }
 
+// TestPostRetriesNetworkError verifies that a transient network error on the
+// first attempt does not abort the retry loop — post must retry and succeed on
+// the second attempt.
+//
+// The test uses a two-phase httptest.Server: the first request is hijacked and
+// the raw connection is closed immediately (simulating a connection reset),
+// forcing client.Do to return an error. The second request is handled normally
+// and returns 200 OK.
+func TestPostRetriesNetworkError(t *testing.T) {
+	var hitCount int
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hitCount++
+		if hitCount == 1 {
+			// Hijack and immediately close the connection so that client.Do
+			// receives a network error (connection reset / EOF).
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Error("ResponseWriter does not implement http.Hijacker")
+				return
+			}
+			conn, _, _ := hj.Hijack()
+			conn.Close()
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+
+	err := exp.PushGraph(context.Background(), discovery.Graph{})
+	if err != nil {
+		t.Fatalf("expected success after retry, got: %v", err)
+	}
+	if hitCount != 2 {
+		t.Errorf("server hit count = %d, want 2 (1 failed + 1 successful)", hitCount)
+	}
+}
+
 // TestPushChangesInvalidUTF8 verifies that edge change fields with invalid
 // UTF-8 bytes are sanitized before JSON serialization in PushChanges.
 func TestPushChangesInvalidUTF8(t *testing.T) {
