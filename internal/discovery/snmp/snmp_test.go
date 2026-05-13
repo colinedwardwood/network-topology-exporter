@@ -1237,12 +1237,39 @@ func TestWalkWrongCommunity(t *testing.T) {
 	}
 }
 
-// NormaliseName: a string longer than 255 bytes is capped at exactly 255 bytes.
+// NormaliseName: a 256-byte ASCII-only string is truncated to exactly 255 bytes.
 func TestNormaliseNameCap(t *testing.T) {
-	input := strings.Repeat("a", 300)
+	input := strings.Repeat("a", 256)
 	got := NormaliseName(input)
 	if len(got) != 255 {
-		t.Errorf("NormaliseName(300-byte string) len = %d, want 255", len(got))
+		t.Errorf("NormaliseName(256-byte ASCII string) len = %d, want 255", len(got))
+	}
+}
+
+// NormaliseName: truncation retreats to a rune boundary so the result is
+// always valid UTF-8.
+//
+// Case 1: 254 ASCII bytes + one 3-byte UTF-8 rune = 257 bytes total.
+// Byte 255 would be the second byte of the rune (a continuation byte), so the
+// result must be 254 bytes, not 255.
+//
+// Case 2: 256 ASCII bytes truncates cleanly to 255 (no retreat needed).
+func TestNormaliseNameRuneBoundary(t *testing.T) {
+	// "é" in UTF-8 is 0xC3 0xA9 — 2 bytes; "€" is 0xE2 0x82 0xAC — 3 bytes.
+	// Build a string of 254 ASCII 'a' bytes followed by the 3-byte euro sign.
+	// Total = 257 bytes. Byte index 255 is 0x82 (continuation byte of '€').
+	threeByteRune := "€" // U+20AC, encoded as 0xE2 0x82 0xAC
+	input1 := strings.Repeat("a", 254) + threeByteRune // 254 + 3 = 257 bytes
+	got1 := NormaliseName(input1)
+	if len(got1) != 254 {
+		t.Errorf("rune-boundary case: len = %d, want 254", len(got1))
+	}
+
+	// Case 2: 256 ASCII bytes → 255 (no continuation bytes involved).
+	input2 := strings.Repeat("b", 256)
+	got2 := NormaliseName(input2)
+	if len(got2) != 255 {
+		t.Errorf("ascii-only case: len = %d, want 255", len(got2))
 	}
 }
 
