@@ -2371,7 +2371,9 @@ func TestDeduplicateOOS(t *testing.T) {
 	}
 }
 
-// deduplicateDevices: two devices with the same ID → only the first is returned.
+// deduplicateDevices: two devices with the same ID → only the first (config order) is returned.
+// runCycle sorts probe results by targetIdx before calling deduplicateDevices, so
+// the device from the earliest config entry always wins over later duplicates.
 func TestDeduplicateDevicesDuplicateID(t *testing.T) {
 	devices := []discovery.Device{
 		{ID: "sw-01", Site: "site-a"},
