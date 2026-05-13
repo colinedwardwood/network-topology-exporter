@@ -265,6 +265,58 @@ func TestNewSpokeErrorOnBadKeyFile(t *testing.T) {
 	}
 }
 
+// TestSpokePushFatalOn4xx verifies that Push stops immediately (no retries) when
+// the hub returns a 4xx status, and that 429 is treated as retryable.
+func TestSpokePushFatalOn4xx(t *testing.T) {
+	fatalCodes := []int{
+		http.StatusBadRequest,
+		http.StatusUnauthorized,
+		http.StatusForbidden,
+		http.StatusNotFound,
+		http.StatusUnprocessableEntity,
+	}
+	for _, code := range fatalCodes {
+		code := code
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(code)
+			}))
+			defer srv.Close()
+
+			s := newTestSpokeFor(t, srv.URL)
+			err := s.Push(context.Background(), SpokePayload{SpokeID: "dc-test", CycleAt: time.Now()})
+			if err == nil {
+				t.Fatalf("Push returned nil for HTTP %d, want error", code)
+			}
+			if got := calls.Load(); got != 1 {
+				t.Errorf("HTTP %d: server received %d requests, want 1 (no retry)", code, got)
+			}
+			// Failure counter must be incremented on fatal errors too.
+			if got := testutil.ToFloat64(s.m.FederationSpokePushFailuresTotal); got != 1 {
+				t.Errorf("HTTP %d: FederationSpokePushFailuresTotal = %v, want 1", code, got)
+			}
+		})
+	}
+
+	// 429 Too Many Requests must be retried like a 5xx.
+	t.Run("429 is retryable", func(t *testing.T) {
+		var calls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			calls.Add(1)
+			w.WriteHeader(http.StatusTooManyRequests)
+		}))
+		defer srv.Close()
+
+		s := newTestSpokeFor(t, srv.URL)
+		_ = s.Push(context.Background(), SpokePayload{SpokeID: "dc-test", CycleAt: time.Now()})
+		if got := calls.Load(); got != 3 {
+			t.Errorf("429: server received %d requests, want 3 (maxAttempts)", got)
+		}
+	})
+}
+
 // TestSpokePostNetworkError verifies that post() returns an error when the HTTP
 // client cannot connect (connection refused), covering the client.Do error branch.
 func TestSpokePostNetworkError(t *testing.T) {
