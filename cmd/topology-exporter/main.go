@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -578,6 +579,7 @@ func runCycle(
 	prevAges map[graph.EdgeKey]int,
 ) (discovery.Graph, map[graph.EdgeKey]int, []graph.Conflict, int) {
 	type probeResult struct {
+		targetIdx    int
 		device       *discovery.Device
 		edges        []discovery.Edge
 		outOfScope   []discovery.OutOfScopeNeighbour
@@ -600,8 +602,9 @@ func runCycle(
 	var wg sync.WaitGroup
 	var okCount, failCount int64
 
-	for _, t := range cfg.Targets {
+	for i, t := range cfg.Targets {
 		target := t
+		idx := i
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -782,12 +785,18 @@ func runCycle(
 			}
 
 			mu.Lock()
-			results = append(results, probeResult{device: dev, edges: allEdges, outOfScope: allOOS, mgmtIP: ip.String(), moduleStatus: modStatus})
+			results = append(results, probeResult{targetIdx: idx, device: dev, edges: allEdges, outOfScope: allOOS, mgmtIP: ip.String(), moduleStatus: modStatus})
 			okCount++
 			mu.Unlock()
 		}()
 	}
 	wg.Wait()
+
+	// Sort by config-file order so that deduplicateDevices always picks the
+	// first-configured target when two targets resolve to the same device ID.
+	slices.SortStableFunc(results, func(a, b probeResult) int {
+		return a.targetIdx - b.targetIdx
+	})
 
 	m.DiscoveryDevicesTotal.WithLabelValues("success").Set(float64(okCount))
 	m.DiscoveryDevicesTotal.WithLabelValues("failed").Set(float64(failCount))
@@ -903,7 +912,8 @@ func mergeOOSFirstSeen(newOOS, prevOOS []discovery.OutOfScopeNeighbour) []discov
 // deduplicateDevices removes Device entries with duplicate IDs that can arise
 // when the same physical device is polled via multiple target addresses (e.g.
 // primary IP and loopback IP both resolving to the same sysName). The first
-// occurrence of each ID is kept; insertion order is preserved.
+// occurrence in config order is kept; callers must sort the slice by config
+// index before calling this function to ensure deterministic results.
 func deduplicateDevices(devices []discovery.Device) []discovery.Device {
 	seen := make(map[string]struct{}, len(devices))
 	out := make([]discovery.Device, 0, len(devices))
