@@ -106,6 +106,37 @@ func TestBuildEdgesOutOfScope(t *testing.T) {
 	}
 }
 
+// buildEdges: MAC chassis-ID neighbor is skipped when allowedNets is non-empty
+// (cannot validate scope without an IP — mirrors CDP behaviour).
+func TestBuildEdgesMACChassisSkippedUnderScopeFilter(t *testing.T) {
+	_, allowed, _ := net.ParseCIDR("10.0.0.0/24")
+
+	locPorts := map[int]locPort{
+		1: {idSubtype: portSubtypeInterfaceName, id: []byte("Gi0/1")},
+	}
+	remEntries := map[remKey]*remEntry{
+		{1, 1}: {
+			chassisSubtype: chassisSubtypeMACAddress,
+			chassisID:      []byte{0x00, 0x11, 0x22, 0x33, 0x44, 0x55},
+			portSubtype:    portSubtypeInterfaceName,
+			portID:         []byte("Gi0/2"),
+			sysName:        "mac-peer",
+		},
+	}
+
+	edges, oos, err := buildEdges("local-sw", locPorts, remEntries, []*net.IPNet{allowed})
+	if err != nil {
+		t.Fatalf("buildEdges: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Errorf("expected no edges for MAC chassis ID under scope filter, got %d", len(edges))
+	}
+	// Non-IP neighbours are silently skipped, not recorded as OOS.
+	if len(oos) != 0 {
+		t.Errorf("expected no OOS entries for MAC chassis ID under scope filter, got %d", len(oos))
+	}
+}
+
 // buildEdges: chassisSubtype=5 with IP 0.0.0.0 produces no edge and no OOS entry.
 func TestBuildEdgesUnspecifiedChassisIP(t *testing.T) {
 	locPorts := map[int]locPort{
@@ -135,8 +166,6 @@ func TestBuildEdgesUnspecifiedChassisIP(t *testing.T) {
 
 // buildEdges: in-scope neighbor produces an edge with correct fields.
 func TestBuildEdgesNormal(t *testing.T) {
-	_, allowed, _ := net.ParseCIDR("10.0.0.0/8")
-
 	locPorts := map[int]locPort{
 		2: {idSubtype: portSubtypeInterfaceName, id: []byte("Ethernet1")},
 	}
@@ -150,7 +179,8 @@ func TestBuildEdgesNormal(t *testing.T) {
 		},
 	}
 
-	edges, oos, err := buildEdges("leaf-01", locPorts, remEntries, []*net.IPNet{allowed})
+	// No scope filter: MAC chassis ID neighbours are allowed through unconditionally.
+	edges, oos, err := buildEdges("leaf-01", locPorts, remEntries, nil)
 	if err != nil {
 		t.Fatalf("buildEdges: %v", err)
 	}

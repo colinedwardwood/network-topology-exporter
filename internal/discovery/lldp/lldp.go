@@ -284,7 +284,8 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 
 		// LD-11: if the neighbor exposes a network-address chassis ID that
 		// falls outside the allow-list, record it and skip the edge.
-		if remIP := extractChassisIP(rem.chassisSubtype, rem.chassisID); remIP != nil {
+		remIP := extractChassisIP(rem.chassisSubtype, rem.chassisID)
+		if remIP != nil {
 			// Devices that have no assigned IP advertise the unspecified address
 			// (0.0.0.0 for IPv4, :: for IPv6); skip them to avoid emitting an
 			// edge with an invalid DstDevice.
@@ -304,6 +305,12 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 				})
 				continue
 			}
+		} else if len(allowedNets) > 0 {
+			// Cannot validate scope for non-IP chassis ID; skip when scope
+			// filtering is active (mirrors CDP behaviour).
+			slog.Debug("lldp: non-IP chassis ID with scope filtering active; skipping entry",
+				"device", localDevice, "chassis_subtype", rem.chassisSubtype)
+			continue
 		}
 
 		// Phase 1 identity annotation: when the peer uses a MAC chassis ID and
