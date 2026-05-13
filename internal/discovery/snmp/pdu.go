@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	g "github.com/gosnmp/gosnmp"
 )
@@ -382,9 +383,16 @@ func NormaliseName(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	// RFC 1213 defines sysName as SIZE(0..255); cap here before the string
 	// becomes a map key, graph ID, or federation payload field.
-	// sysName is always ASCII in practice so byte truncation is safe.
+	// Retreat to a rune boundary so we never produce invalid UTF-8.
+	// utf8.RuneStart returns true for any byte that is not a UTF-8
+	// continuation byte (10xxxxxx), so the loop retreats at most 3 bytes
+	// for a 4-byte rune — O(1) per call.
 	if len(s) > 255 {
-		s = s[:255]
+		n := 255
+		for n > 0 && !utf8.RuneStart(s[n]) {
+			n--
+		}
+		s = s[:n]
 	}
 	return s
 }
