@@ -318,6 +318,10 @@ func walkVlanCommunityFdbs(ctx context.Context, p snmputil.Params, client *gsnmp
 	if p.V3 || p.Community == "" {
 		return
 	}
+	if strings.Contains(p.Community, "@") {
+		slog.WarnContext(ctx, "fdb: community string contains '@'; skipping per-VLAN community walk to avoid ambiguity", "device", p.IP)
+		return
+	}
 	vlanIDs := discoverVlanIDs(ctx, client)
 	if len(vlanIDs) > maxVlans {
 		slog.WarnContext(ctx, "fdb: VLAN community walk truncated at max_vlans limit; increase fdb.max_vlans to see all VLANs",
