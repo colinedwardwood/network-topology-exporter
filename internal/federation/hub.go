@@ -691,7 +691,11 @@ func (h *Hub) runSnapshotWriter(ctx context.Context) {
 				// writeDone goroutine still running; next iteration will detect this.
 			case <-ctx.Done():
 				if writeDone != nil {
-					<-writeDone
+					select {
+					case <-writeDone:
+					case <-time.After(h.snapshotWriteTimeout):
+						h.logger.Warn("hub: snapshot write did not complete before shutdown; data may be lost")
+					}
 				}
 				return
 			}

@@ -1520,6 +1520,59 @@ func TestRunSnapshotWriterTimeoutContinues(t *testing.T) {
 	}
 }
 
+// TestRunSnapshotWriterShutdownUnblocksOnTimeout verifies that cancelling ctx
+// causes runSnapshotWriter to return within snapshotWriteTimeout even when the
+// in-flight snapshot write goroutine is blocked (e.g. NFS stall).
+func TestRunSnapshotWriterShutdownUnblocksOnTimeout(t *testing.T) {
+	dir := t.TempDir()
+	m := metrics.New(false)
+	h := NewHub(config.FederationConfig{SpokeTimeout: 5 * time.Minute}, m, nil, filepath.Join(dir, "snap.json"))
+
+	// writeStarted is closed when the blocking write begins; unblock releases it.
+	writeStarted := make(chan struct{})
+	unblock := make(chan struct{})
+
+	h.snapshotWriteFn = func(_ string, _ snapshot.File) error {
+		close(writeStarted)
+		<-unblock // block until the test unblocks or the test ends
+		return nil
+	}
+	// Use a short timeout so the test completes quickly (well under the default 30s).
+	h.snapshotWriteTimeout = 100 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer close(unblock) // ensure the write goroutine is always released
+
+	writerDone := make(chan struct{})
+	go func() {
+		h.runSnapshotWriter(ctx)
+		close(writerDone)
+	}()
+
+	// Enqueue a write so runSnapshotWriter starts the blocking goroutine.
+	h.writeSnapshotAsync(discovery.Graph{})
+
+	// Wait for the write to actually start before cancelling.
+	select {
+	case <-writeStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("snapshot write never started")
+	}
+
+	// Cancel the context. runSnapshotWriter must return within snapshotWriteTimeout
+	// (100 ms) + a small margin even though the write is still blocked.
+	cancel()
+
+	deadline := time.After(500 * time.Millisecond)
+	select {
+	case <-writerDone:
+		// runSnapshotWriter exited — correct behaviour.
+	case <-deadline:
+		t.Fatal("runSnapshotWriter did not exit within 500ms after ctx cancel (shutdown stall)")
+	}
+}
+
 // TestTryPublishMetricsRejectsOversizedGraphEdges verifies that tryPublishMetrics
 // increments GraphUpdatesRejectedTotal and does NOT update Topology when the
 // combined graph exceeds MaxGraphEdges.
