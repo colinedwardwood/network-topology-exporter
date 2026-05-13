@@ -822,7 +822,14 @@ func runCycle(
 		if r.device != nil {
 			devices = append(devices, *r.device)
 			if r.mgmtIP != "" {
-				ipToID[r.mgmtIP] = r.device.ID
+				if existing, ok := ipToID[r.mgmtIP]; ok {
+					if existing != r.device.ID {
+						logger.Debug("arp: management IP shared by multiple devices; keeping first",
+							"ip", r.mgmtIP, "kept_device", existing, "discarded_device", r.device.ID)
+					}
+				} else {
+					ipToID[r.mgmtIP] = r.device.ID
+				}
 			}
 		}
 		rawEdges = append(rawEdges, r.edges...)
