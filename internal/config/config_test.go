@@ -1136,6 +1136,34 @@ targets:
 	}
 }
 
+// TestValidateTargetsEmptyLabelKey verifies that a target with an empty label
+// key is rejected at validation time (it would produce an invalid Prometheus label).
+func TestValidateTargetsEmptyLabelKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+discovery:
+  scope:
+    cidr_allow_list:
+      - 198.51.100.0/24
+targets:
+  - host: 198.51.100.10
+    port: 161
+    labels:
+      "": "value"
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for empty label key, got nil")
+	}
+	if !strings.Contains(err.Error(), "label key must not be empty") {
+		t.Errorf("error %q should mention 'label key must not be empty'", err.Error())
+	}
+}
+
 func TestFederationKnownLinkOptionalLinkKind(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

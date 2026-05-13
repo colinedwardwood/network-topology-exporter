@@ -617,6 +617,11 @@ func (c *Config) validateTargets() error {
 			return fmt.Errorf("targets[%d] duplicates targets[%d] (host:port %s:%d)", i, first, t.Host, t.Port)
 		}
 		seen[key] = i
+		for k := range t.Labels {
+			if k == "" {
+				return fmt.Errorf("targets[%d]: label key must not be empty", i)
+			}
+		}
 	}
 	return nil
 }
