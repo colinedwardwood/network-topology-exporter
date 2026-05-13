@@ -420,6 +420,62 @@ func TestWalkSystemGroupSysUpTimeWrongType(t *testing.T) {
 	}
 }
 
+// Walk: sysUpTime PDU with a negative integer value must not set dev.Uptime.
+// A malformed SNMP response could return a negative value for sysUpTime (e.g.
+// via a signed Integer type); the ticks >= 0 guard prevents a negative
+// time.Duration from being stored. We use gsnmp.Integer (signed) with a
+// negative value so the PDU survives wire encoding through the test agent.
+func TestWalkSystemRejectsNegativeSysUpTime(t *testing.T) {
+	t.Run("negative int leaves Uptime zero", func(t *testing.T) {
+		pdus := []gsnmp.SnmpPDU{
+			{Name: ".1.3.6.1.2.1.1.1.0", Type: gsnmp.OctetString, Value: []byte("Cisco IOS 15.2")},
+			{Name: ".1.3.6.1.2.1.1.2.0", Type: gsnmp.ObjectIdentifier, Value: ".1.3.6.1.4.1.9.1.1"},
+			// Malformed: negative signed Integer for sysUpTime OID.
+			{Name: ".1.3.6.1.2.1.1.3.0", Type: gsnmp.Integer, Value: int(-1)},
+			{Name: ".1.3.6.1.2.1.1.5.0", Type: gsnmp.OctetString, Value: []byte("core-sw-01")},
+		}
+
+		addr := snmptest.Start(t, "public", pdus)
+		ip, port := snmptest.ParseAddr(addr)
+
+		dev, err := Walk(context.Background(), Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+		if err != nil {
+			t.Fatalf("Walk: %v", err)
+		}
+		if dev == nil {
+			t.Fatal("Walk returned nil device")
+		}
+		if dev.Uptime != 0 {
+			t.Errorf("Uptime = %v, want 0 (negative sysUpTime must be rejected)", dev.Uptime)
+		}
+	})
+
+	t.Run("positive int sets Uptime correctly", func(t *testing.T) {
+		pdus := []gsnmp.SnmpPDU{
+			{Name: ".1.3.6.1.2.1.1.1.0", Type: gsnmp.OctetString, Value: []byte("Cisco IOS 15.2")},
+			{Name: ".1.3.6.1.2.1.1.2.0", Type: gsnmp.ObjectIdentifier, Value: ".1.3.6.1.4.1.9.1.1"},
+			// Valid positive signed Integer for sysUpTime (50000 ticks = 500s).
+			{Name: ".1.3.6.1.2.1.1.3.0", Type: gsnmp.Integer, Value: int(50000)},
+			{Name: ".1.3.6.1.2.1.1.5.0", Type: gsnmp.OctetString, Value: []byte("core-sw-01")},
+		}
+
+		addr := snmptest.Start(t, "public", pdus)
+		ip, port := snmptest.ParseAddr(addr)
+
+		dev, err := Walk(context.Background(), Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+		if err != nil {
+			t.Fatalf("Walk: %v", err)
+		}
+		if dev == nil {
+			t.Fatal("Walk returned nil device")
+		}
+		want := time.Duration(50000) * 10 * time.Millisecond
+		if dev.Uptime != want {
+			t.Errorf("Uptime = %v, want %v", dev.Uptime, want)
+		}
+	})
+}
+
 // Walk: devices with leading/trailing whitespace in sysName are normalised.
 func TestWalkNormalisesSysName(t *testing.T) {
 	pdus := []gsnmp.SnmpPDU{
