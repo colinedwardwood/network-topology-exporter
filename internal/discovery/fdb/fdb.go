@@ -472,7 +472,7 @@ func isSpecialMAC(mac []byte) bool {
 func buildEdges(localDevice string, entries map[string]*fdbEntry, bridgePorts map[int]int, ifNames map[int]string, stpStates map[int]int) []discovery.Edge {
 	portMACs := make(map[int][]net.HardwareAddr)
 	for _, e := range entries {
-		if e.status != fdbStatusLearned || len(e.mac) != 6 {
+		if e.status != fdbStatusLearned || len(e.mac) != 6 || e.port <= 0 {
 			continue
 		}
 		if isSpecialMAC(e.mac) {

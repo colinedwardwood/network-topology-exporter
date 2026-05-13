@@ -1220,6 +1220,22 @@ func TestBuildEdgesMulticastMACFiltered(t *testing.T) {
 	}
 }
 
+// buildEdges: fdbEntry with valid MAC, learned status, but port=0 produces no edge.
+// This covers the case where an SNMP walk returned a MAC+status row but no port
+// row (partial table response), leaving e.port at its zero value.
+func TestBuildEdgesSkipsZeroPort(t *testing.T) {
+	entries := map[string]*fdbEntry{
+		"0.1.2.3.4.5": {mac: []byte{0, 1, 2, 3, 4, 5}, port: 0, status: fdbStatusLearned},
+	}
+	bridgePorts := map[int]int{1: 2}
+	ifNames := map[int]string{2: "Gi0/1"}
+
+	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
+	if len(edges) != 0 {
+		t.Fatalf("expected 0 edges for port=0 entry, got %d: %v", len(edges), edges)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // walkStpPortStates() coverage gaps
 // ---------------------------------------------------------------------------
