@@ -647,7 +647,7 @@ func runCycle(
 				return
 			}
 
-			dev, params, profileName, err := walkSystemWithCredentials(cycleCtx, cfg, resolver, ip, target)
+			dev, params, profileName, err := walkSystemWithCredentials(cycleCtx, cfg, resolver, ip, target, logger)
 			if err != nil {
 				logger.Warn("snmp walk failed", "target", target.Host, "error", err)
 				m.DiscoveryHardFailTotal.WithLabelValues("system", "system_group_walk_error").Inc()
@@ -769,7 +769,7 @@ func runCycle(
 					for mac, ip := range arpMACToIP {
 						if existing, exists := allARPMACs[mac]; exists {
 							if existing != ip {
-								slog.Debug("arp: MAC seen with conflicting IPs across devices; keeping first",
+								logger.Debug("arp: MAC seen with conflicting IPs across devices; keeping first",
 									"mac", mac, "kept_ip", existing, "discarded_ip", ip)
 							}
 							continue
@@ -1059,7 +1059,7 @@ type credentialCandidate struct {
 	profileName string
 }
 
-func credentialCandidates(cfg *config.Config, resolver *credentials.Resolver, ip net.IP, t config.TargetConfig) []credentialCandidate {
+func credentialCandidates(cfg *config.Config, resolver *credentials.Resolver, ip net.IP, t config.TargetConfig, logger *slog.Logger) []credentialCandidate {
 	port := uint16(t.Port) //nolint:gosec
 	if port == 0 {
 		port = 161
@@ -1103,7 +1103,7 @@ func credentialCandidates(cfg *config.Config, resolver *credentials.Resolver, ip
 		}
 		params, err := profileToParams(ip, port, cfg.Discovery.TimeoutPerDevice, p)
 		if err != nil {
-			slog.Warn("credential profile unusable; skipping",
+			logger.Warn("credential profile unusable; skipping",
 				"profile", name, "ip", ip, "error", err)
 			continue
 		}
@@ -1113,8 +1113,8 @@ func credentialCandidates(cfg *config.Config, resolver *credentials.Resolver, ip
 	return candidates
 }
 
-func walkSystemWithCredentials(ctx context.Context, cfg *config.Config, resolver *credentials.Resolver, ip net.IP, t config.TargetConfig) (*discovery.Device, snmpwalk.Params, string, error) {
-	candidates := credentialCandidates(cfg, resolver, ip, t)
+func walkSystemWithCredentials(ctx context.Context, cfg *config.Config, resolver *credentials.Resolver, ip net.IP, t config.TargetConfig, logger *slog.Logger) (*discovery.Device, snmpwalk.Params, string, error) {
+	candidates := credentialCandidates(cfg, resolver, ip, t, logger)
 	if len(candidates) == 0 {
 		return nil, snmpwalk.Params{}, "", fmt.Errorf("no usable credential profiles for %s", ip)
 	}

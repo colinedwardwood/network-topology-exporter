@@ -1611,7 +1611,7 @@ func TestCredentialCandidatesNoProfiles(t *testing.T) {
 
 	ip := net.ParseIP("127.0.0.1")
 	target := config.TargetConfig{Host: "127.0.0.1", Port: 161}
-	candidates := credentialCandidates(cfg, resolver, ip, target)
+	candidates := credentialCandidates(cfg, resolver, ip, target, slog.Default())
 
 	if len(candidates) == 0 {
 		t.Fatal("expected at least one candidate from legacy path, got none")
@@ -1646,7 +1646,7 @@ func TestCredentialCandidatesPortZero(t *testing.T) {
 
 	ip := net.ParseIP("127.0.0.1")
 	target := config.TargetConfig{Host: "127.0.0.1", Port: 0} // Port intentionally 0
-	candidates := credentialCandidates(cfg, resolver, ip, target)
+	candidates := credentialCandidates(cfg, resolver, ip, target, slog.Default())
 
 	if len(candidates) == 0 {
 		t.Fatal("expected candidate with default port, got none")
@@ -1691,7 +1691,7 @@ func TestWalkSystemWithCredentialsEmptyCandidates(t *testing.T) {
 	ip := net.ParseIP("127.0.0.1")
 	target := config.TargetConfig{Host: "127.0.0.1", Port: 161}
 
-	dev, _, _, err := walkSystemWithCredentials(context.Background(), cfg, resolver, ip, target)
+	dev, _, _, err := walkSystemWithCredentials(context.Background(), cfg, resolver, ip, target, slog.Default())
 	if err == nil {
 		t.Fatal("expected error from empty candidates, got nil")
 	}
@@ -1735,7 +1735,7 @@ func TestWalkSystemWithCredentialsAllTimeout(t *testing.T) {
 	ip := net.ParseIP("127.0.0.1")
 	target := config.TargetConfig{Host: "127.0.0.1", Port: port}
 
-	_, _, _, err = walkSystemWithCredentials(context.Background(), cfg, resolver, ip, target)
+	_, _, _, err = walkSystemWithCredentials(context.Background(), cfg, resolver, ip, target, slog.Default())
 	if err == nil {
 		t.Fatal("expected error from all-timeout walk, got nil")
 	}
@@ -1852,7 +1852,7 @@ func TestWalkSystemWithCredentialsNonTimeoutFailure(t *testing.T) {
 	ip := net.ParseIP("127.0.0.1")
 	target := config.TargetConfig{Host: "127.0.0.1", Port: int(port)}
 
-	_, _, _, err = walkSystemWithCredentials(ctx, cfg, resolver, ip, target)
+	_, _, _, err = walkSystemWithCredentials(ctx, cfg, resolver, ip, target, slog.Default())
 	if err == nil {
 		t.Fatal("expected error from cancelled context, got nil")
 	}
