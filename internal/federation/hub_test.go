@@ -231,6 +231,14 @@ func TestHubKnownInterDomainLinkInjected(t *testing.T) {
 	}
 	h := newTestHub(links)
 	h.mu.Lock()
+	h.spokes["dc-a"] = spokeEntry{
+		payload:  SpokePayload{SpokeID: "dc-a", Devices: []discovery.Device{{ID: "sw-a"}}},
+		lastSeen: time.Now(),
+	}
+	h.spokes["dc-b"] = spokeEntry{
+		payload:  SpokePayload{SpokeID: "dc-b", Devices: []discovery.Device{{ID: "sw-b"}}},
+		lastSeen: time.Now(),
+	}
 	g := h.combinedGraphLocked()
 	h.mu.Unlock()
 
@@ -253,6 +261,14 @@ func TestHubKnownLinkCustomLinkKind(t *testing.T) {
 	}
 	h := newTestHub(links)
 	h.mu.Lock()
+	h.spokes["dc-a"] = spokeEntry{
+		payload:  SpokePayload{SpokeID: "dc-a", Devices: []discovery.Device{{ID: "sw-a"}}},
+		lastSeen: time.Now(),
+	}
+	h.spokes["dc-b"] = spokeEntry{
+		payload:  SpokePayload{SpokeID: "dc-b", Devices: []discovery.Device{{ID: "sw-b"}}},
+		lastSeen: time.Now(),
+	}
 	g := h.combinedGraphLocked()
 	h.mu.Unlock()
 
@@ -273,8 +289,10 @@ func TestHubKnownLinkBeatsOOS(t *testing.T) {
 	h := newTestHub(links)
 	h.mu.Lock()
 	// Also inject matching OOS observations — same edge, different port names.
+	// Devices must be present so the IDL guard passes.
 	h.spokes["dc-a"] = spokeEntry{
 		payload: SpokePayload{
+			Devices: []discovery.Device{{ID: "sw-a"}},
 			OutOfScope: []discovery.OutOfScopeNeighbour{
 				{ReportingDevice: "sw-a", ReportingPort: "GigabitEthernet0/1", NeighbourHint: "sw-b", Proto: "cdp"},
 			},
@@ -283,6 +301,7 @@ func TestHubKnownLinkBeatsOOS(t *testing.T) {
 	}
 	h.spokes["dc-b"] = spokeEntry{
 		payload: SpokePayload{
+			Devices: []discovery.Device{{ID: "sw-b"}},
 			OutOfScope: []discovery.OutOfScopeNeighbour{
 				{ReportingDevice: "sw-b", ReportingPort: "GigabitEthernet0/2", NeighbourHint: "sw-a", Proto: "cdp"},
 			},
