@@ -1282,6 +1282,139 @@ func TestWalkStpPortStatesPortStrEmpty(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// RFC 4188 port=0 rejection in walkFdbTableInto and walkQBridgeFdbTable
+// ---------------------------------------------------------------------------
+
+// walkFdbTableInto: a PDU reporting port=0 must not set e.port; the entry's
+// port field stays 0 and buildEdges maps it to portMACs[0], which has no
+// entry in bridgePorts, so no edge is emitted.
+func TestWalkFdbTableIntoPortZeroRejected(t *testing.T) {
+	macSuffix := "0.1.2.3.4.5"
+	fdbBase := ".1.3.6.1.2.1.17.4.3.1."
+	pdus := []gsnmp.SnmpPDU{
+		{Name: fdbBase + "1." + macSuffix, Type: gsnmp.OctetString, Value: []byte{0, 1, 2, 3, 4, 5}},
+		{Name: fdbBase + "2." + macSuffix, Type: gsnmp.Integer, Value: 0}, // port=0 → must be rejected
+		{Name: fdbBase + "3." + macSuffix, Type: gsnmp.Integer, Value: fdbStatusLearned},
+	}
+	client := openClientToAgent(t, "public", pdus)
+	entries := make(map[string]*fdbEntry)
+	if err := walkFdbTableInto(context.Background(), client, entries); err != nil {
+		t.Fatalf("walkFdbTableInto: %v", err)
+	}
+	e, ok := entries[macSuffix]
+	if !ok {
+		t.Fatalf("expected entry for key %q", macSuffix)
+	}
+	if e.port != 0 {
+		t.Errorf("port = %d, want 0 (port=0 PDU must not update e.port)", e.port)
+	}
+
+	// buildEdges with no bridgePorts mapping for port 0 → no edges.
+	bridgePorts := map[int]int{1: 2} // port 1 mapped; port 0 intentionally absent
+	ifNames := map[int]string{2: "Gi0/1"}
+	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for port=0 entry, got %d: %v", len(edges), edges)
+	}
+}
+
+// walkFdbTableInto: a PDU reporting port=1 must set e.port to 1 and
+// buildEdges must produce one direct edge (existing behaviour unchanged).
+func TestWalkFdbTableIntoPortOneAccepted(t *testing.T) {
+	macSuffix := "0.1.2.3.4.5"
+	fdbBase := ".1.3.6.1.2.1.17.4.3.1."
+	pdus := []gsnmp.SnmpPDU{
+		{Name: fdbBase + "1." + macSuffix, Type: gsnmp.OctetString, Value: []byte{0, 1, 2, 3, 4, 5}},
+		{Name: fdbBase + "2." + macSuffix, Type: gsnmp.Integer, Value: 1}, // port=1 → must be accepted
+		{Name: fdbBase + "3." + macSuffix, Type: gsnmp.Integer, Value: fdbStatusLearned},
+	}
+	client := openClientToAgent(t, "public", pdus)
+	entries := make(map[string]*fdbEntry)
+	if err := walkFdbTableInto(context.Background(), client, entries); err != nil {
+		t.Fatalf("walkFdbTableInto: %v", err)
+	}
+	e, ok := entries[macSuffix]
+	if !ok {
+		t.Fatalf("expected entry for key %q", macSuffix)
+	}
+	if e.port != 1 {
+		t.Errorf("port = %d, want 1", e.port)
+	}
+
+	bridgePorts := map[int]int{1: 2}
+	ifNames := map[int]string{2: "Gi0/1"}
+	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge for port=1 entry, got %d: %v", len(edges), edges)
+	}
+}
+
+// walkQBridgeFdbTable: a PDU reporting port=0 must not set e.port; the entry's
+// port field stays 0 and buildEdges produces no edge.
+func TestWalkQBridgeFdbTablePortZeroRejected(t *testing.T) {
+	// Q-BRIDGE index: fdbId=1, MAC=00:01:02:03:04:05
+	qSuffix := "1.0.1.2.3.4.5"
+	macKey := "0.1.2.3.4.5"
+	qBridgeBase := ".1.3.6.1.2.1.17.7.1.2.2.1."
+	pdus := []gsnmp.SnmpPDU{
+		{Name: qBridgeBase + "2." + qSuffix, Type: gsnmp.Integer, Value: 0}, // port=0 → must be rejected
+		{Name: qBridgeBase + "3." + qSuffix, Type: gsnmp.Integer, Value: fdbStatusLearned},
+	}
+	client := openClientToAgent(t, "public", pdus)
+	entries := make(map[string]*fdbEntry)
+	if err := walkQBridgeFdbTable(context.Background(), client, entries); err != nil {
+		t.Fatalf("walkQBridgeFdbTable: %v", err)
+	}
+	e, ok := entries[macKey]
+	if !ok {
+		t.Fatalf("expected entry for key %q", macKey)
+	}
+	if e.port != 0 {
+		t.Errorf("port = %d, want 0 (port=0 PDU must not update e.port)", e.port)
+	}
+
+	// buildEdges with no bridgePorts mapping for port 0 → no edges.
+	bridgePorts := map[int]int{1: 2} // port 1 mapped; port 0 intentionally absent
+	ifNames := map[int]string{2: "Gi0/1"}
+	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
+	if len(edges) != 0 {
+		t.Errorf("expected 0 edges for port=0 Q-BRIDGE entry, got %d: %v", len(edges), edges)
+	}
+}
+
+// walkQBridgeFdbTable: a PDU reporting port=1 must set e.port to 1 and
+// buildEdges must produce one direct edge (existing behaviour unchanged).
+func TestWalkQBridgeFdbTablePortOneAccepted(t *testing.T) {
+	// Q-BRIDGE index: fdbId=1, MAC=00:01:02:03:04:05
+	qSuffix := "1.0.1.2.3.4.5"
+	macKey := "0.1.2.3.4.5"
+	qBridgeBase := ".1.3.6.1.2.1.17.7.1.2.2.1."
+	pdus := []gsnmp.SnmpPDU{
+		{Name: qBridgeBase + "2." + qSuffix, Type: gsnmp.Integer, Value: 1}, // port=1 → must be accepted
+		{Name: qBridgeBase + "3." + qSuffix, Type: gsnmp.Integer, Value: fdbStatusLearned},
+	}
+	client := openClientToAgent(t, "public", pdus)
+	entries := make(map[string]*fdbEntry)
+	if err := walkQBridgeFdbTable(context.Background(), client, entries); err != nil {
+		t.Fatalf("walkQBridgeFdbTable: %v", err)
+	}
+	e, ok := entries[macKey]
+	if !ok {
+		t.Fatalf("expected entry for key %q", macKey)
+	}
+	if e.port != 1 {
+		t.Errorf("port = %d, want 1", e.port)
+	}
+
+	bridgePorts := map[int]int{1: 2}
+	ifNames := map[int]string{2: "Gi0/1"}
+	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge for port=1 Q-BRIDGE entry, got %d: %v", len(edges), edges)
+	}
+}
+
 // buildQBridgeAgentPDUs builds PDUs with one B-MIB entry and one Q-BRIDGE entry
 // on distinct bridge ports so that each port carries exactly one MAC
 // (AdjacencyDirect) and both produce an edge.
