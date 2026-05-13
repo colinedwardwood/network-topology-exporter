@@ -711,6 +711,159 @@ func TestPostRetriesNetworkError(t *testing.T) {
 	}
 }
 
+// TestPushGraphEdgeAttributes verifies that LD-10 reconciliation labels
+// (Direction, Confidence, Adjacency, PrecedenceRank) are serialised as data
+// point attributes on the network_topology_edge metric.
+func TestPushGraphEdgeAttributes(t *testing.T) {
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody = decodeBody(t, r)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+
+	g := discovery.Graph{
+		Edges: []discovery.Edge{
+			{
+				SrcDevice:      "sw-a",
+				SrcPort:        "Gi0/1",
+				DstDevice:      "sw-b",
+				DstPort:        "Gi0/2",
+				DiscoveryProto: "lldp",
+				LinkKind:       "ethernet",
+				Direction:      discovery.DirectionBidirectional,
+				Confidence:     discovery.ConfidenceHigh,
+				Adjacency:      discovery.AdjacencyDirect,
+				PrecedenceRank: 1,
+			},
+		},
+	}
+
+	if err := exp.PushGraph(context.Background(), g); err != nil {
+		t.Fatalf("PushGraph: %v", err)
+	}
+
+	metrics := drillMetrics(t, gotBody)
+	edgePoints, ok := metrics["network_topology_edge"]
+	if !ok || len(edgePoints) != 1 {
+		t.Fatalf("expected 1 edge data point, got %v", edgePoints)
+	}
+
+	pt := edgePoints[0]
+	checks := map[string]string{
+		"direction":      "bidirectional",
+		"confidence":     "high",
+		"adjacency":      "direct",
+		"precedence_rank": "1",
+	}
+	for attr, want := range checks {
+		got, ok := pt[attr].(string)
+		if !ok {
+			t.Errorf("attribute %q missing or not a string", attr)
+			continue
+		}
+		if got != want {
+			t.Errorf("attribute %q = %q, want %q", attr, got, want)
+		}
+	}
+}
+
+// TestPushGraphDeviceAttributes verifies that Vendor, Model, OSVersion, and
+// Site are serialised as data point attributes on the network_topology_device
+// metric when non-empty.
+func TestPushGraphDeviceAttributes(t *testing.T) {
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody = decodeBody(t, r)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+
+	g := discovery.Graph{
+		Devices: []discovery.Device{
+			{
+				ID:        "rtr-1",
+				Vendor:    "Cisco",
+				Model:     "ASR1001",
+				OSVersion: "16.9",
+				Site:      "dc1",
+			},
+		},
+	}
+
+	if err := exp.PushGraph(context.Background(), g); err != nil {
+		t.Fatalf("PushGraph: %v", err)
+	}
+
+	metrics := drillMetrics(t, gotBody)
+	devicePoints, ok := metrics["network_topology_device"]
+	if !ok || len(devicePoints) != 1 {
+		t.Fatalf("expected 1 device data point, got %v", devicePoints)
+	}
+
+	pt := devicePoints[0]
+	checks := map[string]string{
+		"device":     "rtr-1",
+		"vendor":     "Cisco",
+		"model":      "ASR1001",
+		"os_version": "16.9",
+		"site":       "dc1",
+	}
+	for attr, want := range checks {
+		got, ok := pt[attr].(string)
+		if !ok {
+			t.Errorf("attribute %q missing or not a string", attr)
+			continue
+		}
+		if got != want {
+			t.Errorf("attribute %q = %q, want %q", attr, got, want)
+		}
+	}
+}
+
+// TestPushGraphDeviceAttributesOmitEmpty verifies that device attributes with
+// empty values are not included in the serialised data point.
+func TestPushGraphDeviceAttributesOmitEmpty(t *testing.T) {
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody = decodeBody(t, r)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+
+	g := discovery.Graph{
+		Devices: []discovery.Device{
+			{ID: "sw-plain"}, // no Vendor/Model/OSVersion/Site
+		},
+	}
+
+	if err := exp.PushGraph(context.Background(), g); err != nil {
+		t.Fatalf("PushGraph: %v", err)
+	}
+
+	metrics := drillMetrics(t, gotBody)
+	devicePoints, ok := metrics["network_topology_device"]
+	if !ok || len(devicePoints) != 1 {
+		t.Fatalf("expected 1 device data point, got %v", devicePoints)
+	}
+
+	pt := devicePoints[0]
+	for _, absent := range []string{"vendor", "model", "os_version", "site"} {
+		if _, exists := pt[absent]; exists {
+			t.Errorf("attribute %q should be absent for empty device, but was present", absent)
+		}
+	}
+}
+
 // TestPushChangesInvalidUTF8 verifies that edge change fields with invalid
 // UTF-8 bytes are sanitized before JSON serialization in PushChanges.
 func TestPushChangesInvalidUTF8(t *testing.T) {
