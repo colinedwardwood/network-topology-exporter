@@ -766,9 +766,14 @@ func runCycle(
 				} else {
 					mu.Lock()
 					for mac, ip := range arpMACToIP {
-						if _, exists := allARPMACs[mac]; !exists {
-							allARPMACs[mac] = ip
+						if existing, exists := allARPMACs[mac]; exists {
+							if existing != ip {
+								slog.Debug("arp: MAC seen with conflicting IPs across devices; keeping first",
+									"mac", mac, "kept_ip", existing, "discarded_ip", ip)
+							}
+							continue
 						}
+						allARPMACs[mac] = ip
 					}
 					mu.Unlock()
 				}
