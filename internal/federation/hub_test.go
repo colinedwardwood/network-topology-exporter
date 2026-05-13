@@ -1937,5 +1937,23 @@ func TestValidateSpokePayload(t *testing.T) {
 	}
 }
 
+// TestValidateSpokePayloadRejectsEmptyLabelKey verifies that validateSpokePayload
+// returns an error when a Device's Labels map contains an empty string key.
+// An empty label key would produce an invalid Prometheus label at emit time.
+func TestValidateSpokePayloadRejectsEmptyLabelKey(t *testing.T) {
+	payload := SpokePayload{
+		Devices: []discovery.Device{
+			{
+				ID:     "sw-1",
+				Labels: map[string]string{"": "value"},
+			},
+		},
+	}
+	err := validateSpokePayload(payload)
+	if err == nil {
+		t.Error("validateSpokePayload() = nil, want error for empty label key")
+	}
+}
+
 // Ensure unused import is compiled away by the test binary.
 var _ = os.DevNull
