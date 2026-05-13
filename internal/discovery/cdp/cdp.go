@@ -20,6 +20,7 @@ package cdp
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"strconv"
 	"time"
@@ -103,6 +104,9 @@ func walkCacheTable(ctx context.Context, client *gsnmp.GoSNMP) (map[cacheKey]*ca
 		if err != nil {
 			continue
 		}
+		if neighIdx <= 0 {
+			continue
+		}
 
 		k := cacheKey{ifIdx, neighIdx}
 		e := entries[k]
@@ -140,18 +144,23 @@ func buildEdges(localDevice string, ifNames map[int]string, entries map[cacheKey
 		}
 
 		// LD-11: cdpCacheAddress with addrType 1 (IPv4) gives the neighbor IP.
-		if remIP := cdpNeighborIP(e); remIP != nil {
-			if len(allowedNets) > 0 && !snmputil.IPInNets(remIP, allowedNets) {
-				oos = append(oos, discovery.OutOfScopeNeighbour{
-					Proto:           "cdp",
-					ReportingDevice: localDevice,
-					ReportingPort:   localPort,
-					NeighbourHint:   e.deviceID,
-					FirstSeen:       now,
-					LastSeen:        now,
-				})
-				continue
-			}
+		remIP := cdpNeighborIP(e)
+		if remIP == nil && len(allowedNets) > 0 {
+			// Cannot validate scope for non-IP neighbor; skip when scope filtering is active.
+			slog.Debug("cdp: skipping non-IP neighbor when scope filtering is active",
+				"device", localDevice, "neighbor", e.deviceID)
+			continue
+		}
+		if remIP != nil && len(allowedNets) > 0 && !snmputil.IPInNets(remIP, allowedNets) {
+			oos = append(oos, discovery.OutOfScopeNeighbour{
+				Proto:           "cdp",
+				ReportingDevice: localDevice,
+				ReportingPort:   localPort,
+				NeighbourHint:   e.deviceID,
+				FirstSeen:       now,
+				LastSeen:        now,
+			})
+			continue
 		}
 
 		edges = append(edges, discovery.Edge{
