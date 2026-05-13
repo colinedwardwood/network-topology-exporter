@@ -168,6 +168,11 @@ func validateSpokePayload(p SpokePayload) error {
 			return fmt.Errorf("device[%d]: duplicate device_id %q", i, d.ID)
 		}
 		seen[d.ID] = true
+		for k := range d.Labels {
+			if k == "" {
+				return fmt.Errorf("devices[%d]: label key must not be empty", i)
+			}
+		}
 	}
 	for i, e := range p.Edges {
 		if e.SrcDevice == "" || e.SrcPort == "" || e.DstDevice == "" {
