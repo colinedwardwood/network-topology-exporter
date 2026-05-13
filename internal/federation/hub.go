@@ -500,7 +500,15 @@ func (h *Hub) buildCombinedGraph(spokes map[string]spokeEntry) (discovery.Graph,
 
 	// Inject LD-19 known inter-domain links as authoritative overrides.
 	// Rank 0 beats all protocol-observed edges so configured links always win.
-	for _, link := range h.cfg.KnownInterDomainLinks {
+	for i, link := range h.cfg.KnownInterDomainLinks {
+		if !seenDevices[link.LocalDevice] || !seenDevices[link.RemoteDevice] {
+			slog.Warn("hub: IDL endpoint not in combined graph; skipping",
+				"link_idx", i,
+				"local_device", link.LocalDevice,
+				"remote_device", link.RemoteDevice,
+			)
+			continue
+		}
 		linkKind := link.LinkKind
 		if linkKind == "" {
 			linkKind = "ethernet"
