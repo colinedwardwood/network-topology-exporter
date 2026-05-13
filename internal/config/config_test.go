@@ -684,6 +684,71 @@ federation:
 	}
 }
 
+func TestFederationKnownInterDomainLinksSelfLoop(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+federation:
+  known_inter_domain_links:
+    - local_device: sw-a
+      local_port: Gi0/1
+      remote_device: sw-a
+      remote_port: Gi0/2
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for known_inter_domain_links entry where local_device == remote_device")
+	}
+}
+
+func TestFederationKnownInterDomainLinksDuplicate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+federation:
+  known_inter_domain_links:
+    - local_device: sw-a
+      local_port: Gi0/1
+      remote_device: sw-b
+      remote_port: Gi0/1
+    - local_device: sw-a
+      local_port: Gi0/1
+      remote_device: sw-b
+      remote_port: Gi0/1
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for duplicate known_inter_domain_links entries")
+	}
+}
+
+func TestFederationKnownInterDomainLinksReverseDuplicate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+federation:
+  known_inter_domain_links:
+    - local_device: sw-a
+      local_port: Gi0/1
+      remote_device: sw-b
+      remote_port: Gi0/1
+    - local_device: sw-b
+      local_port: Gi0/1
+      remote_device: sw-a
+      remote_port: Gi0/1
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for reverse-duplicate known_inter_domain_links entries")
+	}
+}
+
 func TestFederationUncoordinatedIsValid(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
