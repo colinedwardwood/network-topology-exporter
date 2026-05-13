@@ -502,7 +502,7 @@ func (h *Hub) buildCombinedGraph(spokes map[string]spokeEntry) (discovery.Graph,
 	// Rank 0 beats all protocol-observed edges so configured links always win.
 	for i, link := range h.cfg.KnownInterDomainLinks {
 		if !seenDevices[link.LocalDevice] || !seenDevices[link.RemoteDevice] {
-			slog.Warn("hub: IDL endpoint not in combined graph; skipping",
+			h.logger.Warn("hub: IDL endpoint not in combined graph; skipping",
 				"link_idx", i,
 				"local_device", link.LocalDevice,
 				"remote_device", link.RemoteDevice,
