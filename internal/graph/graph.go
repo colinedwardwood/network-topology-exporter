@@ -81,11 +81,6 @@ const (
 	// ConflictNeighbourDisagreement — sources name different neighbour
 	// devices for the same local port. Most serious case.
 	ConflictNeighbourDisagreement ConflictKind = "neighbour_disagreement"
-
-	// ConflictDocumentedVsObserved — manual / NetBox topology disagrees with
-	// observed discovery. Highest-value signal for keeping documentation
-	// honest.
-	ConflictDocumentedVsObserved ConflictKind = "documented_vs_observed"
 )
 
 // Conflict records one disagreement between sources within a single cycle.
