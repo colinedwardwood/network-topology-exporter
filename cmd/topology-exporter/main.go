@@ -110,6 +110,7 @@ func run(ctx context.Context, args []string) int {
 	}
 
 	logger := newLogger(*logLevel)
+	slog.SetDefault(logger)
 	logger.Info("starting",
 		"version", version.Version,
 		"commit", version.Commit,
@@ -975,7 +976,14 @@ func synthesizeEdges(
 				if _, err := net.ParseMAC(dst); err == nil {
 					continue
 				}
-				macToID[hw.String()] = dst
+				if existing, exists := macToID[hw.String()]; exists {
+					if existing != dst {
+						logger.Debug("lldp: MAC chassis ID advertised by multiple devices; keeping first",
+							"mac", hw.String(), "kept_device", existing, "discarded_device", dst)
+					}
+				} else {
+					macToID[hw.String()] = dst
+				}
 			}
 		}
 	}
