@@ -179,6 +179,10 @@ func (e *Exporter) PushGraph(ctx context.Context, g discovery.Graph) error {
 			{Key: "dst_port", Value: kvValue{StringValue: sanitizeUTF8(edge.DstPort)}},
 			{Key: "proto", Value: kvValue{StringValue: sanitizeUTF8(edge.DiscoveryProto)}},
 			{Key: "link_kind", Value: kvValue{StringValue: sanitizeUTF8(edge.LinkKind)}},
+			{Key: "direction", Value: kvValue{StringValue: sanitizeUTF8(string(edge.Direction))}},
+			{Key: "confidence", Value: kvValue{StringValue: sanitizeUTF8(string(edge.Confidence))}},
+			{Key: "adjacency", Value: kvValue{StringValue: sanitizeUTF8(string(edge.Adjacency))}},
+			{Key: "precedence_rank", Value: kvValue{StringValue: strconv.Itoa(edge.PrecedenceRank)}},
 		}
 		for k, v := range edge.Metadata {
 			attrs = append(attrs, kv{Key: metadataAttrPrefix + k, Value: kvValue{StringValue: sanitizeUTF8(v)}})
@@ -192,10 +196,23 @@ func (e *Exporter) PushGraph(ctx context.Context, g discovery.Graph) error {
 
 	devicePoints := make([]dataPoint, 0, len(g.Devices))
 	for _, dev := range g.Devices {
+		attrs := []kv{
+			{Key: "device", Value: kvValue{StringValue: sanitizeUTF8(dev.ID)}},
+		}
+		if dev.Vendor != "" {
+			attrs = append(attrs, kv{Key: "vendor", Value: kvValue{StringValue: sanitizeUTF8(dev.Vendor)}})
+		}
+		if dev.Model != "" {
+			attrs = append(attrs, kv{Key: "model", Value: kvValue{StringValue: sanitizeUTF8(dev.Model)}})
+		}
+		if dev.OSVersion != "" {
+			attrs = append(attrs, kv{Key: "os_version", Value: kvValue{StringValue: sanitizeUTF8(dev.OSVersion)}})
+		}
+		if dev.Site != "" {
+			attrs = append(attrs, kv{Key: "site", Value: kvValue{StringValue: sanitizeUTF8(dev.Site)}})
+		}
 		devicePoints = append(devicePoints, dataPoint{
-			Attributes: []kv{
-				{Key: "device", Value: kvValue{StringValue: sanitizeUTF8(dev.ID)}},
-			},
+			Attributes:   attrs,
 			AsDouble:     1.0,
 			TimeUnixNano: now,
 		})
