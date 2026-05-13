@@ -98,7 +98,9 @@ func Load(path string) (*File, error) {
 		return nil, fmt.Errorf("parse snapshot %q: %w", path, err)
 	}
 	if f.Version != CurrentVersion {
-		_ = quarantine(path, b)
+		if qErr := quarantine(path, b); qErr != nil {
+			return nil, fmt.Errorf("%w: got %d, want %d (quarantine also failed: %v)", ErrVersionMismatch, f.Version, CurrentVersion, qErr)
+		}
 		return nil, fmt.Errorf("%w: got %d, want %d", ErrVersionMismatch, f.Version, CurrentVersion)
 	}
 	return &f, nil
