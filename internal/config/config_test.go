@@ -1244,6 +1244,26 @@ output:
 	}
 }
 
+// TestOTLPValidationRejectsNegativeHeartbeatCyclesWhenDisabled verifies that a
+// negative heartbeat_cycles value is rejected even when OTLP is disabled.
+func TestOTLPValidationRejectsNegativeHeartbeatCyclesWhenDisabled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+output:
+  otlp:
+    enabled: false
+    heartbeat_cycles: -1
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for heartbeat_cycles: -1 with OTLP disabled, got nil")
+	}
+}
+
 func TestValidateHTTPSEndpoint(t *testing.T) {
 	invalid := []string{
 		"",
