@@ -82,11 +82,6 @@ const (
 	// devices for the same local port. Most serious case.
 	ConflictNeighbourDisagreement ConflictKind = "neighbour_disagreement"
 
-	// ConflictDirectionAsymmetry — A's LLDP names B as a neighbour but B's
-	// LLDP doesn't name A. Common with mixed-vendor environments and
-	// occasional vendor LLDP bugs.
-	ConflictDirectionAsymmetry ConflictKind = "direction_asymmetry"
-
 	// ConflictDocumentedVsObserved — manual / NetBox topology disagrees with
 	// observed discovery. Highest-value signal for keeping documentation
 	// honest.
@@ -134,6 +129,11 @@ func Reconcile(edges []discovery.Edge) ([]discovery.Edge, []Conflict) {
 	groups := make(map[EdgeKey]*group, len(edges))
 	for i := range edges {
 		e := &edges[i]
+		if e.SrcDevice == "" || e.DstDevice == "" {
+			// Drop edges with missing device names — these are malformed
+			// observations that cannot be keyed or reconciled correctly.
+			continue
+		}
 		if e.SrcDevice == e.DstDevice {
 			// Drop self-loop — protocol artefact where a device reports itself
 			// as both endpoints. These are never valid physical links and pollute
