@@ -121,6 +121,7 @@ func (h *Hub) Serve(ctx context.Context) error {
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	ln, err := net.Listen("tcp", h.cfg.Hub.ListenAddr)
