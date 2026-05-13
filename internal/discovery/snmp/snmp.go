@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	g "github.com/gosnmp/gosnmp"
 
@@ -220,7 +221,11 @@ func normalizeSysDescr(s string) string {
 		return m
 	}
 	if len(s) > 64 {
-		return s[:64]
+		n := 64
+		for n > 0 && !utf8.RuneStart(s[n]) {
+			n--
+		}
+		return s[:n]
 	}
 	return s
 }

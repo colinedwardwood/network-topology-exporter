@@ -1087,6 +1087,34 @@ func TestNormalizeSysDescr(t *testing.T) {
 	}
 }
 
+// TestNormalizeSysDescrRuneBoundary verifies that normalizeSysDescr retreats to
+// a rune boundary when truncating, so the result is always valid UTF-8.
+func TestNormalizeSysDescrRuneBoundary(t *testing.T) {
+	// Case 1: pure ASCII 65-byte string truncates cleanly to 64 bytes.
+	ascii65 := strings.Repeat("a", 65)
+	got := normalizeSysDescr(ascii65)
+	if len(got) != 64 {
+		t.Errorf("ASCII case: len = %d, want 64", len(got))
+	}
+	if got != ascii65[:64] {
+		t.Errorf("ASCII case: got %q, want first 64 bytes unchanged", got)
+	}
+
+	// Case 2: 62 ASCII bytes followed by one 3-byte UTF-8 rune ("€" = 0xE2 0x82 0xAC)
+	// = 65 bytes total. Byte 64 (index 63) is the first continuation byte 0x82, so
+	// the function must retreat to byte 62, producing the 62-byte ASCII prefix.
+	threeByteRune := "€" // U+20AC: 0xE2 0x82 0xAC
+	input := strings.Repeat("b", 62) + threeByteRune
+	if len(input) != 65 {
+		t.Fatalf("test setup error: expected 65-byte string, got %d", len(input))
+	}
+	got = normalizeSysDescr(input)
+	want := strings.Repeat("b", 62)
+	if got != want {
+		t.Errorf("rune-boundary case: got %q (len %d), want %q (len %d)", got, len(got), want, len(want))
+	}
+}
+
 // TestBuildClientRetries verifies that Retries from Params propagates to GoSNMP.
 func TestBuildClientRetries(t *testing.T) {
 	p := Params{IP: net.ParseIP("10.0.0.1"), Retries: 3}
