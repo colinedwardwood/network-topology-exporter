@@ -191,7 +191,10 @@ func walkFdbTableInto(ctx context.Context, client *gsnmp.GoSNMP, entries map[str
 		case colFdbAddress:
 			e.mac = snmputil.PDUBytes(pdu)
 		case colFdbPort:
-			e.port = snmputil.PDUInt(pdu)
+			// RFC 4188: bridge port indices are 1-based; port 0 is invalid.
+			if p := snmputil.PDUInt(pdu); p > 0 {
+				e.port = p
+			}
 		case colFdbStatus:
 			e.status = snmputil.PDUInt(pdu)
 		}
@@ -249,7 +252,10 @@ func walkQBridgeFdbTable(ctx context.Context, client *gsnmp.GoSNMP, entries map[
 		}
 		switch col {
 		case colQBridgePort:
-			e.port = snmputil.PDUInt(pdu)
+			// RFC 4188: bridge port indices are 1-based; port 0 is invalid.
+			if p := snmputil.PDUInt(pdu); p > 0 {
+				e.port = p
+			}
 		case colQBridgeStatus:
 			e.status = snmputil.PDUInt(pdu)
 		}
