@@ -328,8 +328,10 @@ func lldpPDUs(localPortName string, remoteDeviceName string) []gsnmp.SnmpPDU {
 		{Name: locBase + "2." + portNum, Type: gsnmp.Integer, Value: int(5)},
 		{Name: locBase + "3." + portNum, Type: gsnmp.OctetString, Value: []byte(localPortName)},
 
-		{Name: remBase + "4." + remSuffix, Type: gsnmp.Integer, Value: int(4)},
-		{Name: remBase + "5." + remSuffix, Type: gsnmp.OctetString, Value: []byte{0x00, 0x11, 0x22, 0x33, 0x44, 0x55}},
+		// chassisSubtype=5 (network-address), chassisID=IPv4 127.0.0.1 (IANA family 1 + 4 octets).
+		// Using a network-address chassis ID so the 127.0.0.0/8 scope filter passes.
+		{Name: remBase + "4." + remSuffix, Type: gsnmp.Integer, Value: int(5)},
+		{Name: remBase + "5." + remSuffix, Type: gsnmp.OctetString, Value: []byte{1, 127, 0, 0, 1}},
 		{Name: remBase + "6." + remSuffix, Type: gsnmp.Integer, Value: int(5)},
 		{Name: remBase + "7." + remSuffix, Type: gsnmp.OctetString, Value: []byte(localPortName)},
 		{Name: remBase + "9." + remSuffix, Type: gsnmp.OctetString, Value: []byte(remoteDeviceName)},
