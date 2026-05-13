@@ -321,8 +321,9 @@ func cryptoJitter(max time.Duration) time.Duration {
 }
 
 // post marshals payload to JSON and POSTs it to e.cfg.Endpoint+path.
-// It retries on HTTP 429 and 503 with exponential backoff (up to 3 attempts
-// total). On 429 it honours a Retry-After header (integer seconds, ≤ 10s).
+// It retries on transient network errors and on HTTP 429, 502, 503, and 504
+// with exponential backoff (up to 3 attempts total). On 429 it honours a
+// Retry-After header (integer seconds, ≤ 10s).
 // Returns an error only after all attempts are exhausted.
 func (e *Exporter) post(ctx context.Context, path string, payload any) error {
 	body, err := json.Marshal(payload)
@@ -354,7 +355,8 @@ func (e *Exporter) post(ctx context.Context, path string, payload any) error {
 
 		resp, err := e.client.Do(req)
 		if err != nil {
-			return fmt.Errorf("otlp: post %s: %w", path, err)
+			lastErr = fmt.Errorf("otlp: post %s: %w", path, err)
+			continue
 		}
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
