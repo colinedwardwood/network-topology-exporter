@@ -89,15 +89,17 @@ See [`config/example.yaml`](config/example.yaml) for the full schema. Four opera
 
 Each module is independently enabled and runs within the same cycle. Edges from multiple sources covering the same physical link are reconciled by precedence — the highest-precedence source wins; the rest increment `network_topology_conflict_total` if they disagree.
 
-| Module | Protocol / MIB | Precedence | YAML key | Notes |
-|--------|---------------|------------|----------|-------|
-| LLDP | LLDP-MIB (IEEE 802.1AB) | 10 | `modules.lldp.enabled` | Standard; preferred source when available. |
-| CDP | CISCO-CDP-MIB | 9 | `modules.cdp.enabled` | Cisco-only; lower precedence than LLDP. |
-| OSPF | OSPF-MIB (RFC 1850) | 8 | `modules.ospf.enabled` | |
-| IS-IS | ISIS-MIB (RFC 4444) | 8 | `modules.isis.enabled` | See below. |
-| MPLS-TE | MPLS-TE-STD-MIB (RFC 3812) | 7 | `modules.mpls_te.enabled` | See below. |
-| BGP | BGP4-MIB (RFC 4273) | 6 | `modules.bgp.enabled` | |
-| FDB | BRIDGE-MIB (RFC 4188) | 5 | `modules.fdb.enabled` | Layer-2 only; noisy on large networks. |
+Precedence is encoded as an integer rank where **lower rank = higher priority** (rank 2 beats rank 5; rank 0 is reserved for hub-injected authoritative overrides). When two sources cover the same physical link, the lowest-rank observation wins and any disagreeing observations increment `network_topology_conflict_total`.
+
+| Module | Protocol / MIB | Rank | YAML key | Notes |
+|--------|---------------|------|----------|-------|
+| LLDP | LLDP-MIB (IEEE 802.1AB) | 2 | `modules.lldp.enabled` | Standard; preferred source when available. |
+| CDP | CISCO-CDP-MIB | 3 | `modules.cdp.enabled` | Cisco-only; lower precedence than LLDP. |
+| FDB | BRIDGE-MIB (RFC 4188) | 4 | `modules.fdb.enabled` | Layer-2 only; noisy on large networks. |
+| IS-IS | ISIS-MIB (RFC 4444) | 5 | `modules.isis.enabled` | See below. |
+| OSPF | OSPF-MIB (RFC 4750) | 6 | `modules.ospf.enabled` | |
+| BGP | BGP4-MIB (RFC 4273) | 7 | `modules.bgp.enabled` | |
+| MPLS-TE | MPLS-TE-STD-MIB (RFC 3812) | 8 | `modules.mpls_te.enabled` | See below. |
 
 ### IS-IS (RFC 4444)
 
@@ -136,7 +138,7 @@ output:
 
 | Signal | OTLP path | Content |
 |--------|-----------|---------|
-| Full graph | `POST /v1/metrics` | `network_topology_edge` and `network_topology_device` gauge metrics, one data point per edge/device. Sent every cycle when there are changes, and unconditionally every `heartbeat_cycles` cycles. |
+| Full graph | `POST /v1/metrics` | `network_topology_edge_info` and `network_topology_device_info` gauge metrics, one data point per edge/device. Sent every cycle when there are changes, and unconditionally every `heartbeat_cycles` cycles. Metric names match the Prometheus `/metrics` series. |
 | Change events | `POST /v1/logs` | OTLP log records — severity INFO for added/updated edges, WARN for removed edges. Mirrors the JSON log lines already written to stderr. |
 
 **Heartbeat semantics:** If no topology change is detected, the exporter skips the `/v1/metrics` push to avoid redundant data. Every `heartbeat_cycles` cycles (default: every 10th cycle) the full graph is pushed unconditionally so downstream receivers can detect a stale or silently-dropped connection.
