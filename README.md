@@ -55,7 +55,7 @@ docker run --rm -p 9100:9100 \
 | `network_topology_discovery_module_duration_seconds` | histogram | `module` | Per-module wall time within a cycle. |
 | `network_topology_snmp_walks_total` | counter | `status` (ok\|timeout\|error) | SNMP walk outcomes, aggregated across all devices. |
 | `network_topology_credential_trials_total` | counter | `status` (ok\|failed) | Credential trial attempts under the LD-12 rate limiter. |
-| `network_topology_conflict_total` | counter | `conflict_type` | Source disagreements detected during reconciliation (port_name_mismatch, neighbour_disagreement, direction_asymmetry, documented_vs_observed). |
+| `network_topology_conflict_total` | counter | `conflict_type` | Source disagreements detected during reconciliation. The only `conflict_type` currently emitted is `neighbour_disagreement` (two protocols name different neighbours for the same local port). |
 | `network_topology_federation_spoke_up` | gauge (0/1) | `spoke_id` | Hub mode only. 1 while spoke has pushed within `spoke_timeout`; 0 after eviction. |
 | `network_topology_federation_spoke_last_push_timestamp_seconds` | gauge | `spoke_id` | Hub mode only. Wall-clock time of most recent push from each spoke. |
 | `network_topology_federation_spoke_push_failures_total` | counter | (none) | Spoke mode only. Incremented each time a push exhausts all retries. |

@@ -118,19 +118,11 @@ When cycles take longer than the interval, the exporter falls behind and metrics
 
 **Metric:** `network_topology_conflict_total{conflict_type=...}`
 
-Each `conflict_type` indicates a different class of source disagreement.
+**`neighbour_disagreement`** — the only `conflict_type` currently emitted.
 
-**`port_name_mismatch`**
-CDP and LLDP encode port identifiers differently (e.g., `Gi0/0/1` vs `GigabitEthernet0/0/1`). The exporter detects that two sources describe the same physical link but with different port name formats. This is usually benign. If it is noise, confirm that port name normalisation is applied consistently in config.
+Two discovery sources name different neighbour devices for the same local port (e.g. LLDP reports `core-sw-02` as the neighbour on `Gi0/1` while CDP reports `core-sw-03`). Usually means one source is stale, or the port has changed neighbours during the cycle. Check that LLDP/CDP are both configured correctly on the local device and that the cached neighbour state on each source matches the current cabling.
 
-**`neighbour_disagreement`**
-Device A reports device B as a neighbour, but B does not report A. This typically means LLDP or CDP is disabled on B's interface, or B is outside the polling scope. Check LLDP/CDP configuration on both endpoints.
-
-**`direction_asymmetry`**
-Similar to `neighbour_disagreement` but specific to directed edges. One endpoint claims to be upstream of the other, but the reverse is not reported. Verify LLDP/CDP is active on both interfaces and that both devices are in scope.
-
-**`documented_vs_observed`**
-A statically configured `known_inter_domain_links` entry disagrees with what live discovery finds. Either the static entry is stale (update or remove it), or live discovery is incomplete (check the relevant device's poll status).
+Other categories of disagreement (port-name encoding differences, direction asymmetry, static-vs-observed mismatch) are detected upstream of the conflict counter — port-name encoding differences, for example, are normalised to a canonical form before grouping rather than surfaced as a conflict, to avoid false positives on LAG parallel member links.
 
 ---
 

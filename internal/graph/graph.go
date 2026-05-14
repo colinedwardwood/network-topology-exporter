@@ -25,9 +25,10 @@
 //   - Breitbart et al. — "The NetInventory System", IEEE/ACM ToN 2004.
 //     System paper for the above; documents how conflicting sources are
 //     ranked and how disagreements (ConflictNeighbourDisagreement) are
-//     surfaced rather than silently resolved. The conflict types modelled
-//     here (port_name_mismatch, direction_asymmetry, etc.) map directly to
-//     the disagreement categories described in that paper.
+//     surfaced rather than silently resolved. ConflictNeighbourDisagreement
+//     is currently the only conflict kind emitted; port-name encoding
+//     variants are normalised in NormalizePortName before grouping, so they
+//     do not produce a conflict.
 //     https://dl.acm.org/doi/abs/10.1109/TNET.2004.828963
 //   - prometheus/snmp_exporter (Apache 2.0) — confirms that port name
 //     encoding differences between LLDP and CDP (the LldpPortId subtype

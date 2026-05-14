@@ -16,7 +16,7 @@ All metrics use the `network_` prefix. No metric uses a raw IP address or free-f
 
 | Metric | Type | Labels | Notes |
 |--------|------|--------|-------|
-| `network_topology_conflict_total` | counter | `conflict_type` (port_name_mismatch\|neighbour_disagreement\|direction_asymmetry\|documented_vs_observed) | Source disagreements detected during reconciliation. Resets on restart. A sustained rate may indicate protocol config drift (e.g., CDP and LLDP disagree on port name encoding). |
+| `network_topology_conflict_total` | counter | `conflict_type` (`neighbour_disagreement`) | Source disagreements detected during reconciliation. Resets on restart. Only `neighbour_disagreement` is currently emitted (two protocols name different neighbours for the same local port). A sustained rate may indicate stale LLDP/CDP cache or protocol misconfiguration on the local device. |
 
 ## Graph freshness
 
