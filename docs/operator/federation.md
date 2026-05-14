@@ -117,6 +117,39 @@ The hub's Prometheus metrics are served on the normal listen address (default `:
 
 Firewall: allow spokes to reach the hub on port 9101. The hub does not need outbound connectivity to spokes.
 
+## Spoke push response contract
+
+The hub's `POST /spoke/push` returns one of the following status codes. Tools and dashboards consuming spoke push outcomes should branch on `status` and (for rejected pushes) on the JSON `reason` field, not on free-form message text.
+
+| Status | Meaning | Spoke retry behavior |
+|---|---|---|
+| `204 No Content` | Payload accepted; the spoke's graph is part of active hub state and was published to Prometheus + snapshot. | None — success. |
+| `400 Bad Request` | Malformed payload: JSON parse error, missing required field, invalid `spoke_id` characters/length, `cycle_at` missing or set more than 5 minutes in the future, semantic validation failure (empty device ID, non-UTF-8, duplicate IDs, oversize port name, self-edge). | Fatal — spoke aborts retries; same payload cannot succeed. |
+| `403 Forbidden` | `spoke_id` does not match the presenting mTLS client certificate's `CN`. | Fatal — operator must reconcile `spoke_id` with the cert subject. |
+| `409 Conflict` | Push processed by the transport but **not applied**: a concurrent newer push from any spoke advanced the publish generation past this one. The newer push's data already supersedes this payload. JSON body present (see below); `reason` is `stale_generation`. | Fatal-for-this-cycle — the next discovery cycle produces a newer payload that will not collide. |
+| `413 Payload Too Large` | Either the raw request body exceeded 16 MiB, OR the combined hub graph would exceed `federation.hub.max_graph_edges` / `max_graph_devices`. When rejected for size budget, JSON body present; `reason` is `size_budget_exceeded`. | Fatal-for-this-cycle — retrying the same payload will fail identically. Operator must increase the hub's `max_graph_*` budgets or shrink the spoke's footprint. |
+| `429 Too Many Requests` | Push arrived sooner than `federation.hub.min_push_interval` after this spoke's last accepted push. `Retry-After` header set to seconds. | Retried with the spoke's own exponential backoff (3 attempts, base 1s). |
+| `503 Service Unavailable` | Reserved for transient internal failures the spoke can resolve by retrying (e.g. snapshot back-pressure). No current code path emits this; documented so spokes implement the retry semantics defensively. | Retried with the spoke's own exponential backoff. |
+
+For `409` and `413`, the response is `Content-Type: application/json` with this schema:
+
+```json
+{
+  "status": "rejected",
+  "reason": "size_budget_exceeded",
+  "detail": {
+    "combined_devices": 8000,
+    "combined_edges": 50001,
+    "max_devices": 10000,
+    "max_edges": 50000
+  }
+}
+```
+
+`reason` is a stable enum. Current values: `size_budget_exceeded`, `stale_generation`. New values will only be added in a release that ships corresponding emission code and tests; deprecated values are removed in a major version after a deprecation window.
+
+Spoke-side, the `network_topology_federation_spoke_push_failures_total` counter increments once per Push() call that exhausts all retries (including immediate fatal-for-this-cycle abort). Alert on `rate(network_topology_federation_spoke_push_failures_total[5m]) > 0` to catch persistent rejection.
+
 ### hub with static inter-domain link overrides
 
 When automatic OOS name-matching fails due to inconsistent device names across boundaries, add explicit link tuples:
