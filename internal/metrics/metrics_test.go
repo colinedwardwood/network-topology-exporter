@@ -52,12 +52,12 @@ network_topology_device_uptime_seconds{device_id="dev-1"} 25
 func TestTopologyConflictTotalIsRegistered(t *testing.T) {
 	m := New(false)
 
-	m.TopologyConflictTotal.WithLabelValues("port_name_mismatch").Inc()
+	m.TopologyConflictTotal.WithLabelValues("neighbour_disagreement").Inc()
 
 	const want = `
 # HELP network_topology_conflict_total Source disagreements detected during reconciliation, by conflict type.
 # TYPE network_topology_conflict_total counter
-network_topology_conflict_total{conflict_type="port_name_mismatch"} 1
+network_topology_conflict_total{conflict_type="neighbour_disagreement"} 1
 `
 	if err := testutil.GatherAndCompare(m.Registry(), strings.NewReader(want), "network_topology_conflict_total"); err != nil {
 		t.Fatalf("metric mismatch: %v", err)
