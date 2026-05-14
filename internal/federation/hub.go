@@ -342,10 +342,12 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Graph was rejected (size budget exceeded or CAS lost): roll back the
-	// spoke entry so h.spokes reflects only previously-accepted state, then
-	// return 503 so the spoke knows its data was NOT applied. A 204 here would
-	// silently mislead the spoke into believing the push succeeded.
+	// Graph was rejected: roll back the spoke entry so h.spokes reflects only
+	// previously-accepted state, then return a 4xx that distinguishes the
+	// reason. A 204 here would silently mislead the spoke into believing the
+	// push succeeded. Both codes are 4xx-fatal in the spoke's retry policy so
+	// the spoke does not burn retries on the same payload; the next discovery
+	// cycle will produce fresh data.
 	h.mu.Lock()
 	if hadPrev {
 		h.spokes[payload.SpokeID] = prevEntry
@@ -362,7 +364,45 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 		"max_edges", h.cfg.Hub.MaxGraphEdges,
 		"cycle_at", payload.CycleAt,
 	)
-	http.Error(w, "graph update rejected: "+rejectReason, http.StatusServiceUnavailable)
+	writePushRejection(w, statusForRejectReason(rejectReason), rejectReason, map[string]any{
+		"combined_devices": len(combined.Devices),
+		"combined_edges":   len(combined.Edges),
+		"max_devices":      h.cfg.Hub.MaxGraphDevices,
+		"max_edges":        h.cfg.Hub.MaxGraphEdges,
+	})
+}
+
+// pushRejection is the JSON body returned when a spoke push is accepted by the
+// transport but the resulting graph is not applied to active hub state. reason
+// is a stable machine-parseable code; detail is a free-form map for operator
+// context. Schema: {"status":"rejected","reason":"<code>","detail":{...}}.
+type pushRejection struct {
+	Status string         `json:"status"` // always "rejected"
+	Reason string         `json:"reason"` // one of the rejectReason* constants
+	Detail map[string]any `json:"detail,omitempty"`
+}
+
+// statusForRejectReason maps a reject reason to its HTTP status code. Both
+// codes are 4xx so the spoke's retry policy treats them as fatal-for-this-cycle.
+func statusForRejectReason(reason string) int {
+	switch reason {
+	case rejectReasonSizeBudgetExceeded:
+		return http.StatusRequestEntityTooLarge // 413
+	case rejectReasonStaleGeneration:
+		return http.StatusConflict // 409
+	default:
+		return http.StatusServiceUnavailable // fallback for any future reason
+	}
+}
+
+func writePushRejection(w http.ResponseWriter, code int, reason string, detail map[string]any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(pushRejection{
+		Status: "rejected",
+		Reason: reason,
+		Detail: detail,
+	})
 }
 
 // spokesSnapshot returns a shallow copy of h.spokes. Caller must hold h.mu.

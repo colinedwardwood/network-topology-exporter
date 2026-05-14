@@ -1710,11 +1710,21 @@ func TestHubHandlePushRejectedGraphDoesNotMarkSpokeUp(t *testing.T) {
 
 	h.handlePush(rec, req)
 
-	// handlePush must return 503 when the graph was not applied — a 204 would
-	// silently lie to the spoke that its data was accepted, hiding the
-	// rejection from spoke-side error monitoring.
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503; body: %s", rec.Code, rec.Body.String())
+	// MaxGraphEdges=1 forces the size-budget reject path, which must return
+	// 413 Payload Too Large with a machine-parseable JSON body. A 204 here
+	// would silently lie to the spoke that its data was accepted.
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413; body: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", got)
+	}
+	var rej pushRejection
+	if err := json.Unmarshal(rec.Body.Bytes(), &rej); err != nil {
+		t.Fatalf("response body is not valid JSON: %v; body=%s", err, rec.Body.String())
+	}
+	if rej.Reason != rejectReasonSizeBudgetExceeded {
+		t.Errorf("reject reason = %q, want %q", rej.Reason, rejectReasonSizeBudgetExceeded)
 	}
 
 	// Spoke must NOT be registered in h.spokes.
@@ -1794,8 +1804,8 @@ func TestHubHandlePushRejectedGraphRollsBackPreviousEntry(t *testing.T) {
 
 	h.handlePush(rec, req)
 
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503; body: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413; body: %s", rec.Code, rec.Body.String())
 	}
 
 	// The spoke entry should have been rolled back to the prior payload.
