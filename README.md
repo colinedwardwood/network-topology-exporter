@@ -60,7 +60,7 @@ docker run --rm -p 9100:9100 \
 | `network_topology_federation_spoke_last_push_timestamp_seconds` | gauge | `spoke_id` | Hub mode only. Wall-clock time of most recent push from each spoke. |
 | `network_topology_federation_spoke_push_failures_total` | counter | (none) | Spoke mode only. Incremented each time a push exhausts all retries. |
 | `network_topology_hub_oos_unmatched_total` | gauge | (none) | Hub mode only. OOS neighbour hints that could not be matched to any known device name. |
-| `network_topology_otlp_push_total` | counter | `status` (ok\|error) | Incremented after each OTLP push attempt. Only present when `output.otlp.enabled: true`. |
+| `network_topology_otlp_push_total` | counter | `status` (ok\|error\|dropped) | Incremented after each OTLP push attempt. Only present when `output.otlp.enabled: true`. `dropped` means the per-process push concurrency limit (`maxOTLPPushConcurrency = 4`) was already saturated and this attempt was discarded without contacting the receiver — see troubleshooting §11/§OTLP push saturation. |
 
 Full label reference, cardinality budget, and recommended alerts: [`docs/metrics.md`](docs/metrics.md).
 
@@ -143,7 +143,7 @@ output:
 
 **Heartbeat semantics:** If no topology change is detected, the exporter skips the `/v1/metrics` push to avoid redundant data. Every `heartbeat_cycles` cycles (default: every 10th cycle) the full graph is pushed unconditionally so downstream receivers can detect a stale or silently-dropped connection.
 
-**Self-monitoring metric:** `network_topology_otlp_push_total{status="ok|error"}` — a counter incremented after each push attempt, scraped via the normal `/metrics` endpoint.
+**Self-monitoring metric:** `network_topology_otlp_push_total{status="ok|error|dropped"}` — a counter incremented after each OTLP push attempt, scraped via the normal `/metrics` endpoint. `dropped` indicates the push was discarded because the per-process concurrency limit was saturated; alert on `rate(...{status=~"error|dropped"}[5m]) > 0`.
 
 ### Receiving OTLP in Grafana Alloy
 
