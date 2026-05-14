@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -287,6 +288,29 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 	// contributing zero edges to the topology.
 	h.mu.Lock()
 	prevEntry, hadPrev := h.spokes[payload.SpokeID]
+	// Defense-in-depth rate limit: reject pushes that arrive sooner than
+	// min_push_interval after the previous accepted push from the same
+	// spoke_id. The check runs inside h.mu so two concurrent racing pushes
+	// cannot both pass.
+	if hadPrev && h.cfg.Hub.MinPushInterval > 0 {
+		sinceLast := now.Sub(prevEntry.lastSeen)
+		if sinceLast < h.cfg.Hub.MinPushInterval {
+			h.mu.Unlock()
+			retryAfter := h.cfg.Hub.MinPushInterval - sinceLast
+			retrySecs := int(retryAfter.Seconds())
+			if retrySecs < 1 {
+				retrySecs = 1
+			}
+			w.Header().Set("Retry-After", strconv.Itoa(retrySecs))
+			h.logger.Info("hub: rejecting push within min_push_interval",
+				"spoke_id", payload.SpokeID,
+				"since_last_push", sinceLast,
+				"min_push_interval", h.cfg.Hub.MinPushInterval,
+			)
+			http.Error(w, "push too soon — observe min_push_interval", http.StatusTooManyRequests)
+			return
+		}
+	}
 	h.spokes[payload.SpokeID] = spokeEntry{payload: payload, lastSeen: now}
 	spokes := h.spokesSnapshot()
 	gen := h.publishGen.Add(1)
