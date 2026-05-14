@@ -129,6 +129,9 @@ func run(ctx context.Context, args []string) int {
 		"parallelism", cfg.Discovery.Parallelism,
 		"target_count", len(cfg.Targets),
 	)
+	if cfg.Modules.FDB.Enabled && !cfg.Modules.ARP.Enabled {
+		logger.Warn("FDB is enabled but ARP enrichment is off; DstPort backfill on FDB-only edges will be unavailable. Set modules.arp.enabled: true to re-enable.")
+	}
 
 	m := metrics.New(cfg.Federation.Role == "uncoordinated")
 	m.SnapshotLastWrittenUnix.SetToCurrentTime()
@@ -762,7 +765,7 @@ func runCycle(
 			// fallback for FDB-only edges where LLDP did not provide the
 			// neighbour identity. Failures are non-fatal: LLDP-based
 			// correlation still works without ARP data.
-			if cfg.Modules.ARP.IsEnabled() {
+			if cfg.Modules.ARP.Enabled {
 				arpClient, arpErr := snmpwalk.Open(params)
 				if arpErr != nil {
 					logger.Debug("ARP table walk failed; MAC→IP resolution unavailable for this device",
