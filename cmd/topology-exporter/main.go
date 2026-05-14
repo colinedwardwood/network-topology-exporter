@@ -757,31 +757,36 @@ func runCycle(
 				allOOS = append(allOOS, oos...)
 			}
 
-			// Walk ARP table for MAC→IP resolution. Failures are non-fatal:
-			// LLDP-based correlation still works without ARP data.
-			arpClient, arpErr := snmpwalk.Open(params)
-			if arpErr != nil {
-				logger.Debug("ARP table walk failed; MAC→IP resolution unavailable for this device",
-					"device", dev.ID, "err", arpErr)
-			} else {
-				arpMACToIP, arpErr := snmpwalk.WalkARPTable(devCtx, arpClient)
-				_ = arpClient.Conn.Close()
+			// Walk ARP table for MAC→IP enrichment when modules.arp.enabled
+			// is true (default). The map feeds synthesizeEdges below as a
+			// fallback for FDB-only edges where LLDP did not provide the
+			// neighbour identity. Failures are non-fatal: LLDP-based
+			// correlation still works without ARP data.
+			if cfg.Modules.ARP.IsEnabled() {
+				arpClient, arpErr := snmpwalk.Open(params)
 				if arpErr != nil {
 					logger.Debug("ARP table walk failed; MAC→IP resolution unavailable for this device",
 						"device", dev.ID, "err", arpErr)
 				} else {
-					mu.Lock()
-					for mac, ip := range arpMACToIP {
-						if existing, exists := allARPMACs[mac]; exists {
-							if existing != ip {
-								logger.Debug("arp: MAC seen with conflicting IPs across devices; keeping first",
-									"mac", mac, "kept_ip", existing, "discarded_ip", ip)
+					arpMACToIP, arpErr := snmpwalk.WalkARPTable(devCtx, arpClient)
+					_ = arpClient.Conn.Close()
+					if arpErr != nil {
+						logger.Debug("ARP table walk failed; MAC→IP resolution unavailable for this device",
+							"device", dev.ID, "err", arpErr)
+					} else {
+						mu.Lock()
+						for mac, ip := range arpMACToIP {
+							if existing, exists := allARPMACs[mac]; exists {
+								if existing != ip {
+									logger.Debug("arp: MAC seen with conflicting IPs across devices; keeping first",
+										"mac", mac, "kept_ip", existing, "discarded_ip", ip)
+								}
+								continue
 							}
-							continue
+							allARPMACs[mac] = ip
 						}
-						allARPMACs[mac] = ip
+						mu.Unlock()
 					}
-					mu.Unlock()
 				}
 			}
 
