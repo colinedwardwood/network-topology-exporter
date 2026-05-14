@@ -153,12 +153,22 @@ func (s *Spoke) post(ctx context.Context, body []byte) error {
 	if err != nil {
 		return fmt.Errorf("push to hub: %w", err)
 	}
-	_, _ = io.Copy(io.Discard, resp.Body)
+	// Read up to 4 KiB of body so operators see the hub's reject reason in
+	// error logs. The hub emits JSON for graph-publish rejections and plain
+	// text for other 4xx; both fit comfortably in this budget.
+	const maxBodySnippet = 4 << 10
+	bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodySnippet))
+	_, _ = io.Copy(io.Discard, resp.Body) // drain remainder so the connection can be reused
 	_ = resp.Body.Close()
 	if resp.StatusCode == http.StatusNoContent {
 		return nil
 	}
-	err = fmt.Errorf("hub returned HTTP %d", resp.StatusCode)
+	trimmed := strings.TrimSpace(string(bodySnippet))
+	if trimmed == "" {
+		err = fmt.Errorf("hub returned HTTP %d", resp.StatusCode)
+	} else {
+		err = fmt.Errorf("hub returned HTTP %d: %s", resp.StatusCode, trimmed)
+	}
 	// 4xx errors (except 429 Too Many Requests) are client errors that will
 	// not succeed on retry, so wrap them as fatal to stop the retry loop.
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusTooManyRequests {
