@@ -112,9 +112,9 @@ func TestPushGraphTwoEdgesTwoDevices(t *testing.T) {
 	metrics := drillMetrics(t, gotBody)
 
 	// Verify edge data points.
-	edgePoints, ok := metrics["network_topology_edge"]
+	edgePoints, ok := metrics["network_topology_edge_info"]
 	if !ok {
-		t.Fatal("metric network_topology_edge not found")
+		t.Fatal("metric network_topology_edge_info not found")
 	}
 	if len(edgePoints) != 2 {
 		t.Fatalf("edge data points = %d, want 2", len(edgePoints))
@@ -138,9 +138,9 @@ func TestPushGraphTwoEdgesTwoDevices(t *testing.T) {
 	}
 
 	// Verify device data points.
-	devicePoints, ok := metrics["network_topology_device"]
+	devicePoints, ok := metrics["network_topology_device_info"]
 	if !ok {
-		t.Fatal("metric network_topology_device not found")
+		t.Fatal("metric network_topology_device_info not found")
 	}
 	if len(devicePoints) != 2 {
 		t.Fatalf("device data points = %d, want 2", len(devicePoints))
@@ -460,7 +460,7 @@ func TestPushGraphEdgeMetadata(t *testing.T) {
 	}
 
 	metrics := drillMetrics(t, gotBody)
-	edgePoints, ok := metrics["network_topology_edge"]
+	edgePoints, ok := metrics["network_topology_edge_info"]
 	if !ok || len(edgePoints) != 1 {
 		t.Fatalf("expected 1 edge data point, got %v", edgePoints)
 	}
@@ -625,7 +625,7 @@ func TestPushGraphInvalidUTF8(t *testing.T) {
 
 	metrics := drillMetrics(t, gotBody)
 
-	edgePoints, ok := metrics["network_topology_edge"]
+	edgePoints, ok := metrics["network_topology_edge_info"]
 	if !ok || len(edgePoints) != 1 {
 		t.Fatalf("expected 1 edge data point, got %v", edgePoints)
 	}
@@ -655,7 +655,7 @@ func TestPushGraphInvalidUTF8(t *testing.T) {
 		}
 	}
 
-	devicePoints, ok := metrics["network_topology_device"]
+	devicePoints, ok := metrics["network_topology_device_info"]
 	if !ok || len(devicePoints) != 1 {
 		t.Fatalf("expected 1 device data point, got %v", devicePoints)
 	}
@@ -713,7 +713,7 @@ func TestPostRetriesNetworkError(t *testing.T) {
 
 // TestPushGraphEdgeAttributes verifies that LD-10 reconciliation labels
 // (Direction, Confidence, Adjacency, PrecedenceRank) are serialised as data
-// point attributes on the network_topology_edge metric.
+// point attributes on the network_topology_edge_info metric.
 func TestPushGraphEdgeAttributes(t *testing.T) {
 	var gotBody map[string]any
 
@@ -747,7 +747,7 @@ func TestPushGraphEdgeAttributes(t *testing.T) {
 	}
 
 	metrics := drillMetrics(t, gotBody)
-	edgePoints, ok := metrics["network_topology_edge"]
+	edgePoints, ok := metrics["network_topology_edge_info"]
 	if !ok || len(edgePoints) != 1 {
 		t.Fatalf("expected 1 edge data point, got %v", edgePoints)
 	}
@@ -772,7 +772,7 @@ func TestPushGraphEdgeAttributes(t *testing.T) {
 }
 
 // TestPushGraphDeviceAttributes verifies that Vendor, Model, OSVersion, and
-// Site are serialised as data point attributes on the network_topology_device
+// Site are serialised as data point attributes on the network_topology_device_info
 // metric when non-empty.
 func TestPushGraphDeviceAttributes(t *testing.T) {
 	var gotBody map[string]any
@@ -802,7 +802,7 @@ func TestPushGraphDeviceAttributes(t *testing.T) {
 	}
 
 	metrics := drillMetrics(t, gotBody)
-	devicePoints, ok := metrics["network_topology_device"]
+	devicePoints, ok := metrics["network_topology_device_info"]
 	if !ok || len(devicePoints) != 1 {
 		t.Fatalf("expected 1 device data point, got %v", devicePoints)
 	}
@@ -851,7 +851,7 @@ func TestPushGraphDeviceAttributesOmitEmpty(t *testing.T) {
 	}
 
 	metrics := drillMetrics(t, gotBody)
-	devicePoints, ok := metrics["network_topology_device"]
+	devicePoints, ok := metrics["network_topology_device_info"]
 	if !ok || len(devicePoints) != 1 {
 		t.Fatalf("expected 1 device data point, got %v", devicePoints)
 	}

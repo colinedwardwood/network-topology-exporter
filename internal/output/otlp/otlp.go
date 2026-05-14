@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -35,12 +36,20 @@ type Config struct {
 
 	// Timeout caps each individual POST. Defaults to 10s when zero.
 	Timeout time.Duration
+
+	// InstanceID is the value emitted as the OTLP resource attribute
+	// service.instance.id. When empty, falls back to os.Hostname() — which
+	// is the container ID under Docker/Kubernetes and is therefore not stable
+	// across pod restarts. Federation spoke deployments should pass the
+	// configured spoke_id here so the instance identity is stable.
+	InstanceID string
 }
 
 // Exporter pushes topology data to an OTLP/HTTP endpoint.
 type Exporter struct {
-	cfg    Config
-	client *http.Client
+	cfg        Config
+	client     *http.Client
+	resourceID resource
 }
 
 // New returns an Exporter configured with cfg. A zero Timeout in cfg is
@@ -49,9 +58,26 @@ func New(cfg Config) *Exporter {
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 10 * time.Second
 	}
+	instanceID := cfg.InstanceID
+	if instanceID == "" {
+		hostname, err := os.Hostname()
+		if err != nil {
+			slog.Warn("otlp: os.Hostname() failed; service.instance.id will be empty",
+				"error", err,
+				"recommendation", "set InstanceID explicitly (e.g. federation.spoke.spoke_id)")
+		}
+		instanceID = hostname
+	}
 	return &Exporter{
 		cfg:    cfg,
 		client: &http.Client{Timeout: cfg.Timeout},
+		resourceID: resource{
+			Attributes: []kv{
+				{Key: "service.name", Value: kvValue{StringValue: serviceName}},
+				{Key: "service.version", Value: kvValue{StringValue: version.Version}},
+				{Key: "service.instance.id", Value: kvValue{StringValue: instanceID}},
+			},
+		},
 	}
 }
 
@@ -142,19 +168,6 @@ const (
 	metadataAttrPrefix = "network.topology."
 )
 
-var serviceRes resource
-
-func init() {
-	hostname, _ := os.Hostname()
-	serviceRes = resource{
-		Attributes: []kv{
-			{Key: "service.name", Value: kvValue{StringValue: serviceName}},
-			{Key: "service.version", Value: kvValue{StringValue: version.Version}},
-			{Key: "service.instance.id", Value: kvValue{StringValue: hostname}},
-		},
-	}
-}
-
 // sanitizeUTF8 replaces sequences of invalid UTF-8 bytes with the Unicode
 // replacement character so that JSON serialization never fails on SNMP strings
 // sourced from device sysName/ifDescr which may contain arbitrary bytes.
@@ -222,17 +235,17 @@ func (e *Exporter) PushGraph(ctx context.Context, g discovery.Graph) error {
 		ResourceMetrics: []resourceMetrics{
 			{
 				SchemaUrl: otlpSchemaURL,
-				Resource:  serviceRes,
+				Resource:  e.resourceID,
 				ScopeMetrics: []scopeMetrics{
 					{
 						Scope: scope{Name: scopeName},
 						Metrics: []metric{
 							{
-								Name:  "network_topology_edge",
+								Name:  "network_topology_edge_info",
 								Gauge: gauge{DataPoints: edgePoints},
 							},
 							{
-								Name:  "network_topology_device",
+								Name:  "network_topology_device_info",
 								Gauge: gauge{DataPoints: devicePoints},
 							},
 						},
@@ -307,7 +320,7 @@ func (e *Exporter) PushChanges(ctx context.Context, changes []graph.EdgeChange) 
 		ResourceLogs: []resourceLogs{
 			{
 				SchemaUrl: otlpSchemaURL,
-				Resource:  serviceRes,
+				Resource:  e.resourceID,
 				ScopeLogs: []scopeLogs{
 					{
 						Scope:      scope{Name: scopeName},
