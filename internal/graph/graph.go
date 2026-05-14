@@ -31,9 +31,10 @@
 //     https://dl.acm.org/doi/abs/10.1109/TNET.2004.828963
 //   - prometheus/snmp_exporter (Apache 2.0) — confirms that port name
 //     encoding differences between LLDP and CDP (the LldpPortId subtype
-//     issue in lldp/lldp.go) are a known real-world source of
-//     ConflictPortNameMismatch conflicts that require normalisation before
-//     reconciliation. Source: collector/collector.go combinedTypeMapping.
+//     issue in lldp/lldp.go) are a known real-world source of false
+//     conflicts; NormalizePortName below applies the same canonicalisation
+//     approach before grouping. Source: collector/collector.go
+//     combinedTypeMapping.
 package graph
 
 import (
@@ -68,16 +69,6 @@ type EdgeChange struct {
 type ConflictKind string
 
 const (
-	// ConflictPortNameMismatch — sources agree on the neighbour device but
-	// disagree on the port-name encoding (e.g. CDP says "Eth1/1", LLDP says
-	// "Ethernet1/1").
-	//
-	// TODO: this constant is defined but not currently emitted. The devicePair
-	// check that produced it was removed in LD-XX to prevent false positives on
-	// LAG parallel member links. Re-emit if a dedicated per-protocol port-name
-	// normalisation pass is added upstream of Reconcile.
-	ConflictPortNameMismatch ConflictKind = "port_name_mismatch"
-
 	// ConflictNeighbourDisagreement — sources name different neighbour
 	// devices for the same local port. Most serious case.
 	ConflictNeighbourDisagreement ConflictKind = "neighbour_disagreement"
