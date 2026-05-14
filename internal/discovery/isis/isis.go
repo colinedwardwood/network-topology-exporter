@@ -2,7 +2,12 @@
 //
 // Invariants:
 // - Only adjacency state up(3) emits edges.
-// - adjKey is derived by dropping the IPv4 tail from isisISAdjIPAddr OID suffix.
+// - The isisISAdjIPAddr suffix encodes the address family in two leading octets
+//   (InetAddressType + length, RFC 4444). IPv6 rows (type=2, len=16) are
+//   skipped with an INFO log; IPv4 rows (type=1, len=4) drop the 6-octet tail
+//   to derive adjKey, then look up the adjacency state. IPv6 skips do not
+//   degrade any emitted IPv4 edges — both families are validly observable on
+//   the same device.
 // - adjState decode errors are hard-fail (required signal).
 // - circuit/ifDescr joins are optional; failures degrade SrcPort enrichment.
 package isis
@@ -65,16 +70,9 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 		}
 	}
 
-	edges, oos, sawIPv6, err := walkAdjIPAddrs(ctx, client, localDevice, states, circIfNames, discovery.JoinReasonCodes(degradedReasons), allowedNets)
+	edges, oos, _, err := walkAdjIPAddrs(ctx, client, localDevice, states, circIfNames, discovery.JoinReasonCodes(degradedReasons), allowedNets)
 	if err != nil {
 		return nil, nil, fmt.Errorf("isis adjIPAddr %s: %w", p.IP, err)
-	}
-	if sawIPv6 {
-		degradedReasons = append(degradedReasons, discovery.DegradedReasonUnsupportedIPVersion)
-		updatedReason := discovery.JoinReasonCodes(degradedReasons)
-		for i := range edges {
-			edges[i].Metadata = isisMetadata(updatedReason)
-		}
 	}
 	return edges, oos, nil
 }
@@ -149,7 +147,7 @@ func walkAdjIPAddrs(ctx context.Context, client *gsnmp.GoSNMP, localDevice strin
 			sawIPv6 = true
 			if !loggedIPv6Skip {
 				adjKey := strings.Join(parts[:len(parts)-ipv6TailLen], ".")
-				slog.Debug("isis: IPv6 adjacency skipped (IPv6 not supported)", "device", localDevice, "adj_key", adjKey)
+				slog.Info("isis: IPv6 adjacency skipped (IPv6 edges not yet supported); IPv4 edges on this device are unaffected", "device", localDevice, "adj_key", adjKey)
 				loggedIPv6Skip = true
 			}
 			continue

@@ -3,6 +3,7 @@ package isis
 import (
 	"context"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -634,9 +635,9 @@ func TestWalkFiltersLinkLocalAdjIP(t *testing.T) {
 	}
 }
 
-// Walk: IPv6 adjacency PDU (ipSubType=2, ipLen=16) is skipped, sawIPv6=true propagates
-// DegradedReasonUnsupportedIPVersion onto any emitted IPv4 edges, and an IPv4 peer in
-// the same walk still produces an edge.
+// Walk: IPv6 adjacency PDU (ipSubType=2, ipLen=16) is skipped without
+// affecting valid IPv4 edges on the same device. The IPv4 peer still
+// produces a normal edge with no degraded metadata.
 func TestWalkIPv6AdjacencySkipped(t *testing.T) {
 	// sysInst=0, circIdx=1, adjIdx=1: state up for both adjKeys.
 	const adjKeyIPv4 = "0.1.1"
@@ -668,14 +669,12 @@ func TestWalkIPv6AdjacencySkipped(t *testing.T) {
 	if e.DstDevice != "192.0.2.1" {
 		t.Errorf("DstDevice = %q, want 192.0.2.1", e.DstDevice)
 	}
-	if e.Metadata == nil {
-		t.Fatal("Metadata is nil, want degraded metadata for unsupported IP version")
-	}
-	if e.Metadata[discovery.MetadataKeyDegraded] != "true" {
-		t.Errorf("%s = %q, want true", discovery.MetadataKeyDegraded, e.Metadata[discovery.MetadataKeyDegraded])
-	}
-	if e.Metadata[discovery.MetadataKeyDegradedReason] != discovery.DegradedReasonUnsupportedIPVersion {
-		t.Errorf("%s = %q, want %s", discovery.MetadataKeyDegradedReason, e.Metadata[discovery.MetadataKeyDegradedReason], discovery.DegradedReasonUnsupportedIPVersion)
+	// The IPv4 edge may legitimately carry other degraded reasons (e.g.
+	// missing_srcport_mapping when no circuit table is walked), but it MUST
+	// NOT carry unsupported_ip_version — that signal applies to the skipped
+	// IPv6 row, not to this fully valid IPv4 observation.
+	if reason := e.Metadata[discovery.MetadataKeyDegradedReason]; strings.Contains(reason, discovery.DegradedReasonUnsupportedIPVersion) {
+		t.Errorf("IPv4 edge tainted with %s because of an unrelated IPv6 adjacency on the same device; degraded_reason=%q", discovery.DegradedReasonUnsupportedIPVersion, reason)
 	}
 }
 
