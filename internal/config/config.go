@@ -189,9 +189,30 @@ type ModulesConfig struct {
 	CDP    ModuleToggle `yaml:"cdp"`
 	BGP    ModuleToggle `yaml:"bgp"`
 	OSPF   ModuleToggle `yaml:"ospf"`
-	FDB    FDBConfig    `yaml:"fdb"`
-	ISIS   ModuleToggle `yaml:"isis"`
-	MPLSTE ModuleToggle `yaml:"mpls_te"`
+	// ARP is enrichment, not an edge source — it walks ipNetToMediaTable to
+	// build a MAC→IP map used to backfill DstPorts and stitch FDB MAC entries
+	// to discovered devices. Defaults to enabled because it runs against the
+	// same SNMP credentials as discovery and existing deployments expect it
+	// on. Use ARP.Enabled == nil as the "unset" sentinel; applyDefaults turns
+	// nil into true.
+	ARP    ARPModuleConfig `yaml:"arp"`
+	FDB    FDBConfig       `yaml:"fdb"`
+	ISIS   ModuleToggle    `yaml:"isis"`
+	MPLSTE ModuleToggle    `yaml:"mpls_te"`
+}
+
+// ARPModuleConfig gates the ARP table walk that produces MAC→IP enrichment.
+// Enabled is a pointer so config absence ("modules.arp" not present) is
+// distinguishable from "modules.arp.enabled: false" — applyDefaults turns nil
+// into true to preserve the pre-toggle "always on" behavior.
+type ARPModuleConfig struct {
+	Enabled *bool `yaml:"enabled,omitempty"`
+}
+
+// IsEnabled reports whether the ARP enrichment walk should run. Returns true
+// when Enabled is nil (default) or *Enabled is true.
+func (c ARPModuleConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 // ModuleToggle is the minimum module config: enabled / disabled.
@@ -322,6 +343,10 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Modules.FDB.MaxVlans == 0 {
 		c.Modules.FDB.MaxVlans = 100
+	}
+	if c.Modules.ARP.Enabled == nil {
+		defaultOn := true
+		c.Modules.ARP.Enabled = &defaultOn
 	}
 	if c.Snapshot.Path == "" {
 		c.Snapshot.Path = "/var/lib/network-topology-exporter/snapshot.json"
