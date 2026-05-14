@@ -323,7 +323,7 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 	// actually published; the size-budget guard can reject the graph and return
 	// false, which would otherwise leave firstLive=true with no Topology update.
 	wasFirst := !h.firstLive.Load()
-	published := h.tryPublishMetrics(gen, combined, wasFirst, unmatchedCount)
+	published, rejectReason := h.tryPublishMetrics(gen, combined, wasFirst, unmatchedCount)
 	if published {
 		// Graph was accepted: commit the spoke registration and update liveness metrics.
 		h.m.FederationSpokeUp.WithLabelValues(payload.SpokeID).Set(1)
@@ -332,25 +332,37 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 			h.firstLive.Store(true)
 		}
 		h.writeSnapshotAsync(combined)
-	} else {
-		// Graph was rejected (size budget exceeded or CAS lost): roll back the
-		// spoke entry so h.spokes reflects only previously-accepted state.
-		h.mu.Lock()
-		if hadPrev {
-			h.spokes[payload.SpokeID] = prevEntry
-		} else {
-			delete(h.spokes, payload.SpokeID)
-		}
-		h.mu.Unlock()
+		h.logger.Info("hub: spoke push accepted",
+			"spoke_id", payload.SpokeID,
+			"devices", len(payload.Devices),
+			"edges", len(payload.Edges),
+			"cycle_at", payload.CycleAt,
+		)
+		w.WriteHeader(http.StatusNoContent)
+		return
 	}
 
-	h.logger.Info("hub: spoke push accepted",
+	// Graph was rejected (size budget exceeded or CAS lost): roll back the
+	// spoke entry so h.spokes reflects only previously-accepted state, then
+	// return 503 so the spoke knows its data was NOT applied. A 204 here would
+	// silently mislead the spoke into believing the push succeeded.
+	h.mu.Lock()
+	if hadPrev {
+		h.spokes[payload.SpokeID] = prevEntry
+	} else {
+		delete(h.spokes, payload.SpokeID)
+	}
+	h.mu.Unlock()
+	h.logger.Warn("hub: spoke push rejected — combined graph not applied",
 		"spoke_id", payload.SpokeID,
-		"devices", len(payload.Devices),
-		"edges", len(payload.Edges),
+		"reject_reason", rejectReason,
+		"combined_devices", len(combined.Devices),
+		"combined_edges", len(combined.Edges),
+		"max_devices", h.cfg.Hub.MaxGraphDevices,
+		"max_edges", h.cfg.Hub.MaxGraphEdges,
 		"cycle_at", payload.CycleAt,
 	)
-	w.WriteHeader(http.StatusNoContent)
+	http.Error(w, "graph update rejected: "+rejectReason, http.StatusServiceUnavailable)
 }
 
 // spokesSnapshot returns a shallow copy of h.spokes. Caller must hold h.mu.
@@ -609,7 +621,7 @@ func (h *Hub) evictSilentSpokes() {
 		gen := h.publishGen.Add(1)
 		h.mu.Unlock()
 		combined, unmatchedCount := h.buildCombinedGraph(spokes)
-		if h.tryPublishMetrics(gen, combined, false, unmatchedCount) {
+		if published, _ := h.tryPublishMetrics(gen, combined, false, unmatchedCount); published {
 			h.writeSnapshotAsync(combined)
 		}
 	}
@@ -626,20 +638,27 @@ func (h *Hub) publishMetrics(g discovery.Graph, clearStale bool) {
 	h.m.Topology.Update(g)
 }
 
+// Reason codes returned by tryPublishMetrics when published == false.
+const (
+	rejectReasonStaleGeneration    = "stale_generation"
+	rejectReasonSizeBudgetExceeded = "size_budget_exceeded"
+)
+
 // tryPublishMetrics publishes g only when gen is strictly greater than the last
 // published generation, preventing a slow concurrent goroutine from overwriting
 // a newer combined graph with an older snapshot. It uses a CAS loop so that two
 // concurrent callers with equal gen do not both publish.
 // unmatchedCount is only written to HubOOSUnmatchedTotal when the CAS succeeds,
 // so the metric always reflects the winning build rather than a discarded one.
-// Returns true only when Topology.Update is actually called (i.e. the graph was
-// accepted and published). Returns false when the CAS lost the race or the
-// size-budget guard rejected the graph.
-func (h *Hub) tryPublishMetrics(gen uint64, g discovery.Graph, clearStale bool, unmatchedCount int) bool {
+// Returns (true, "") when Topology.Update is actually called. Returns
+// (false, reason) when the CAS lost the race or the size-budget guard rejected
+// the graph; the reason is a stable string suitable for response bodies and
+// logs.
+func (h *Hub) tryPublishMetrics(gen uint64, g discovery.Graph, clearStale bool, unmatchedCount int) (bool, string) {
 	for {
 		last := h.lastPublishedGen.Load()
 		if gen <= last {
-			return false
+			return false, rejectReasonStaleGeneration
 		}
 		if h.lastPublishedGen.CompareAndSwap(last, gen) {
 			maxEdges := h.cfg.Hub.MaxGraphEdges
@@ -649,14 +668,14 @@ func (h *Hub) tryPublishMetrics(gen uint64, g discovery.Graph, clearStale bool, 
 					"edges", len(g.Edges), "max_edges", maxEdges,
 					"devices", len(g.Devices), "max_devices", maxDevices)
 				h.m.GraphUpdatesRejectedTotal.Inc()
-				return false
+				return false, rejectReasonSizeBudgetExceeded
 			}
 			h.m.HubOOSUnmatchedTotal.Set(float64(unmatchedCount))
 			if clearStale {
 				h.m.GraphStale.Set(0)
 			}
 			h.m.Topology.Update(g)
-			return true
+			return true, ""
 		}
 	}
 }
