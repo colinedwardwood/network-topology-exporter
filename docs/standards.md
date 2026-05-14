@@ -17,7 +17,7 @@
 | **IETF RFC 4444 (IS-IS MIB)** | `isisISAdjTable`, `isisISAdjIPAddrTable`, `isisCircTable` walk | IS-IS adjacency edges at precedence rank 5. Hard-fail on adjState decode errors; optional circuit/ifDescr enrichment. |
 | **IETF RFC 3812 (MPLS-TE MIB)** | `mplsTunnelTable`; operStatus and adminStatus decode | MPLS-TE tunnel edges at precedence rank 8. Hard-fail on operStatus; adminStatus is optional metadata. |
 | **IETF RFC 2863 (IF-MIB)** | `ifDescr` (OID `1.3.6.1.2.1.2.2.1.2`), `ifName` (OID `1.3.6.1.2.1.31.1.1.1.1`) | Interface name resolution used by IS-IS, FDB, and CDP modules to map port indices to human-readable names. |
-| **IETF RFC 1213 (MIB-II)** | `sysName`, `sysDescr`, `sysUpTime`, `sysObjectID` from `system` group; `ipNetToMediaTable` (`ipNetToMediaPhysAddress`) for ARP-based MAC→IP enrichment | Device identity and uptime. `sysName` is the canonical device identifier (normalized lowercase). ARP enrichment is gated by `modules.arp.enabled` (default true) and is *not* an edge source — it backfills MAC→IP mappings for FDB stitching when LLDP/CDP do not name the neighbour. |
+| **IETF RFC 1213 (MIB-II)** | `sysName`, `sysDescr`, `sysUpTime`, `sysObjectID` from `system` group; `ipNetToMediaTable` (`ipNetToMediaPhysAddress`) for ARP-based MAC→IP enrichment | Device identity and uptime. `sysName` is the canonical device identifier (normalized lowercase). ARP enrichment is gated by `modules.arp.enabled` (default false, consistent with every other module toggle) and is *not* an edge source — it backfills MAC→IP mappings for FDB stitching when LLDP/CDP do not name the neighbour. Enable alongside `modules.fdb.enabled: true`; the exporter logs a startup warning if FDB is on without ARP. |
 
 ## Explicitly Not Implemented
 

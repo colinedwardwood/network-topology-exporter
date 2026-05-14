@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Configuration (breaking)
+
+- **D22** — `modules.arp.enabled` is now honored at runtime; the default is **false** to match every other module toggle. Existing deployments that relied on the previous "always on" behavior must set `modules.arp.enabled: true` to keep ARP-based MAC→IP enrichment. ARP enrichment is only useful when `modules.fdb.enabled: true`; the exporter logs a startup warning when FDB is enabled without ARP.
+
 ## v1.2.0 — 2026-05-07
 
 ### Security

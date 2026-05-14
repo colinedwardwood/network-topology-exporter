@@ -59,9 +59,9 @@ modules:
     enabled: false             # RFC 4188 BRIDGE-MIB — noisy without filtering; disabled by default
     # max_vlans: 64            # cap VLAN community-string walks on IOS devices (default 64)
   arp:
-    # enabled: true            # RFC 1213 ipNetToMediaTable; default true. Set false to skip
-    #                          # the per-device ARP walk. ARP is enrichment only (MAC→IP
-    #                          # backfill for FDB stitching), not an edge source.
+    enabled: false             # RFC 1213 ipNetToMediaTable; enrichment only (MAC→IP
+                               # backfill for FDB stitching), not an edge source.
+                               # Only useful when modules.fdb.enabled is also true.
 
 # ─── Credential management ─────────────────────────────────────────────────
 # Named profiles, per-IP/CIDR assignment, ordered fallback, and a global
