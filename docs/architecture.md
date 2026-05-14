@@ -6,7 +6,7 @@
 
 The exporter emits standard signals only. No bespoke control-plane API, no proprietary RPCs. Anything that needs the topology graph queries Prometheus / Mimir; anything that needs a change feed ships the log stream to Loki (via Promtail / Alloy — not via this binary). Discovery is modular: each protocol lives in its own package under `internal/discovery/`, modules emit common `Device` and `Edge` value types, and the exporter coordinates while the metrics layer translates to Prometheus series.
 
-**Output contract:** Prometheus metrics on `/metrics`; structured JSON log lines to stderr. The exporter does not push to external systems. Loki, NetBox, and OTLP trace export are explicitly out of scope — the coupling belongs in the shipping agent, not here.
+**Output contract:** Prometheus metrics on `/metrics` and structured JSON log lines to stderr are the always-on outputs. OTLP push is optional and opt-in via `output.otlp.enabled: true`; when enabled, the exporter additionally pushes the topology graph as OTLP metrics to `/v1/metrics` and topology-change events as OTLP log records to `/v1/logs` on the configured endpoint. The OTLP path is parallel to (not a replacement for) Prometheus scraping. OTLP **trace** export, Loki direct push, and NetBox sync remain explicitly out of scope — those couplings belong in the shipping agent (Promtail, Alloy, Fluentd, custom NetBox integrations), not in this binary.
 
 Two policies are binding on contributors:
 
