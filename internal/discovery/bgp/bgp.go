@@ -2,12 +2,13 @@
 //
 // # Specification sources
 //
-//   - RFC 1657 — Definitions of Managed Objects for the Fourth Version of the
-//     Border Gateway Protocol (BGP4) Using SMIv2. OID base 1.3.6.1.2.1.15.
-//     bgpPeerTable (1.3.6.1.2.1.15.3) contains one row per BGP peer; the
-//     relevant fields are bgpPeerState (.2), bgpPeerRemoteAddr (.7), and
-//     bgpPeerRemoteAs (.9). A peer in state established(6) is an active
-//     adjacency.
+//   - RFC 4273 — Definitions of Managed Objects for BGP-4. OID base
+//     1.3.6.1.2.1.15. bgpPeerTable (1.3.6.1.2.1.15.3) contains one row per BGP
+//     peer; the relevant fields are bgpPeerState (.2), bgpPeerRemoteAddr (.7),
+//     and bgpPeerRemoteAs (.9). A peer in state established(6) is an active
+//     adjacency. RFC 4273 supersedes the 1994 RFC 1657 BGP4-MIB; the table
+//     structure is identical so deployed devices implementing either RFC walk
+//     the same OIDs.
 //
 // # Design references
 //
@@ -31,7 +32,7 @@
 //     does not mean they are physically adjacent. iBGP sessions routinely
 //     span multiple hops through intermediate switches. This module emits
 //     edges with Confidence=low and Adjacency=unknown to reflect this.
-//   - RFC 1657 BGP4-MIB SNMP support is deprecated or incomplete in many
+//   - RFC 4273 BGP4-MIB SNMP support is deprecated or incomplete in many
 //     modern router OS versions (Cisco IOS-XR, Arista EOS, Juniper Junos
 //     post-18.x). SNMP BGP walks may return empty results on modern gear.
 //     Streaming telemetry (gNMI) is the preferred path for BGP adjacency
@@ -43,6 +44,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
 	"time"
 
 	gsnmp "github.com/gosnmp/gosnmp"
@@ -58,17 +60,21 @@ const (
 	precedenceRank = 7
 )
 
-// bgpPeerTable column numbers (RFC 1657 §3.4).
+// bgpPeerTable column numbers (RFC 4273 §3).
 const (
 	colBgpPeerState      = 2
 	colBgpPeerRemoteAddr = 7
+	colBgpPeerRemoteAs   = 9
 )
 
 const bgpStateEstablished = 6
 
+const metaKeyRemoteAs = "bgp.remote_as"
+
 type bgpPeer struct {
 	state    int
 	remoteIP net.IP
+	remoteAs int
 }
 
 // Walk returns BGP-peer edges for the device at p.IP. Only peers in
@@ -116,6 +122,8 @@ func walkBgpPeerTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*bg
 			peer.state = snmputil.PDUInt(pdu)
 		case colBgpPeerRemoteAddr:
 			peer.remoteIP = snmputil.PDUIPv4(pdu)
+		case colBgpPeerRemoteAs:
+			peer.remoteAs = snmputil.PDUInt(pdu)
 		}
 	}
 	return peers, nil
@@ -149,6 +157,10 @@ func buildEdges(localDevice string, peers map[string]*bgpPeer, allowedNets []*ne
 			continue
 		}
 
+		var metadata map[string]string
+		if peer.remoteAs > 0 {
+			metadata = map[string]string{metaKeyRemoteAs: strconv.Itoa(peer.remoteAs)}
+		}
 		edges = append(edges, discovery.Edge{
 			SrcDevice:      localDevice,
 			DstDevice:      peer.remoteIP.String(),
@@ -159,6 +171,7 @@ func buildEdges(localDevice string, peers map[string]*bgpPeer, allowedNets []*ne
 			PrecedenceRank: precedenceRank,
 			LinkKind:       "ip",
 			ObservedAt:     now,
+			Metadata:       metadata,
 		})
 	}
 	return edges, oos
