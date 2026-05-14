@@ -227,8 +227,9 @@ func run(ctx context.Context, args []string) int {
 		var otlpExp *otlp.Exporter
 		if cfg.Output.OTLP.Enabled {
 			otlpExp = otlp.New(otlp.Config{
-				Endpoint: cfg.Output.OTLP.Endpoint,
-				Timeout:  cfg.Output.OTLP.Timeout,
+				Endpoint:   cfg.Output.OTLP.Endpoint,
+				Timeout:    cfg.Output.OTLP.Timeout,
+				InstanceID: cfg.Federation.Spoke.SpokeID, // empty in non-spoke roles → falls back to hostname
 			})
 		}
 
