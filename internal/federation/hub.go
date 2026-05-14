@@ -382,8 +382,13 @@ type pushRejection struct {
 	Detail map[string]any `json:"detail,omitempty"`
 }
 
-// statusForRejectReason maps a reject reason to its HTTP status code. Both
-// codes are 4xx so the spoke's retry policy treats them as fatal-for-this-cycle.
+// statusForRejectReason maps a reject reason to its HTTP status code.
+// 413 and 409 are 4xx so the spoke's retry policy treats them as fatal for
+// this cycle — the next discovery cycle will produce fresh data. 503 is
+// documented in the response contract for transient internal failures; no
+// path currently emits it, but future reject reasons representing "we
+// couldn't apply this right now, try later" (e.g. snapshot back-pressure,
+// downstream sink stall) should map to the default arm here.
 func statusForRejectReason(reason string) int {
 	switch reason {
 	case rejectReasonSizeBudgetExceeded:
@@ -391,7 +396,7 @@ func statusForRejectReason(reason string) int {
 	case rejectReasonStaleGeneration:
 		return http.StatusConflict // 409
 	default:
-		return http.StatusServiceUnavailable // fallback for any future reason
+		return http.StatusServiceUnavailable // 503: documented for transient internal failures
 	}
 }
 
