@@ -189,7 +189,6 @@ type ModulesConfig struct {
 	CDP    ModuleToggle `yaml:"cdp"`
 	BGP    ModuleToggle `yaml:"bgp"`
 	OSPF   ModuleToggle `yaml:"ospf"`
-	ARP    ModuleToggle `yaml:"arp"`
 	FDB    FDBConfig    `yaml:"fdb"`
 	ISIS   ModuleToggle `yaml:"isis"`
 	MPLSTE ModuleToggle `yaml:"mpls_te"`
