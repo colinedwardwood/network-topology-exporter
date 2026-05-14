@@ -96,6 +96,14 @@ type FederationHubConfig struct {
 	// matched. Enable in any federation where device hostnames are not unique
 	// across sites.
 	StrictDeviceNameMatching bool `yaml:"strict_device_name_matching"`
+	// MinPushInterval rejects per-spoke pushes received sooner than this
+	// duration after the previous accepted push from the same spoke_id, with
+	// a 429 Too Many Requests response and a Retry-After header. Defense in
+	// depth on top of mTLS to bound the cost of a misconfigured or malicious
+	// spoke that ignores its own push backoff. 0 (default) disables the
+	// check; set to roughly half the spoke's discovery_interval for a sane
+	// floor. Must be strictly less than spoke_timeout.
+	MinPushInterval time.Duration `yaml:"min_push_interval"`
 }
 
 // FederationSpokeConfig holds the spoke's settings.
@@ -671,6 +679,12 @@ func (c *Config) validateFederation() error {
 		}
 		if c.Federation.Hub.MaxGraphEdges < 0 {
 			return errors.New("federation.hub.max_graph_edges must be >= 0 (0 = unlimited)")
+		}
+		if c.Federation.Hub.MinPushInterval < 0 {
+			return errors.New("federation.hub.min_push_interval must be >= 0 (0 disables the rate limit)")
+		}
+		if c.Federation.Hub.MinPushInterval > 0 && c.Federation.SpokeTimeout > 0 && c.Federation.Hub.MinPushInterval >= c.Federation.SpokeTimeout {
+			return fmt.Errorf("federation.hub.min_push_interval (%s) must be < federation.spoke_timeout (%s) or spokes will be evicted before they can re-push", c.Federation.Hub.MinPushInterval, c.Federation.SpokeTimeout)
 		}
 		// LD-18: spoke_timeout shorter than 2× the discovery interval causes
 		// spokes to be spuriously evicted before they have completed two cycles.
