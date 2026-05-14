@@ -480,10 +480,8 @@ func TestReconcileConflictPortNameMismatch(t *testing.T) {
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 reconciled edge (encoding variants collapse), got %d", len(edges))
 	}
-	for _, c := range conflicts {
-		if c.Kind == ConflictPortNameMismatch {
-			t.Errorf("unexpected PortNameMismatch for mere encoding difference: %+v", c)
-		}
+	if len(conflicts) != 0 {
+		t.Errorf("unexpected conflicts for mere encoding difference: %+v", conflicts)
 	}
 }
 
@@ -638,12 +636,12 @@ func TestReconcilePortNameMismatchFiresForDifferentPorts(t *testing.T) {
 	if len(result) != 2 {
 		t.Errorf("expected 2 reconciled edges (different dst ports = different links), got %d", len(result))
 	}
-	// No PortNameMismatch: the devicePair check has been removed to prevent
-	// false positives on LAG parallel member links.
-	for _, c := range conflicts {
-		if c.Kind == ConflictPortNameMismatch {
-			t.Errorf("unexpected ConflictPortNameMismatch after devicePair detection removal: %+v", c)
-		}
+	// The devicePair check that would have fired here was removed to prevent
+	// false positives on LAG parallel member links. Same neighbour device
+	// on both observations means neither PortNameMismatch nor
+	// NeighbourDisagreement should fire.
+	if len(conflicts) != 0 {
+		t.Errorf("unexpected conflicts after devicePair detection removal: %+v", conflicts)
 	}
 }
 
