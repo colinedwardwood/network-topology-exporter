@@ -1710,10 +1710,11 @@ func TestHubHandlePushRejectedGraphDoesNotMarkSpokeUp(t *testing.T) {
 
 	h.handlePush(rec, req)
 
-	// handlePush should still return 204 — rejection is a hub-internal decision,
-	// not an error the spoke should retry with the same data.
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want 204; body: %s", rec.Code, rec.Body.String())
+	// handlePush must return 503 when the graph was not applied — a 204 would
+	// silently lie to the spoke that its data was accepted, hiding the
+	// rejection from spoke-side error monitoring.
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body: %s", rec.Code, rec.Body.String())
 	}
 
 	// Spoke must NOT be registered in h.spokes.
@@ -1793,8 +1794,8 @@ func TestHubHandlePushRejectedGraphRollsBackPreviousEntry(t *testing.T) {
 
 	h.handlePush(rec, req)
 
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want 204; body: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body: %s", rec.Code, rec.Body.String())
 	}
 
 	// The spoke entry should have been rolled back to the prior payload.
