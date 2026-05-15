@@ -693,9 +693,14 @@ func runCycle(
 			var allEdges []discovery.Edge
 			var allOOS []discovery.OutOfScopeNeighbour
 
-			// Propagate FDB-specific tuning into params. MaxVlans is only
-			// consumed by fdb.Walk; other modules ignore it.
+			// Propagate module-specific tuning into params. MaxVlans is only
+			// consumed by fdb.Walk; Vendor and UseBGPV2MIB are only consumed
+			// by bgp.Walk; other modules ignore them.
 			params.MaxVlans = cfg.Modules.FDB.MaxVlans
+			params.Vendor = dev.Vendor
+			if cfg.Modules.BGP.UseV2MIB != nil {
+				params.UseBGPV2MIB = *cfg.Modules.BGP.UseV2MIB
+			}
 
 			mods := []module{
 				{"lldp", cfg.Modules.LLDP.Enabled, lldp.Walk},

@@ -50,6 +50,18 @@ type Params struct {
 	// MaxVlans caps the number of VLANs walked by the FDB module's
 	// VLAN community-string path. 0 means use the module default (100).
 	MaxVlans int
+
+	// Vendor is the canonical vendor string for the target device (e.g.
+	// "cisco", "juniper", "nokia", "arista"). Populated by the discovery
+	// loop after sys-group resolution, before any per-module walks run.
+	// Empty string means vendor is unknown. Used by modules that dispatch
+	// on vendor-specific MIB tables (e.g. BGP4-V2 fallback).
+	Vendor string
+
+	// UseBGPV2MIB enables the BGP4-V2-MIB / vendor BGP peer-table walkers
+	// that surface IPv6 sessions. When false the BGP module uses only the
+	// RFC 4273 IPv4-only path. Defaults to true via config.applyDefaults.
+	UseBGPV2MIB bool
 }
 
 // System group OIDs fetched as scalars via SNMP GET (RFC 3418).
@@ -189,7 +201,7 @@ func Walk(ctx context.Context, p Params) (*discovery.Device, error) {
 		case dotOIDSysDescr:
 			dev.OSVersion = normalizeSysDescr(PDUString(pdu))
 		case dotOIDSysObjectID:
-			dev.Vendor = vendorFromObjectID(pduOID(pdu))
+			dev.Vendor = VendorFromObjectID(pduOID(pdu))
 		case dotOIDSysUpTime:
 			// sysUpTime wraps to zero after ~497 days; callers cannot distinguish wrap from reboot.
 			if ticks, ok := PDUIntStrict(pdu); ok && ticks >= 0 {
@@ -382,14 +394,15 @@ var enterprisePrefixes = []enterprisePrefix{
 	{prefix: "1.3.6.1.4.1.45.", vendor: "baynetworks"},
 }
 
-// vendorFromObjectID maps the IANA enterprise number prefix of a sysObjectID
+// VendorFromObjectID maps the IANA enterprise number prefix of a sysObjectID
 // to a canonical vendor string. Only the enterprise prefix matters; the
 // remainder encodes model/platform details that belong in a separate
-// lookup if needed.
+// lookup if needed. Exported for modules that dispatch on vendor (e.g. BGP4-V2
+// fallback) and may need to resolve a vendor when Params.Vendor is empty.
 //
 // Source: IANA Enterprise Numbers registry
 // (https://www.iana.org/assignments/enterprise-numbers)
-func vendorFromObjectID(oid string) string {
+func VendorFromObjectID(oid string) string {
 	if oid == "" {
 		return "unknown"
 	}

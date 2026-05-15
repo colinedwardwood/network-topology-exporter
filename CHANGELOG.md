@@ -7,6 +7,10 @@
 - **D22** — `modules.arp.enabled` is now honored at runtime; the default is **false** to match every other module toggle. Existing deployments that relied on the previous "always on" behavior must set `modules.arp.enabled: true` to keep ARP-based MAC→IP enrichment. ARP enrichment is only useful when `modules.fdb.enabled: true`; the exporter logs a startup warning when FDB is enabled without ARP.
 - **D23** — `federation.hub.strict_device_name_matching` now defaults to **true**. Out-of-scope neighbour matching at the hub no longer strips FQDN suffixes by default, preventing silent cross-DC hostname collisions (e.g. `core-sw.dc1` colliding with `core-sw.dc2`). The field is now pointer-typed in Go: an omitted YAML key uses the safe strict default, an explicit `false` is still honoured. Single-site deployments that previously relied on FQDN/short-form reconciliation against the same physical device must add `strict_device_name_matching: false` to keep the pre-v1.3.0 behaviour. Addresses ARCHITECTURAL_REVIEW.md §2.3 recommendation #1.
 
+### Discovery
+
+- **D24** — BGP module now surfaces IPv6 sessions via `bgp4V2PeerTable` (IETF draft form, covers Arista) with fallback to vendor-specific tables: `cbgpPeer2Table` (Cisco), `jnxBgpM2PeerTable` (Juniper), and `tBgpPeerTable` (Nokia SR-OS / Alcatel-Lucent). Walker selection: v2 draft → vendor table → RFC 4273 BGP4-MIB. RFC 4273 remains the final IPv4-only fallback for devices implementing only the original MIB. New kill-switch `modules.bgp.use_v2_mib` (pointer-typed, default **true**) reverts to RFC 4273-only behaviour for operators who hit a vendor regression. Addresses ARCHITECTURAL_REVIEW.md §2.2 (IPv6 visibility gap).
+
 ## v1.2.0 — 2026-05-07
 
 ### Security

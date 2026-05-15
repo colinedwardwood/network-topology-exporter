@@ -80,6 +80,20 @@ type bgpPeer struct {
 // Walk returns BGP-peer edges for the device at p.IP. Only peers in
 // state established(6) produce edges. Peers outside allowedNets go to the
 // OutOfScopeNeighbour slice; pass nil to skip scope enforcement.
+//
+// Walker selection (when p.UseBGPV2MIB is true, which is the default):
+//
+//  1. bgp4V2PeerTable (IETF draft form) — covers Arista natively and any
+//     other vendor that implements the draft. If non-empty, used exclusively.
+//  2. Vendor-specific peer table (Cisco cbgpPeer2Table, Juniper
+//     jnxBgpM2PeerTable, Nokia tBgpPeerTable) selected by p.Vendor. If
+//     non-empty, used exclusively. Surfaces IPv6 sessions that RFC 4273
+//     cannot represent.
+//  3. RFC 4273 bgpPeerTable — final fallback, IPv4-only.
+//
+// When p.UseBGPV2MIB is false, only step 3 runs. This kill-switch exists so
+// operators who hit a vendor regression in the v2 walker can revert to the
+// pre-v1.3.0 IPv4-only behaviour with one config flag.
 func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
 	client, err := snmputil.Open(p)
 	if err != nil {
@@ -87,6 +101,29 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	}
 	defer func() { _ = client.Conn.Close() }()
 
+	if p.UseBGPV2MIB {
+		// Step 1: try the IETF draft form first.
+		edges, oos, ok, err := walkAndBuildV2Edges(ctx, client, localDevice, allowedNets)
+		if err != nil {
+			// A walk error here is logged at debug but doesn't fail the module —
+			// the device may simply not implement the draft. Fall through.
+			slog.Debug("bgp v2: draft walk error, falling back", "target", p.IP, "error", err)
+		} else if ok {
+			return edges, oos, nil
+		}
+
+		// Step 2: try the vendor-specific table.
+		if spec := vendorSpecFor(resolveVendor(ctx, p, client)); spec != nil {
+			edges, oos, ok, err := walkAndBuildVendorEdges(ctx, client, *spec, localDevice, allowedNets)
+			if err != nil {
+				slog.Debug("bgp v2: vendor walk error, falling back", "target", p.IP, "vendor_table", spec.name, "error", err)
+			} else if ok {
+				return edges, oos, nil
+			}
+		}
+	}
+
+	// Step 3 (always-on fallback): RFC 4273 bgpPeerTable.
 	peers, err := walkBgpPeerTable(ctx, client)
 	if err != nil {
 		return nil, nil, fmt.Errorf("bgp peer table %s: %w", p.IP, err)
