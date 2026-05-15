@@ -460,7 +460,7 @@ func TestHubOOSDomainStripProducesEdge(t *testing.T) {
 // default (StrictDeviceNameMatching unset → strict), two physically distinct
 // devices that share a bare hostname across DCs ("core-01.dc1" and "core-01.dc2")
 // are NOT collapsed into one node by OOS matching. This is the bug the default
-// flip exists to prevent: ARCHITECTURAL_REVIEW.md §2.3.
+// flip exists to prevent: docs/audits/2026-05-architectural-review.md §2.3.
 func TestHubOOSStrictDefaultPreventsCrossDCCollision(t *testing.T) {
 	h := newTestHub(nil) // StrictDeviceNameMatching is nil → defaults to strict
 	h.mu.Lock()

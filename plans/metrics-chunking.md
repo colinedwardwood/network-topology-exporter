@@ -1,7 +1,7 @@
 # Plan: `/metrics` Partial Emission / Chunking for Large Topologies
 
 **Status:** Proposed — likely outcome is **wontfix + documented scale ceiling**
-**Author:** ARCHITECTURAL_REVIEW.md remediation
+**Author:** docs/audits/2026-05-architectural-review.md remediation
 **Created:** 2026-05-14
 **Estimate:** 1 day to validate the wontfix path, 3–4 days for the partial implementation if pursued
 **Risk:** Low for wontfix path; medium for implementation (departs from standard Prometheus scrape semantics)

@@ -1,7 +1,7 @@
 # Plan: BGP4-V2-MIB IPv6 Support
 
 **Status:** Proposed
-**Author:** ARCHITECTURAL_REVIEW.md remediation
+**Author:** docs/audits/2026-05-architectural-review.md remediation
 **Created:** 2026-05-14
 **Estimate:** 2–3 engineering days
 **Risk:** Medium — new MIB walker, new SNMP test fixtures, vendor variance
