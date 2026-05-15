@@ -52,7 +52,15 @@ modules:
   cdp:
     enabled: true              # CISCO-CDP-MIB
   bgp:
-    enabled: false             # RFC 1657 BGP4-MIB
+    enabled: false             # RFC 4273 BGP4-MIB (IPv4) + BGP4-V2 / vendor tables (IPv6)
+    # use_v2_mib: true         # default true since v1.3.0. When true, the walker
+    #                          # tries bgp4V2PeerTable (IETF draft form, covers
+    #                          # Arista) and then vendor tables (cbgpPeer2Table on
+    #                          # Cisco, jnxBgpM2PeerTable on Juniper, tBgpPeerTable
+    #                          # on Nokia) before falling back to RFC 4273. This
+    #                          # surfaces IPv6 BGP sessions that RFC 4273 cannot
+    #                          # represent. Set to false to revert to RFC 4273-only
+    #                          # if a vendor regression appears.
   ospf:
     enabled: false             # RFC 4750 OSPF-MIB
   fdb:

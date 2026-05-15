@@ -183,13 +183,23 @@ type FDBConfig struct {
 	MaxVlans int  `yaml:"max_vlans"`
 }
 
+// BGPConfig holds BGP-module-specific tuning. UseV2MIB enables the
+// BGP4-V2-MIB / vendor-specific peer-table walkers that surface IPv6 BGP
+// adjacencies; RFC 4273 BGP4-MIB is IPv4-only. Pointer-typed so an omitted
+// key uses the safe default (true since v1.3.0). Set explicitly to false to
+// fall back to RFC 4273-only behaviour if a vendor regression appears.
+type BGPConfig struct {
+	Enabled  bool  `yaml:"enabled"`
+	UseV2MIB *bool `yaml:"use_v2_mib"`
+}
+
 // ModulesConfig toggles individual discovery modules. Each module's spec
 // citation lives in the corresponding internal/discovery/<name>/<name>.go header.
 type ModulesConfig struct {
 	SNMP   ModuleSNMP   `yaml:"snmp"`
 	LLDP   ModuleToggle `yaml:"lldp"`
 	CDP    ModuleToggle `yaml:"cdp"`
-	BGP    ModuleToggle `yaml:"bgp"`
+	BGP    BGPConfig    `yaml:"bgp"`
 	OSPF   ModuleToggle `yaml:"ospf"`
 	// ARP is enrichment, not an edge source — it walks ipNetToMediaTable to
 	// build a MAC→IP map used to backfill DstPorts on FDB-derived edges
@@ -330,6 +340,10 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Modules.FDB.MaxVlans == 0 {
 		c.Modules.FDB.MaxVlans = 100
+	}
+	if c.Modules.BGP.UseV2MIB == nil {
+		use := true
+		c.Modules.BGP.UseV2MIB = &use
 	}
 	if c.Snapshot.Path == "" {
 		c.Snapshot.Path = "/var/lib/network-topology-exporter/snapshot.json"

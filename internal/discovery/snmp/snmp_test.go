@@ -500,7 +500,7 @@ func TestWalkNormalisesSysName(t *testing.T) {
 	}
 }
 
-// vendorFromObjectID: known enterprise prefixes map to the right vendor.
+// VendorFromObjectID: known enterprise prefixes map to the right vendor.
 func TestVendorFromObjectID(t *testing.T) {
 	cases := []struct {
 		oid    string
@@ -514,8 +514,8 @@ func TestVendorFromObjectID(t *testing.T) {
 		{"", "unknown"},
 	}
 	for _, c := range cases {
-		if got := vendorFromObjectID(c.oid); got != c.vendor {
-			t.Errorf("vendorFromObjectID(%q) = %q, want %q", c.oid, got, c.vendor)
+		if got := VendorFromObjectID(c.oid); got != c.vendor {
+			t.Errorf("VendorFromObjectID(%q) = %q, want %q", c.oid, got, c.vendor)
 		}
 	}
 }
