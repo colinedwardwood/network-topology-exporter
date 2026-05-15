@@ -5,6 +5,7 @@
 ### Configuration (breaking)
 
 - **D22** — `modules.arp.enabled` is now honored at runtime; the default is **false** to match every other module toggle. Existing deployments that relied on the previous "always on" behavior must set `modules.arp.enabled: true` to keep ARP-based MAC→IP enrichment. ARP enrichment is only useful when `modules.fdb.enabled: true`; the exporter logs a startup warning when FDB is enabled without ARP.
+- **D23** — `federation.hub.strict_device_name_matching` now defaults to **true**. Out-of-scope neighbour matching at the hub no longer strips FQDN suffixes by default, preventing silent cross-DC hostname collisions (e.g. `core-sw.dc1` colliding with `core-sw.dc2`). The field is now pointer-typed in Go: an omitted YAML key uses the safe strict default, an explicit `false` is still honoured. Single-site deployments that previously relied on FQDN/short-form reconciliation against the same physical device must add `strict_device_name_matching: false` to keep the pre-v1.3.0 behaviour. Addresses ARCHITECTURAL_REVIEW.md §2.3 recommendation #1.
 
 ## v1.2.0 — 2026-05-07
 

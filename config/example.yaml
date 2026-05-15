@@ -128,10 +128,13 @@ snapshot:
 #     tls_cert:    /etc/topology-exporter/pki/hub.crt
 #     tls_key:     /etc/topology-exporter/pki/hub.key
 #
-#     # Prevent cross-site device name collisions. When true, device names are
-#     # only lowercased for matching (no FQDN suffix stripping). Set this when
-#     # spoke sites use the same short hostnames (e.g. core-sw.dc1 and core-sw.dc2).
-#     # strict_device_name_matching: false
+#     # Cross-site device name handling. When true (default since v1.3.0), device
+#     # names are only lowercased for matching — FQDN suffixes are preserved so
+#     # "core-sw.dc1" and "core-sw.dc2" remain distinct. Set to false ONLY for
+#     # single-site deployments where mixed short/FQDN forms of the same device
+#     # must reconcile (e.g. one spoke reports "core-01" while another reports
+#     # "core-01.internal.corp" for the same physical device).
+#     # strict_device_name_matching: true
 #
 #     # Graph size admission control for the hub's combined graph.
 #     # max_graph_devices: 10000
