@@ -11,6 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/big"
@@ -2010,6 +2011,394 @@ func TestValidateSpokePayloadRejectsEmptyLabelKey(t *testing.T) {
 	err := validateSpokePayload(payload)
 	if err == nil {
 		t.Error("validateSpokePayload() = nil, want error for empty label key")
+	}
+}
+
+// TestValidateSpokePayloadRejectsLabelInjection covers the Prometheus
+// line-protocol injection vectors enumerated in the issue: label keys that
+// violate the Prometheus label-name grammar or use the reserved `__` prefix,
+// and label values that contain control characters which would corrupt
+// /metrics output on every subsequent scrape. mTLS authenticates the spoke
+// identity; this validation is the only barrier against a spoke (compromised
+// or buggy) pushing data that breaks the hub's exposition format.
+//
+// Each rejecting case asserts the typed *validationError surface so callers
+// can route the reject through the structured pushRejection JSON response;
+// the wire-level check that the reason actually reaches the spoke lives in
+// TestHubHandlePushRejectsLabelInjection below.
+func TestValidateSpokePayloadRejectsLabelInjection(t *testing.T) {
+	deviceWithLabel := func(k, v string) discovery.Device {
+		return discovery.Device{
+			ID:     "sw-1",
+			Labels: map[string]string{k: v},
+		}
+	}
+
+	cases := []struct {
+		name       string
+		payload    SpokePayload
+		wantReason string
+	}{
+		{
+			name:       "device label key with newline",
+			payload:    SpokePayload{Devices: []discovery.Device{deviceWithLabel("bad\nkey", "v")}},
+			wantReason: rejectReasonInvalidLabelKey,
+		},
+		{
+			name:       "device label key with control char (tab)",
+			payload:    SpokePayload{Devices: []discovery.Device{deviceWithLabel("bad\tkey", "v")}},
+			wantReason: rejectReasonInvalidLabelKey,
+		},
+		{
+			name:       "device label key with NUL byte",
+			payload:    SpokePayload{Devices: []discovery.Device{deviceWithLabel("bad\x00key", "v")}},
+			wantReason: rejectReasonInvalidLabelKey,
+		},
+		{
+			name:       "device label key reserved double-underscore prefix",
+			payload:    SpokePayload{Devices: []discovery.Device{deviceWithLabel("__name", "v")}},
+			wantReason: rejectReasonInvalidLabelKey,
+		},
+		{
+			name:       "device label key with space",
+			payload:    SpokePayload{Devices: []discovery.Device{deviceWithLabel("bad key", "v")}},
+			wantReason: rejectReasonInvalidLabelKey,
+		},
+		{
+			name:       "device label key with double-quote",
+			payload:    SpokePayload{Devices: []discovery.Device{deviceWithLabel(`bad"key`, "v")}},
+			wantReason: rejectReasonInvalidLabelKey,
+		},
+		{
+			name:       "device label key with colon",
+			payload:    SpokePayload{Devices: []discovery.Device{deviceWithLabel("bad:key", "v")}},
+			wantReason: rejectReasonInvalidLabelKey,
+		},
+		{
+			name:       "device label key starting with digit",
+			payload:    SpokePayload{Devices: []discovery.Device{deviceWithLabel("9bad", "v")}},
+			wantReason: rejectReasonInvalidLabelKey,
+		},
+		{
+			name:       "device label key with hyphen",
+			payload:    SpokePayload{Devices: []discovery.Device{deviceWithLabel("bad-key", "v")}},
+			wantReason: rejectReasonInvalidLabelKey,
+		},
+		{
+			name:       "device label value with newline",
+			payload:    SpokePayload{Devices: []discovery.Device{deviceWithLabel("k", "v\ninjected")}},
+			wantReason: rejectReasonInvalidLabelValue,
+		},
+		{
+			name:       "device label value with NUL byte",
+			payload:    SpokePayload{Devices: []discovery.Device{deviceWithLabel("k", "v\x00injected")}},
+			wantReason: rejectReasonInvalidLabelValue,
+		},
+		{
+			name:       "device label value with carriage return",
+			payload:    SpokePayload{Devices: []discovery.Device{deviceWithLabel("k", "v\rinjected")}},
+			wantReason: rejectReasonInvalidLabelValue,
+		},
+		{
+			name:       "device label value with control char (DEL)",
+			payload:    SpokePayload{Devices: []discovery.Device{deviceWithLabel("k", "v\x7fbad")}},
+			wantReason: rejectReasonInvalidLabelValue,
+		},
+		{
+			name: "device vendor field with newline",
+			payload: SpokePayload{
+				Devices: []discovery.Device{{ID: "sw-1", Vendor: "Cisco\nrogue"}},
+			},
+			wantReason: rejectReasonInvalidLabelValue,
+		},
+		{
+			name: "edge src_port with newline",
+			payload: SpokePayload{
+				Devices: []discovery.Device{{ID: "sw-1"}, {ID: "sw-2"}},
+				Edges: []discovery.Edge{{
+					SrcDevice: "sw-1", SrcPort: "Gi0/1\ninjected",
+					DstDevice: "sw-2", DstPort: "Gi0/2",
+				}},
+			},
+			wantReason: rejectReasonInvalidLabelValue,
+		},
+		{
+			name: "edge dst_port with NUL byte",
+			payload: SpokePayload{
+				Devices: []discovery.Device{{ID: "sw-1"}, {ID: "sw-2"}},
+				Edges: []discovery.Edge{{
+					SrcDevice: "sw-1", SrcPort: "Gi0/1",
+					DstDevice: "sw-2", DstPort: "Gi0/2\x00",
+				}},
+			},
+			wantReason: rejectReasonInvalidLabelValue,
+		},
+		{
+			name: "edge discovery_proto with control char",
+			payload: SpokePayload{
+				Devices: []discovery.Device{{ID: "sw-1"}, {ID: "sw-2"}},
+				Edges: []discovery.Edge{{
+					SrcDevice: "sw-1", SrcPort: "Gi0/1",
+					DstDevice: "sw-2", DstPort: "Gi0/2",
+					DiscoveryProto: "lldp\nfake",
+				}},
+			},
+			wantReason: rejectReasonInvalidLabelValue,
+		},
+		{
+			name: "oos reporting_device with newline",
+			payload: SpokePayload{
+				OutOfScope: []discovery.OutOfScopeNeighbour{{
+					ReportingDevice: "sw-a\ninjected",
+					ReportingPort:   "Gi0/1",
+					NeighbourHint:   "sw-b",
+					Proto:           "lldp",
+				}},
+			},
+			wantReason: rejectReasonInvalidLabelValue,
+		},
+		{
+			name: "oos neighbour_hint with NUL byte",
+			payload: SpokePayload{
+				OutOfScope: []discovery.OutOfScopeNeighbour{{
+					ReportingDevice: "sw-a",
+					ReportingPort:   "Gi0/1",
+					NeighbourHint:   "sw-b\x00",
+					Proto:           "lldp",
+				}},
+			},
+			wantReason: rejectReasonInvalidLabelValue,
+		},
+		{
+			name: "oos proto with newline",
+			payload: SpokePayload{
+				OutOfScope: []discovery.OutOfScopeNeighbour{{
+					ReportingDevice: "sw-a",
+					ReportingPort:   "Gi0/1",
+					NeighbourHint:   "sw-b",
+					Proto:           "lldp\nrogue",
+				}},
+			},
+			wantReason: rejectReasonInvalidLabelValue,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateSpokePayload(tc.payload)
+			if err == nil {
+				t.Fatal("validateSpokePayload() = nil, want validationError")
+			}
+			var verr *validationError
+			if !errors.As(err, &verr) {
+				t.Fatalf("error type = %T, want *validationError: %v", err, err)
+			}
+			if verr.reason != tc.wantReason {
+				t.Errorf("reason = %q, want %q (msg: %s)", verr.reason, tc.wantReason, verr.msg)
+			}
+		})
+	}
+}
+
+// TestValidateSpokePayloadAcceptsValidLabels verifies that the validation
+// hardening did not over-fit: the allowed shape of Prometheus label names
+// (ASCII letter/underscore start, then alnum/underscore) and any UTF-8
+// non-control label value remain accepted. These are the cases an operator
+// will hit in production after enabling per-target enrichment labels.
+func TestValidateSpokePayloadAcceptsValidLabels(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload SpokePayload
+	}{
+		{
+			name: "label key with single underscore prefix",
+			payload: SpokePayload{
+				Devices: []discovery.Device{{
+					ID:     "sw-1",
+					Labels: map[string]string{"_internal": "ok"},
+				}},
+			},
+		},
+		{
+			name: "label key snake_case",
+			payload: SpokePayload{
+				Devices: []discovery.Device{{
+					ID:     "sw-1",
+					Labels: map[string]string{"datacenter_region": "us-east-1"},
+				}},
+			},
+		},
+		{
+			name: "label key with trailing digits",
+			payload: SpokePayload{
+				Devices: []discovery.Device{{
+					ID:     "sw-1",
+					Labels: map[string]string{"tier3": "edge"},
+				}},
+			},
+		},
+		{
+			name: "label value with allowed UTF-8 (non-ASCII, no controls)",
+			payload: SpokePayload{
+				Devices: []discovery.Device{{
+					ID:     "sw-1",
+					Labels: map[string]string{"site": "São Paulo"},
+				}},
+			},
+		},
+		{
+			name: "label value containing quotes and backslashes (escaped at emit time)",
+			payload: SpokePayload{
+				Devices: []discovery.Device{{
+					ID:     "sw-1",
+					Labels: map[string]string{"note": `contains "quotes" and \backslash`},
+				}},
+			},
+		},
+		{
+			name: "valid vendor and site inventory fields",
+			payload: SpokePayload{
+				Devices: []discovery.Device{{
+					ID: "sw-1", Vendor: "Cisco", Model: "Catalyst-9300",
+					OSVersion: "17.6.4", Site: "dc-a",
+				}},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateSpokePayload(tc.payload); err != nil {
+				t.Errorf("validateSpokePayload() = %v, want nil", err)
+			}
+		})
+	}
+}
+
+// TestHubHandlePushRejectsLabelInjection verifies the on-the-wire contract:
+// a payload with an injected label key/value is rejected by handlePush with
+// HTTP 400, Content-Type: application/json, and a body whose `reason` field
+// is the documented enum value. This is the surface spokes branch on; the
+// counter increment is checked here so a regression in the wiring (forgetting
+// to call h.m.GraphUpdatesRejectedTotal.Inc()) is caught.
+func TestHubHandlePushRejectsLabelInjection(t *testing.T) {
+	cases := []struct {
+		name       string
+		payload    SpokePayload
+		wantReason string
+	}{
+		{
+			name: "label key with newline returns invalid_label_key",
+			payload: SpokePayload{
+				SpokeID: "dc-a",
+				CycleAt: time.Now(),
+				Devices: []discovery.Device{{
+					ID:     "sw-1",
+					Labels: map[string]string{"bad\nkey": "v"},
+				}},
+			},
+			wantReason: rejectReasonInvalidLabelKey,
+		},
+		{
+			name: "label key with reserved __ prefix returns invalid_label_key",
+			payload: SpokePayload{
+				SpokeID: "dc-a",
+				CycleAt: time.Now(),
+				Devices: []discovery.Device{{
+					ID:     "sw-1",
+					Labels: map[string]string{"__reserved": "v"},
+				}},
+			},
+			wantReason: rejectReasonInvalidLabelKey,
+		},
+		{
+			name: "label value with NUL returns invalid_label_value",
+			payload: SpokePayload{
+				SpokeID: "dc-a",
+				CycleAt: time.Now(),
+				Devices: []discovery.Device{{
+					ID:     "sw-1",
+					Labels: map[string]string{"k": "v\x00bad"},
+				}},
+			},
+			wantReason: rejectReasonInvalidLabelValue,
+		},
+		{
+			name: "edge port with newline returns invalid_label_value",
+			payload: SpokePayload{
+				SpokeID: "dc-a",
+				CycleAt: time.Now(),
+				Devices: []discovery.Device{{ID: "sw-1"}, {ID: "sw-2"}},
+				Edges: []discovery.Edge{{
+					SrcDevice: "sw-1", SrcPort: "Gi0/1\ninject",
+					DstDevice: "sw-2", DstPort: "Gi0/2",
+				}},
+			},
+			wantReason: rejectReasonInvalidLabelValue,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := metrics.New(false)
+			h := NewHub(config.FederationConfig{SpokeTimeout: time.Minute}, m, nil, "")
+
+			before := testutil.ToFloat64(m.GraphUpdatesRejectedTotal)
+			body, err := json.Marshal(tc.payload)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			h.handlePush(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+				t.Errorf("Content-Type = %q, want application/json", ct)
+			}
+			var resp pushRejection
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode rejection body: %v; raw=%s", err, rec.Body.String())
+			}
+			if resp.Status != "rejected" {
+				t.Errorf("status field = %q, want \"rejected\"", resp.Status)
+			}
+			if resp.Reason != tc.wantReason {
+				t.Errorf("reason = %q, want %q", resp.Reason, tc.wantReason)
+			}
+			if after := testutil.ToFloat64(m.GraphUpdatesRejectedTotal); after != before+1 {
+				t.Errorf("GraphUpdatesRejectedTotal delta = %v, want 1", after-before)
+			}
+		})
+	}
+}
+
+// TestValidateSpokePayloadRejectsEmptyLabelKeyTypedReason confirms that the
+// pre-existing empty-key case (covered by TestValidateSpokePayloadRejectsEmptyLabelKey
+// for the err != nil surface) now carries the structured invalid_label_key
+// reject reason. Belt-and-suspenders: a contract regression would let an
+// empty key escape with a generic 400 and break dashboards that branch on
+// the reason enum.
+func TestValidateSpokePayloadRejectsEmptyLabelKeyTypedReason(t *testing.T) {
+	payload := SpokePayload{
+		Devices: []discovery.Device{{
+			ID:     "sw-1",
+			Labels: map[string]string{"": "value"},
+		}},
+	}
+	err := validateSpokePayload(payload)
+	if err == nil {
+		t.Fatal("validateSpokePayload() = nil, want validationError for empty label key")
+	}
+	var verr *validationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("error type = %T, want *validationError", err)
+	}
+	if verr.reason != rejectReasonInvalidLabelKey {
+		t.Errorf("reason = %q, want %q", verr.reason, rejectReasonInvalidLabelKey)
 	}
 }
 

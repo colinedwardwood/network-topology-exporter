@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -150,9 +151,90 @@ func (h *Hub) Serve(ctx context.Context) error {
 	return nil
 }
 
+// labelKeyPattern is the canonical Prometheus / OpenMetrics label-name shape:
+// an ASCII letter or underscore followed by any number of ASCII letters,
+// digits, or underscores. Names starting with `__` are reserved by Prometheus
+// and rejected separately below. Compiled once at package init.
+var labelKeyPattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+// validationError wraps a validateSpokePayload failure with a machine-parseable
+// reject reason. Handlers unwrap this to route the reject through the
+// structured pushRejection JSON response so spokes (and dashboards) can branch
+// on reason rather than parsing free-form message text. msg is the
+// human-readable detail logged and included in the rejection detail map.
+type validationError struct {
+	reason string
+	msg    string
+}
+
+func (e *validationError) Error() string { return e.msg }
+
+func newValidationError(reason, format string, args ...any) *validationError {
+	return &validationError{reason: reason, msg: fmt.Sprintf(format, args...)}
+}
+
+// validateLabelKey enforces the Prometheus label-name grammar plus the
+// reserved-namespace rule. A malformed key would break /metrics line protocol
+// on every subsequent scrape — the hub is the only enforcement point because
+// mTLS authenticates WHO can push, not WHAT they push.
+func validateLabelKey(k string) error {
+	if k == "" {
+		return newValidationError(rejectReasonInvalidLabelKey, "label key must not be empty")
+	}
+	if strings.HasPrefix(k, "__") {
+		return newValidationError(rejectReasonInvalidLabelKey,
+			"label key %q starts with reserved prefix \"__\"", k)
+	}
+	if !labelKeyPattern.MatchString(k) {
+		return newValidationError(rejectReasonInvalidLabelKey,
+			"label key %q does not match %s", k, labelKeyPattern.String())
+	}
+	return nil
+}
+
+// validateLabelValue rejects values containing characters that corrupt the
+// OpenMetrics exposition line protocol (NUL, newline, carriage return) or
+// other control characters that pass through Prometheus client_golang's
+// escaping but render label-based dashboards unreadable. Non-control UTF-8
+// (including quotes and backslashes — which the client library escapes
+// correctly on emission) is allowed. The caller has already checked that the
+// string is valid UTF-8 and within length bounds.
+func validateLabelValue(v string) error {
+	for _, r := range v {
+		if r == 0x00 || r == '\n' || r == '\r' {
+			return newValidationError(rejectReasonInvalidLabelValue,
+				"label value contains forbidden control char %#U", r)
+		}
+		// Reject all C0 controls (0x00..0x1F) and DEL (0x7F). The explicit
+		// cases above are listed first so error messages point at the most
+		// common injection vectors with their familiar names.
+		if r < 0x20 || r == 0x7F {
+			return newValidationError(rejectReasonInvalidLabelValue,
+				"label value contains forbidden control char %#U", r)
+		}
+	}
+	return nil
+}
+
+// validateMetricLabelString validates a string that becomes a Prometheus
+// label *value* (not key) on a metric with a static label name. Currently
+// applies to spoke-supplied edge port/device names and OOS-neighbour fields.
+// Same rules as validateLabelValue plus a length cap is enforced by the
+// caller upstream.
+func validateMetricLabelString(s string) error {
+	return validateLabelValue(s)
+}
+
 // validateSpokePayload checks semantic invariants that the JSON decoder and size
 // guards cannot catch: empty/duplicate/overlong/non-UTF-8 device IDs, required
-// edge fields, self-edges, and overlong/non-UTF-8 port names.
+// edge fields, self-edges, overlong/non-UTF-8 port names, and Prometheus
+// line-protocol safety for every spoke-supplied string that flows into a
+// metric label name or value.
+//
+// Returns a *validationError when the failure has a stable reject-reason code
+// (e.g. invalid_label_key, invalid_label_value) so the caller can route it
+// through the structured pushRejection JSON response. Returns a plain error
+// for legacy semantic failures that map to a generic 400.
 func validateSpokePayload(p SpokePayload) error {
 	seen := make(map[string]bool, len(p.Devices))
 	for i, d := range p.Devices {
@@ -165,13 +247,42 @@ func validateSpokePayload(p SpokePayload) error {
 		if !utf8.ValidString(d.ID) {
 			return fmt.Errorf("device[%d]: device_id is not valid UTF-8", i)
 		}
+		if err := validateMetricLabelString(d.ID); err != nil {
+			return newValidationError(rejectReasonInvalidLabelValue,
+				"device[%d]: device_id: %s", i, err.Error())
+		}
 		if seen[d.ID] {
 			return fmt.Errorf("device[%d]: duplicate device_id %q", i, d.ID)
 		}
 		seen[d.ID] = true
-		for k := range d.Labels {
-			if k == "" {
-				return fmt.Errorf("devices[%d]: label key must not be empty", i)
+		// Validate inventory string fields that flow into device_info labels
+		// (vendor, model, os_version, site). The label *names* are static so
+		// only the values need protocol-safety checks.
+		for _, f := range []struct{ name, val string }{
+			{"vendor", d.Vendor}, {"model", d.Model},
+			{"os_version", d.OSVersion}, {"site", d.Site},
+		} {
+			if !utf8.ValidString(f.val) {
+				return newValidationError(rejectReasonInvalidLabelValue,
+					"device[%d]: %s is not valid UTF-8", i, f.name)
+			}
+			if err := validateMetricLabelString(f.val); err != nil {
+				return newValidationError(rejectReasonInvalidLabelValue,
+					"device[%d]: %s: %s", i, f.name, err.Error())
+			}
+		}
+		for k, v := range d.Labels {
+			if err := validateLabelKey(k); err != nil {
+				return newValidationError(rejectReasonInvalidLabelKey,
+					"device[%d]: %s", i, err.Error())
+			}
+			if !utf8.ValidString(v) {
+				return newValidationError(rejectReasonInvalidLabelValue,
+					"device[%d]: label %q value is not valid UTF-8", i, k)
+			}
+			if err := validateLabelValue(v); err != nil {
+				return newValidationError(rejectReasonInvalidLabelValue,
+					"device[%d]: label %q: %s", i, k, err.Error())
 			}
 		}
 	}
@@ -185,12 +296,37 @@ func validateSpokePayload(p SpokePayload) error {
 		for _, f := range []struct{ name, val string }{
 			{"src_device", e.SrcDevice}, {"src_port", e.SrcPort},
 			{"dst_device", e.DstDevice}, {"dst_port", e.DstPort},
+			{"discovery_proto", e.DiscoveryProto}, {"link_kind", e.LinkKind},
 		} {
 			if len(f.val) > maxPortNameBytes {
 				return fmt.Errorf("edge[%d]: %s exceeds %d bytes", i, f.name, maxPortNameBytes)
 			}
 			if !utf8.ValidString(f.val) {
 				return fmt.Errorf("edge[%d]: %s is not valid UTF-8", i, f.name)
+			}
+			if err := validateMetricLabelString(f.val); err != nil {
+				return newValidationError(rejectReasonInvalidLabelValue,
+					"edge[%d]: %s: %s", i, f.name, err.Error())
+			}
+		}
+	}
+	for i, n := range p.OutOfScope {
+		for _, f := range []struct{ name, val string }{
+			{"reporting_device", n.ReportingDevice},
+			{"reporting_port", n.ReportingPort},
+			{"neighbour_hint", n.NeighbourHint},
+			{"proto", n.Proto},
+		} {
+			if len(f.val) > maxPortNameBytes {
+				return fmt.Errorf("out_of_scope[%d]: %s exceeds %d bytes", i, f.name, maxPortNameBytes)
+			}
+			if !utf8.ValidString(f.val) {
+				return newValidationError(rejectReasonInvalidLabelValue,
+					"out_of_scope[%d]: %s is not valid UTF-8", i, f.name)
+			}
+			if err := validateMetricLabelString(f.val); err != nil {
+				return newValidationError(rejectReasonInvalidLabelValue,
+					"out_of_scope[%d]: %s: %s", i, f.name, err.Error())
 			}
 		}
 	}
@@ -223,6 +359,19 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 	if err := validateSpokePayload(payload); err != nil {
 		h.logger.Warn("hub: spoke payload failed semantic validation",
 			"spoke_id", payload.SpokeID, "error", err)
+		// GraphUpdatesRejectedTotal is a flat counter (not partitioned by
+		// reason); operators correlate the counter increment with the warn
+		// log line above to attribute rejects to label-injection attempts.
+		// See issue tracker for "partition GraphUpdatesRejectedTotal by reason".
+		h.m.GraphUpdatesRejectedTotal.Inc()
+		var verr *validationError
+		if errors.As(err, &verr) {
+			// Structured reject: spokes branch on the reason enum, not text.
+			writePushRejection(w, http.StatusBadRequest, verr.reason, map[string]any{
+				"message": verr.msg,
+			})
+			return
+		}
 		http.Error(w, "invalid payload: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -395,6 +544,8 @@ func statusForRejectReason(reason string) int {
 		return http.StatusRequestEntityTooLarge // 413
 	case rejectReasonStaleGeneration:
 		return http.StatusConflict // 409
+	case rejectReasonInvalidLabelKey, rejectReasonInvalidLabelValue:
+		return http.StatusBadRequest // 400: fatal — same payload will fail identically
 	default:
 		return http.StatusServiceUnavailable // 503: documented for transient internal failures
 	}
@@ -683,10 +834,24 @@ func (h *Hub) publishMetrics(g discovery.Graph, clearStale bool) {
 	h.m.Topology.Update(g)
 }
 
-// Reason codes returned by tryPublishMetrics when published == false.
+// Reject reason enum. Two flavours share this namespace:
+//
+//   - Post-transport-accept rejects emitted by tryPublishMetrics
+//     (stale_generation, size_budget_exceeded) — the payload was syntactically
+//     valid but the resulting combined graph could not be applied.
+//   - Pre-publish validation rejects emitted by validateSpokePayload
+//     (invalid_label_key, invalid_label_value) — the payload contained data
+//     that would corrupt /metrics line protocol if accepted. These are the
+//     hub's defense against a spoke (legitimate or compromised) injecting
+//     newlines/quotes/reserved names that mTLS cannot prevent.
+//
+// New values are added only in a release that ships emission code + tests;
+// see docs/operator/federation.md "Spoke push response contract".
 const (
 	rejectReasonStaleGeneration    = "stale_generation"
 	rejectReasonSizeBudgetExceeded = "size_budget_exceeded"
+	rejectReasonInvalidLabelKey    = "invalid_label_key"
+	rejectReasonInvalidLabelValue  = "invalid_label_value"
 )
 
 // tryPublishMetrics publishes g only when gen is strictly greater than the last
