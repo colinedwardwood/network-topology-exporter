@@ -1502,9 +1502,9 @@ func TestRunSnapshotWriterTimeoutContinues(t *testing.T) {
 	// data race between the stalled goroutine and the second goroutine spawned after
 	// the timeout fires.
 	block := make(chan struct{})
-	started := make(chan struct{}, 1) // first write signals it has started
+	started := make(chan struct{}, 1)     // first write signals it has started
 	firstWriteDone := make(chan struct{}) // closed when the first (stalled) write completes
-	second := make(chan struct{}, 1)  // second write signals completion
+	second := make(chan struct{}, 1)      // second write signals completion
 	firstDone := false
 
 	var mu sync.Mutex
@@ -1521,7 +1521,7 @@ func TestRunSnapshotWriterTimeoutContinues(t *testing.T) {
 			case started <- struct{}{}:
 			default:
 			}
-			<-block // stall until the test unblocks us
+			<-block               // stall until the test unblocks us
 			close(firstWriteDone) // signal that the stalled write has completed
 			return nil
 		}
@@ -1801,7 +1801,7 @@ func TestHubHandlePushRejectedGraphRollsBackPreviousEntry(t *testing.T) {
 	h := NewHub(
 		config.FederationConfig{
 			SpokeTimeout: 5 * time.Minute,
-			Hub: config.FederationHubConfig{MaxGraphEdges: 1},
+			Hub:          config.FederationHubConfig{MaxGraphEdges: 1},
 		},
 		m, nil, "",
 	)

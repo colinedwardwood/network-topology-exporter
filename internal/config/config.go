@@ -196,11 +196,11 @@ type BGPConfig struct {
 // ModulesConfig toggles individual discovery modules. Each module's spec
 // citation lives in the corresponding internal/discovery/<name>/<name>.go header.
 type ModulesConfig struct {
-	SNMP   ModuleSNMP   `yaml:"snmp"`
-	LLDP   ModuleToggle `yaml:"lldp"`
-	CDP    ModuleToggle `yaml:"cdp"`
-	BGP    BGPConfig    `yaml:"bgp"`
-	OSPF   ModuleToggle `yaml:"ospf"`
+	SNMP ModuleSNMP   `yaml:"snmp"`
+	LLDP ModuleToggle `yaml:"lldp"`
+	CDP  ModuleToggle `yaml:"cdp"`
+	BGP  BGPConfig    `yaml:"bgp"`
+	OSPF ModuleToggle `yaml:"ospf"`
 	// ARP is enrichment, not an edge source — it walks ipNetToMediaTable to
 	// build a MAC→IP map used to backfill DstPorts on FDB-derived edges
 	// when LLDP/CDP do not name the neighbour. Defaults to disabled, consistent

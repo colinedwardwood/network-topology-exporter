@@ -399,10 +399,10 @@ func (e *Exporter) post(ctx context.Context, path string, payload any) error {
 
 		// Only retry on transient errors: 429, 502, 503, 504.
 		switch resp.StatusCode {
-		case http.StatusTooManyRequests,    // 429
-			http.StatusBadGateway,          // 502
-			http.StatusServiceUnavailable,  // 503
-			http.StatusGatewayTimeout:      // 504
+		case http.StatusTooManyRequests, // 429
+			http.StatusBadGateway,         // 502
+			http.StatusServiceUnavailable, // 503
+			http.StatusGatewayTimeout:     // 504
 			// retryable — fall through to retry loop
 		default:
 			return lastErr

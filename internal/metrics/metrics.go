@@ -68,7 +68,7 @@ type Metrics struct {
 
 	// Scrape-time SLO signals — updated by TopologyCollector on every scrape.
 	TopologyLastScrapeDurationSeconds prometheus.Gauge
-	TopologyLastScrapeSamplesTotal     prometheus.Gauge
+	TopologyLastScrapeSamplesTotal    prometheus.Gauge
 
 	// Scrape-time scale signals (LD-XX scale-ceiling instrumentation). The
 	// gauges above carry only the last value; these histograms surface the

@@ -1342,7 +1342,7 @@ func TestNormaliseNameRuneBoundary(t *testing.T) {
 	// "é" in UTF-8 is 0xC3 0xA9 — 2 bytes; "€" is 0xE2 0x82 0xAC — 3 bytes.
 	// Build a string of 254 ASCII 'a' bytes followed by the 3-byte euro sign.
 	// Total = 257 bytes. Byte index 255 is 0x82 (continuation byte of '€').
-	threeByteRune := "€" // U+20AC, encoded as 0xE2 0x82 0xAC
+	threeByteRune := "€"                               // U+20AC, encoded as 0xE2 0x82 0xAC
 	input1 := strings.Repeat("a", 254) + threeByteRune // 254 + 3 = 257 bytes
 	got1 := NormaliseName(input1)
 	if len(got1) != 254 {
