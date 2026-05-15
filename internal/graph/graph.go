@@ -370,8 +370,20 @@ var portPrefixes = []struct{ long, short string }{
 // is case-insensitive against the prefix table; the suffix (slot/module/port
 // numbers) is preserved verbatim from the input.
 //
-// Ports without a known prefix are returned unchanged, so Junos ge-0/0/0
-// style names pass through without modification.
+// Ports without a known prefix are returned unchanged. The prefix table
+// targets vendors that emit a long form needing collapse — primarily Cisco
+// IOS/IOS-XE. Vendors whose native interface names are already canonical
+// short forms pass through untouched, which is correct behavior, not a gap:
+//
+//   - Juniper Junos: ge-0/0/0, xe-1/0/1, et-2/0/0, ae0
+//   - Nokia SR-OS:   1/1/1, lag-1
+//   - Arista EOS:    Et1/1 (and Ethernet-prefixed forms via the table)
+//   - Cisco NX-OS:   Eth1/1, mgmt0
+//   - Extreme EXOS:  1, 1:1
+//   - Aruba/HPE:     1/1/1, A1, Trk1
+//
+// If a future vendor emits a long form that needs collapsing, add it to
+// portPrefixes above (longest-first to avoid partial matches).
 func NormalizePortName(name string) string {
 	// Strip control characters (mirrors NormaliseName in pdu.go). Some devices
 	// embed \r, \x01, or other control chars in port name responses; leaving them
