@@ -35,11 +35,11 @@ import (
 // Column numbers refer to the position under the table's row OID (i.e. the
 // suffix after .<root>.1.).
 type vendorTableSpec struct {
-	name           string
-	root           string // table root OID
-	colState       int
-	colRemoteAddr  int
-	colRemoteAs    int
+	name          string
+	root          string // table root OID
+	colState      int
+	colRemoteAddr int
+	colRemoteAs   int
 }
 
 // Vendor table specifications. Column numbers verified against each vendor's
@@ -65,9 +65,9 @@ var (
 	nokiaTBgpPeerSpec = vendorTableSpec{
 		name:          "nokia-tBgpPeerTable",
 		root:          "1.3.6.1.4.1.6527.3.1.2.13.2",
-		colState:      3,  // tBgpPeerOperState
-		colRemoteAddr: 6,  // tBgpPeerRemoteAddress
-		colRemoteAs:   7,  // tBgpPeerRemoteAS
+		colState:      3, // tBgpPeerOperState
+		colRemoteAddr: 6, // tBgpPeerRemoteAddress
+		colRemoteAs:   7, // tBgpPeerRemoteAS
 	}
 )
 

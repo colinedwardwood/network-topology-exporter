@@ -47,12 +47,12 @@ const (
 	oidBgp4V2PeerTable = "1.3.6.1.3.5.1.1.2"
 
 	// bgp4V2PeerTable columns, draft §6.
-	colBgp4V2PeerState           = 13 // bgp4V2PeerState — same semantics as RFC 4273 (established=6)
-	colBgp4V2PeerRemoteAs        = 11
-	colBgp4V2PeerRemoteAddrType  = 8
-	colBgp4V2PeerRemoteAddr      = 9
-	colBgp4V2PeerLocalAddrType   = 5
-	colBgp4V2PeerLocalAddr       = 6
+	colBgp4V2PeerState          = 13 // bgp4V2PeerState — same semantics as RFC 4273 (established=6)
+	colBgp4V2PeerRemoteAs       = 11
+	colBgp4V2PeerRemoteAddrType = 8
+	colBgp4V2PeerRemoteAddr     = 9
+	colBgp4V2PeerLocalAddrType  = 5
+	colBgp4V2PeerLocalAddr      = 6
 )
 
 // InetAddressType values, RFC 4001 §3.
@@ -135,7 +135,9 @@ func walkBGP4V2PeerTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]
 
 // decodeBgp4V2Index parses a bgp4V2PeerTable index suffix.
 // Format: peerInstance . localAddrType . localAddrLen . localAddr... .
-//         remoteAddrType . remoteAddrLen . remoteAddr...
+//
+//	remoteAddrType . remoteAddrLen . remoteAddr...
+//
 // Each numeric component is dot-separated. localAddr / remoteAddr expand to
 // addrLen dot-separated bytes.
 //

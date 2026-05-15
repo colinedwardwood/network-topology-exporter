@@ -73,9 +73,9 @@ func TestDecodeBgp4V2IndexRejectsMalformed(t *testing.T) {
 		{"empty", ""},
 		{"too_short", "0.1.4.192"},
 		{"v4_length_mismatch", "0.1.6.192.0.2.1.0.0.1.4.192.0.2.2"}, // localAddrLen=6 for v4
-		{"unknown_family", "0.99.4.192.0.2.1.1.4.192.0.2.2"},       // addrType 99
-		{"trailing_junk", "0.1.4.192.0.2.1.1.4.192.0.2.2.99"},      // extra byte
-		{"byte_out_of_range", "0.1.4.999.0.2.1.1.4.192.0.2.2"},     // 999 > 255
+		{"unknown_family", "0.99.4.192.0.2.1.1.4.192.0.2.2"},        // addrType 99
+		{"trailing_junk", "0.1.4.192.0.2.1.1.4.192.0.2.2.99"},       // extra byte
+		{"byte_out_of_range", "0.1.4.999.0.2.1.1.4.192.0.2.2"},      // 999 > 255
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -259,13 +259,15 @@ func TestBuildV2EdgesSkipsNonEstablished(t *testing.T) {
 // bgp4V2PeerTable.
 //
 // Index: peerInstance=0, localAddrType=2 (ipv6), localAddrLen=16,
-//        localAddr=2001:db8::1 (16 bytes), remoteAddrType=2, remoteAddrLen=16,
-//        remoteAddr=2001:db8::2 (16 bytes)
+//
+//	localAddr=2001:db8::1 (16 bytes), remoteAddrType=2, remoteAddrLen=16,
+//	remoteAddr=2001:db8::2 (16 bytes)
 //
 // Columns:
-//   13 (state) = 6 (established)
-//   8  (remoteAddrType) = 2 (ipv6)
-//   9  (remoteAddr) = 2001:db8::2 (as InetAddress OCTET STRING)
+//
+//	13 (state) = 6 (established)
+//	8  (remoteAddrType) = 2 (ipv6)
+//	9  (remoteAddr) = 2001:db8::2 (as InetAddress OCTET STRING)
 func buildV2IPv6PeerPDUs() []gsnmp.SnmpPDU {
 	const base = ".1.3.6.1.3.5.1.1.2.1."
 	const idx = "0." +
@@ -301,10 +303,10 @@ func buildCiscoCbgpPeer2PDUs() []gsnmp.SnmpPDU {
 // splitOIDParts so the decoder's error path stays covered.
 func TestSplitOIDPartsErrors(t *testing.T) {
 	cases := []string{
-		"1..2",   // empty component
-		"1.2.x",  // non-numeric
-		".1.2",   // leading dot is empty component
-		"1.2.",   // trailing dot is empty component
+		"1..2",  // empty component
+		"1.2.x", // non-numeric
+		".1.2",  // leading dot is empty component
+		"1.2.",  // trailing dot is empty component
 	}
 	for _, c := range cases {
 		if _, err := splitOIDParts(c); err == nil {

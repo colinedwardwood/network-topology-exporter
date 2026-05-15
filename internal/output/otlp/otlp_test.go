@@ -598,8 +598,8 @@ func TestPushGraphInvalidUTF8(t *testing.T) {
 
 	// Embed invalid UTF-8 bytes directly in the string fields.
 	// 0xff and 0xfe are never valid in UTF-8; they should be replaced with "".
-	badSrc := "sw-\xffa"        // invalid byte mid-string
-	badDst := "\xfe\xffsw-b"    // invalid bytes at start
+	badSrc := "sw-\xffa"         // invalid byte mid-string
+	badDst := "\xfe\xffsw-b"     // invalid bytes at start
 	badPort := "Gi0/\xff"        // invalid byte at end
 	badDevice := "core-\xff\xfe" // invalid bytes in device ID
 
@@ -754,9 +754,9 @@ func TestPushGraphEdgeAttributes(t *testing.T) {
 
 	pt := edgePoints[0]
 	checks := map[string]string{
-		"direction":      "bidirectional",
-		"confidence":     "high",
-		"adjacency":      "direct",
+		"direction":       "bidirectional",
+		"confidence":      "high",
+		"adjacency":       "direct",
 		"precedence_rank": "1",
 	}
 	for attr, want := range checks {

@@ -46,9 +46,9 @@ func TestPolicyErrorUnwrap(t *testing.T) {
 // TestJoinReasonCodes covers all branches of JoinReasonCodes.
 func TestJoinReasonCodes(t *testing.T) {
 	cases := []struct {
-		name   string
-		input  []string
-		want   string
+		name  string
+		input []string
+		want  string
 	}{
 		{
 			name:  "empty_input",

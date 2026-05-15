@@ -1,15 +1,15 @@
 // Package isis infers L3 topology from IS-IS adjacency tables.
 //
 // Invariants:
-// - Only adjacency state up(3) emits edges.
-// - The isisISAdjIPAddr suffix encodes the address family in two leading octets
-//   (InetAddressType + length, RFC 4444). IPv6 rows (type=2, len=16) are
-//   skipped with an INFO log; IPv4 rows (type=1, len=4) drop the 6-octet tail
-//   to derive adjKey, then look up the adjacency state. IPv6 skips do not
-//   degrade any emitted IPv4 edges — both families are validly observable on
-//   the same device.
-// - adjState decode errors are hard-fail (required signal).
-// - circuit/ifDescr joins are optional; failures degrade SrcPort enrichment.
+//   - Only adjacency state up(3) emits edges.
+//   - The isisISAdjIPAddr suffix encodes the address family in two leading octets
+//     (InetAddressType + length, RFC 4444). IPv6 rows (type=2, len=16) are
+//     skipped with an INFO log; IPv4 rows (type=1, len=4) drop the 6-octet tail
+//     to derive adjKey, then look up the adjacency state. IPv6 skips do not
+//     degrade any emitted IPv4 edges — both families are validly observable on
+//     the same device.
+//   - adjState decode errors are hard-fail (required signal).
+//   - circuit/ifDescr joins are optional; failures degrade SrcPort enrichment.
 package isis
 
 import (
