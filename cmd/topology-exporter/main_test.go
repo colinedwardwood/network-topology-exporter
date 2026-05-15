@@ -511,6 +511,225 @@ func TestInstrumentMetricsHandlerRecordsScrape(t *testing.T) {
 	}
 }
 
+// TestCountingResponseWriterStreamsLargePayload verifies that
+// countingResponseWriter does NOT buffer the body — it streams every
+// Write through to the underlying writer — and that bytesWritten equals
+// the actual response body length for a non-trivial (>1MB) payload.
+// Regression guard for issue #7: the wrapper's doc comment used to
+// incorrectly claim it buffered the body.
+func TestCountingResponseWriterStreamsLargePayload(t *testing.T) {
+	// 1 MiB + a tail so the total clears 1 MB and exercises a payload
+	// large enough that any silent buffering would be noticeable.
+	const bodySize = (1 << 20) + 4096
+	body := make([]byte, bodySize)
+	for i := range body {
+		body[i] = byte(i % 251) // non-trivial pattern, not all-zero
+	}
+
+	duration := prometheus.NewHistogram(prometheus.HistogramOpts{Name: "dur_large"})
+	payload := prometheus.NewHistogram(prometheus.HistogramOpts{Name: "bytes_large"})
+
+	// Inner handler writes the payload in multiple chunks to exercise
+	// repeated Write() calls through the wrapper.
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		const chunk = 64 * 1024
+		for off := 0; off < len(body); off += chunk {
+			end := off + chunk
+			if end > len(body) {
+				end = len(body)
+			}
+			if _, err := w.Write(body[off:end]); err != nil {
+				t.Errorf("inner Write: %v", err)
+				return
+			}
+		}
+	})
+
+	wrapped := instrumentMetricsHandler(inner, duration, payload)
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	// The body must reach the underlying writer byte-for-byte; the wrapper
+	// must not have buffered or altered it.
+	if got := rec.Body.Len(); got != bodySize {
+		t.Fatalf("response body length = %d, want %d (wrapper must stream, not buffer/alter)", got, bodySize)
+	}
+	if !bytesEqual(rec.Body.Bytes(), body) {
+		t.Fatalf("response body bytes diverge from inner handler output")
+	}
+
+	var dm dto.Metric
+	if err := payload.Write(&dm); err != nil {
+		t.Fatalf("payload.Write: %v", err)
+	}
+	if got, want := dm.GetHistogram().GetSampleSum(), float64(bodySize); got != want {
+		t.Errorf("payload sum = %v, want %v (bytesWritten must match actual response body length)", got, want)
+	}
+}
+
+// TestCountingResponseWriterHijackPanics verifies that Hijack panics
+// loudly rather than silently bypassing the byte counter via interface
+// promotion through the embedded http.ResponseWriter (issue #7).
+func TestCountingResponseWriterHijackPanics(t *testing.T) {
+	c := &countingResponseWriter{ResponseWriter: httptest.NewRecorder()}
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("Hijack did not panic; expected loud failure to prevent silent counter divergence")
+		}
+	}()
+	_, _, _ = c.Hijack()
+}
+
+// TestCountingResponseWriterPushPanics verifies that Push panics
+// loudly rather than silently bypassing the byte counter via interface
+// promotion through the embedded http.ResponseWriter (issue #7).
+func TestCountingResponseWriterPushPanics(t *testing.T) {
+	c := &countingResponseWriter{ResponseWriter: httptest.NewRecorder()}
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("Push did not panic; expected loud failure to prevent silent counter divergence")
+		}
+	}()
+	_ = c.Push("/anything", nil)
+}
+
+// bytesEqual is a local helper to avoid pulling bytes into the test file
+// for one comparison.
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestMaybeWarnLargeTopologyEmitsOnlyOnUpwardCrossing drives the
+// threshold-crossing helper across a sequence of edge counts and asserts
+// that the warning fires only on a transition from at-or-below the
+// threshold to strictly above (issue #9). Flat-above and downward
+// transitions must not re-emit.
+func TestMaybeWarnLargeTopologyEmitsOnlyOnUpwardCrossing(t *testing.T) {
+	const above = largeTopologyEdgeThreshold + 100
+	const below = largeTopologyEdgeThreshold - 100
+
+	// Cycle apart from each other by more than the cooldown so the
+	// cooldown does not suppress legitimate re-crossings.
+	step := largeTopologyWarnCooldownCycles + 1
+
+	type tc struct {
+		name      string
+		edges     int
+		wantWarn  bool
+		prevAbove bool // expected prevAbove going INTO this step (sanity)
+	}
+	steps := []tc{
+		{name: "first cycle below threshold", edges: below, wantWarn: false, prevAbove: false},
+		{name: "stays below", edges: below, wantWarn: false, prevAbove: false},
+		{name: "upward crossing fires", edges: above, wantWarn: true, prevAbove: false},
+		{name: "flat above does not refire", edges: above, wantWarn: false, prevAbove: true},
+		{name: "flat above still does not refire", edges: above, wantWarn: false, prevAbove: true},
+		{name: "downward crossing does not warn", edges: below, wantWarn: false, prevAbove: true},
+		{name: "second upward crossing fires again", edges: above, wantWarn: true, prevAbove: false},
+	}
+
+	var buf bytesBuffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	prevAbove := false
+	lastWarnCycle := -largeTopologyWarnCooldownCycles
+	cycleNum := 0
+	for _, s := range steps {
+		cycleNum += step
+		if prevAbove != s.prevAbove {
+			t.Fatalf("%s: prevAbove mismatch — test set up incorrectly: got %v, want %v", s.name, prevAbove, s.prevAbove)
+		}
+		before := buf.Len()
+		var newLastWarn int
+		prevAbove, newLastWarn = maybeWarnLargeTopology(logger, s.edges, s.edges/10, prevAbove, cycleNum, lastWarnCycle)
+		emitted := buf.Len() > before
+		if emitted != s.wantWarn {
+			t.Errorf("%s: warn emitted = %v, want %v (cycle %d, edges %d)", s.name, emitted, s.wantWarn, cycleNum, s.edges)
+		}
+		if s.wantWarn && newLastWarn != cycleNum {
+			t.Errorf("%s: lastWarnCycle = %d, want %d", s.name, newLastWarn, cycleNum)
+		}
+		if !s.wantWarn && newLastWarn != lastWarnCycle {
+			t.Errorf("%s: lastWarnCycle changed to %d without emitting (was %d)", s.name, newLastWarn, lastWarnCycle)
+		}
+		lastWarnCycle = newLastWarn
+	}
+}
+
+// TestMaybeWarnLargeTopologyCooldownSuppressesOscillation verifies the
+// 60-cycle cooldown: an upward crossing followed by a downward then
+// another upward crossing within the cooldown window does NOT re-emit
+// the warning (issue #9 rate-limit clause).
+func TestMaybeWarnLargeTopologyCooldownSuppressesOscillation(t *testing.T) {
+	const above = largeTopologyEdgeThreshold + 100
+	const below = largeTopologyEdgeThreshold - 100
+
+	var buf bytesBuffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	prevAbove := false
+	lastWarnCycle := -largeTopologyWarnCooldownCycles
+
+	// Cycle 1: cross upward — should emit.
+	prevAbove, lastWarnCycle = maybeWarnLargeTopology(logger, above, 10, prevAbove, 1, lastWarnCycle)
+	if buf.Len() == 0 {
+		t.Fatal("first upward crossing did not emit")
+	}
+	if lastWarnCycle != 1 {
+		t.Fatalf("lastWarnCycle = %d, want 1", lastWarnCycle)
+	}
+	first := buf.Len()
+
+	// Cycle 2: drop below.
+	prevAbove, lastWarnCycle = maybeWarnLargeTopology(logger, below, 10, prevAbove, 2, lastWarnCycle)
+	if buf.Len() != first {
+		t.Fatal("downward transition emitted unexpectedly")
+	}
+
+	// Cycle 3 (well within cooldown): cross upward again — must be
+	// suppressed by cooldown.
+	prevAbove, lastWarnCycle = maybeWarnLargeTopology(logger, above, 10, prevAbove, 3, lastWarnCycle)
+	if buf.Len() != first {
+		t.Errorf("upward crossing inside cooldown re-emitted; expected suppression")
+	}
+	if lastWarnCycle != 1 {
+		t.Errorf("lastWarnCycle = %d, want 1 (cooldown suppressed re-emit)", lastWarnCycle)
+	}
+
+	// Cycle 1 + cooldown: drop below first, then cross upward again past the
+	// cooldown — must emit.
+	prevAbove, lastWarnCycle = maybeWarnLargeTopology(logger, below, 10, prevAbove, 1+largeTopologyWarnCooldownCycles, lastWarnCycle)
+	prevAbove, lastWarnCycle = maybeWarnLargeTopology(logger, above, 10, prevAbove, 2+largeTopologyWarnCooldownCycles, lastWarnCycle)
+	if buf.Len() == first {
+		t.Errorf("upward crossing after cooldown did not emit")
+	}
+	if lastWarnCycle != 2+largeTopologyWarnCooldownCycles {
+		t.Errorf("lastWarnCycle = %d, want %d", lastWarnCycle, 2+largeTopologyWarnCooldownCycles)
+	}
+}
+
+// bytesBuffer is a minimal io.Writer wrapper used by the threshold tests
+// to capture slog output without pulling bytes.Buffer (and bytes) into
+// scope just for the log capture.
+type bytesBuffer struct {
+	b []byte
+}
+
+func (bb *bytesBuffer) Write(p []byte) (int, error) {
+	bb.b = append(bb.b, p...)
+	return len(p), nil
+}
+
+func (bb *bytesBuffer) Len() int { return len(bb.b) }
+
 // TestReadyzHandlerReady verifies that /readyz returns 200 once the readiness
 // function returns true.
 func TestReadyzHandlerReady(t *testing.T) {
