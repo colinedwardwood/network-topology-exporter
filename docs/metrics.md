@@ -56,6 +56,8 @@ This is well within Prometheus defaults. If LLDP and CDP both report the same li
 | Metric | Type | Labels | Notes |
 |--------|------|--------|-------|
 | `network_topology_otlp_push_total` | counter | `status` (ok\|error\|dropped) | Incremented after each OTLP push attempt (both `/v1/metrics` and `/v1/logs` share this counter). Only present when `output.otlp.enabled: true`. A sustained `error` rate indicates the receiver endpoint is unreachable or rejecting payloads; check `output.otlp.endpoint` and that `otlp.timeout` is less than half the scrape interval. `dropped` means the per-process push concurrency limit (`maxOTLPPushConcurrency = 4`) was saturated and the push was discarded without contacting the receiver — see operator troubleshooting "OTLP push saturation". |
+| `network_topology_metrics_render_duration_seconds` | histogram | (none) | Wall time to render one `/metrics` scrape response. Alert at p99 against the scraper's `scrape_timeout`. See `docs/operator/scale.md` for guidance. |
+| `network_topology_metrics_payload_bytes` | histogram | (none) | Response body size of one `/metrics` scrape, in bytes. Tracks growth as the topology scales; useful for capacity planning. See `docs/operator/scale.md`. |
 
 ## Federation
 

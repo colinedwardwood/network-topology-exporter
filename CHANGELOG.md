@@ -11,6 +11,10 @@
 
 - **D24** — BGP module now surfaces IPv6 sessions via `bgp4V2PeerTable` (IETF draft form, covers Arista) with fallback to vendor-specific tables: `cbgpPeer2Table` (Cisco), `jnxBgpM2PeerTable` (Juniper), and `tBgpPeerTable` (Nokia SR-OS / Alcatel-Lucent). Walker selection: v2 draft → vendor table → RFC 4273 BGP4-MIB. RFC 4273 remains the final IPv4-only fallback for devices implementing only the original MIB. New kill-switch `modules.bgp.use_v2_mib` (pointer-typed, default **true**) reverts to RFC 4273-only behaviour for operators who hit a vendor regression. Addresses ARCHITECTURAL_REVIEW.md §2.2 (IPv6 visibility gap).
 
+### Observability
+
+- **D25** — New histograms `network_topology_metrics_render_duration_seconds` and `network_topology_metrics_payload_bytes` are observed on every `/metrics` scrape; alert at p99 against your scraper's `scrape_timeout`. The `/metrics` handler is wrapped to record duration + body size without buffering the response. A one-time startup warning is logged when the first discovery cycle produces more than 5,000 edges, pointing operators at the new `docs/operator/scale.md` guide which documents the three scrape-mode scale escape hatches (timeout tuning, federation, OTLP push). Addresses ARCHITECTURAL_REVIEW.md §2.4 (`/metrics` payload at 10k+ edges).
+
 ## v1.2.0 — 2026-05-07
 
 ### Security
