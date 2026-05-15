@@ -91,11 +91,13 @@ type FederationHubConfig struct {
 	// than this limit. Protects scrape latency and memory from runaway topologies.
 	MaxGraphDevices int `yaml:"max_graph_devices"`
 	// StrictDeviceNameMatching disables domain-suffix stripping during OOS
-	// neighbour matching. When false (default), "core-sw.dc1.example.com" and
-	// "core-sw.dc2.example.com" both normalise to "core-sw" and can be falsely
-	// matched. Enable in any federation where device hostnames are not unique
-	// across sites.
-	StrictDeviceNameMatching bool `yaml:"strict_device_name_matching"`
+	// neighbour matching. When true (default since v1.3.0), "core-sw.dc1.example.com"
+	// and "core-sw.dc2.example.com" remain distinct. When explicitly set to false,
+	// both normalise to "core-sw" — restoring the pre-v1.3.0 behaviour for
+	// single-site deployments where short and FQDN forms of the same device must
+	// reconcile to one node. Pointer-typed so an omitted key uses the safe default
+	// while an explicit `false` is still honoured.
+	StrictDeviceNameMatching *bool `yaml:"strict_device_name_matching"`
 	// MinPushInterval rejects per-spoke pushes received sooner than this
 	// duration after the previous accepted push from the same spoke_id, with
 	// a 429 Too Many Requests response and a Retry-After header. Defense in
@@ -345,6 +347,10 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Federation.Hub.ListenAddr == "" {
 		c.Federation.Hub.ListenAddr = ":9101"
+	}
+	if c.Federation.Hub.StrictDeviceNameMatching == nil {
+		strict := true
+		c.Federation.Hub.StrictDeviceNameMatching = &strict
 	}
 	if c.Output.OTLP.HeartbeatCycles == 0 {
 		c.Output.OTLP.HeartbeatCycles = 10

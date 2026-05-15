@@ -421,9 +421,12 @@ func TestHubConcurrentPushAndEviction(t *testing.T) {
 
 // TestHubOOSDomainStripProducesEdge verifies that OOS matching strips domain
 // suffixes from device names: "core-01.internal.corp" and "core-01" are
-// treated as the same device.
+// treated as the same device. This is the pre-v1.3.0 default behaviour, now
+// opt-in via StrictDeviceNameMatching=false.
 func TestHubOOSDomainStripProducesEdge(t *testing.T) {
+	loose := false
 	h := newTestHub(nil)
+	h.cfg.Hub.StrictDeviceNameMatching = &loose
 	h.mu.Lock()
 	// dc-a sees the neighbour with its FQDN; dc-b reports its bare hostname.
 	h.spokes["dc-a"] = spokeEntry{
@@ -450,6 +453,44 @@ func TestHubOOSDomainStripProducesEdge(t *testing.T) {
 	}
 	if g.Edges[0].Direction != discovery.DirectionBidirectional {
 		t.Errorf("direction = %q, want bidirectional", g.Edges[0].Direction)
+	}
+}
+
+// TestHubOOSStrictDefaultPreventsCrossDCCollision verifies that with the v1.3.0
+// default (StrictDeviceNameMatching unset → strict), two physically distinct
+// devices that share a bare hostname across DCs ("core-01.dc1" and "core-01.dc2")
+// are NOT collapsed into one node by OOS matching. This is the bug the default
+// flip exists to prevent: ARCHITECTURAL_REVIEW.md §2.3.
+func TestHubOOSStrictDefaultPreventsCrossDCCollision(t *testing.T) {
+	h := newTestHub(nil) // StrictDeviceNameMatching is nil → defaults to strict
+	h.mu.Lock()
+	// dc-a sees a neighbour it calls "core-01.dc1"; this is the dc1 core.
+	h.spokes["dc-a"] = spokeEntry{
+		payload: SpokePayload{
+			OutOfScope: []discovery.OutOfScopeNeighbour{
+				{ReportingDevice: "sw-a", ReportingPort: "Gi0/1", NeighbourHint: "core-01.dc1", Proto: "lldp"},
+			},
+		},
+		lastSeen: time.Now(),
+	}
+	// dc-b reports its bare hostname "core-01" — under loose matching this would
+	// collide with "core-01.dc1" and produce a false edge. Under strict, it must not.
+	h.spokes["dc-b"] = spokeEntry{
+		payload: SpokePayload{
+			OutOfScope: []discovery.OutOfScopeNeighbour{
+				{ReportingDevice: "core-01", ReportingPort: "Gi0/2", NeighbourHint: "sw-a", Proto: "lldp"},
+			},
+		},
+		lastSeen: time.Now(),
+	}
+	g := h.combinedGraphLocked()
+	h.mu.Unlock()
+
+	for _, e := range g.Edges {
+		if (e.SrcDevice == "sw-a" && e.DstDevice == "core-01") ||
+			(e.SrcDevice == "core-01" && e.DstDevice == "sw-a") {
+			t.Fatalf("strict default should NOT collapse 'core-01.dc1' with 'core-01'; got false edge: %+v", e)
+		}
 	}
 }
 
@@ -1361,14 +1402,20 @@ func TestBuildCombinedGraphProtoFallbackToRemote(t *testing.T) {
 // TestHubOOSAmbiguousFQDNNormalisationWarns verifies that when two spokes report
 // OOS observations involving devices that share a bare hostname but differ by
 // domain suffix (e.g. "core-sw-01.dc1" and "core-sw-01.dc2"), the hub logs a
-// warning about the ambiguous normalisation.
+// warning about the ambiguous normalisation. The warning is only meaningful
+// in the legacy loose-matching mode (pre-v1.3.0 default); this test opts back
+// into it to validate the safety-net logging.
 func TestHubOOSAmbiguousFQDNNormalisationWarns(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
+	loose := false
 	m := metrics.New(false)
 	h := NewHub(
-		config.FederationConfig{SpokeTimeout: 5 * time.Minute},
+		config.FederationConfig{
+			SpokeTimeout: 5 * time.Minute,
+			Hub:          config.FederationHubConfig{StrictDeviceNameMatching: &loose},
+		},
 		m,
 		logger,
 		"",

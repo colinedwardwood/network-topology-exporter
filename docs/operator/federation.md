@@ -239,6 +239,52 @@ When a spoke is evicted, `network_topology_federation_spoke_up{spoke_id="..."}` 
 2. If one side is missing entirely, that instance isn't seeing the OOS neighbour. Confirm LLDP/CDP is enabled on the inter-domain interface and that the interface is in scope for that instance.
 3. If both sides emit the metric but the count never reaches 2, compare the `peer_a` and `peer_b` label values on both sides. They must be identical — same string, same case. `peer_a` is always the alphabetically smaller of the two hostnames. A discrepancy means the two instances are resolving the device name differently (e.g., one uses a FQDN, the other a short hostname). Fix the naming at the device level (LLDP sysName) or use `known_inter_domain_links` in a hub deployment instead.
 
+### Confirmed-edge series flapping — uncoordinated mode
+
+**Symptom**: a known cross-boundary link's confirmed-edge series (from the `count(...) == 2` recording rule) appears and disappears between rule evaluations, producing flapping alerts or visibly missing intervals on dashboards.
+
+This is a **timing skew** between three independent intervals:
+- Per-instance `discovery.interval` (e.g. 60s) — controls when each exporter refreshes its `boundary_observation_info` series.
+- Prometheus/Mimir `scrape_interval` (e.g. 15s) — controls when those series are pulled into the TSDB.
+- Recording rule evaluation interval (e.g. 60s) — controls when the `count(...) == 2` join runs.
+
+If two exporter instances cycle out of phase, one side's boundary observation may be older than the rule's lookback window while the other side's is fresh — the join returns 1, not 2, and the confirmed-edge series temporarily drops.
+
+**Detection**:
+
+```promql
+# Per-instance discovery health. Both sides must report fresh data for the count==2 join to work.
+time() - network_topology_snapshot_last_written_timestamp_seconds
+```
+
+Compare this against your scrape interval and recording-rule evaluation interval. If either instance's value exceeds the rule's lookback window (defaults to 5 minutes in Mimir), the join can transiently fail.
+
+On the Mimir side, the rule's own freshness is observable via:
+
+```promql
+# Last time the recording rule group evaluated successfully (Mimir/Prometheus self-metrics).
+time() - prometheus_rule_group_last_evaluation_timestamp_seconds{rule_group="<your-rule-group>"}
+
+# Rule evaluation duration — long evaluations can themselves contribute to skew.
+prometheus_rule_evaluation_duration_seconds{rule_group="<your-rule-group>"}
+```
+
+**Mitigation**:
+
+1. **Make the rule's lookback explicit and generous.** The default uses the instant vector at evaluation time; if you have any chance of phase drift, switch to a windowed form that tolerates one missed cycle:
+   ```promql
+   count by(peer_a, peer_b, proto)(
+     last_over_time(network_topology_boundary_observation_info[3m])
+   ) == 2
+   ```
+   `3m` should be at least `2 × max(discovery.interval across instances) + scrape_interval`. Three minutes covers the default 60s discovery cycle.
+
+2. **Align discovery intervals across instances.** Configure the same `discovery.interval` on every uncoordinated peer. Different intervals guarantee phase drift over time.
+
+3. **Avoid alerting on the raw `count == 2` directly.** Alert on the windowed form's absence over a multi-cycle window (e.g. `absent_over_time(...)[10m:]`) so that a single missed evaluation cannot page.
+
+The exporter does not expose an "external rule staleness" metric because the recording rule lives outside the exporter — its freshness is owned by Mimir/Prometheus and observable through their self-metrics above. Combining the two sides (exporter cycle health + rule evaluation health) is the operator's join, not the exporter's.
+
 ### Missing cross-boundary edges — hub/spoke mode
 
 **Symptom**: a link between two spoke domains doesn't appear in the hub's metrics.

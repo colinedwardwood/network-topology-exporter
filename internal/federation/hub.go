@@ -823,12 +823,18 @@ func normalizeDeviceName(s string) string {
 }
 
 // canonicalizeDeviceName returns the canonical form of a device name for OOS
-// neighbour matching. When StrictDeviceNameMatching is enabled, only
-// case-folding is applied (preserving domain suffixes so "core-sw.dc1" and
-// "core-sw.dc2" remain distinct). Otherwise it delegates to normalizeDeviceName
-// which strips domain suffixes.
+// neighbour matching. When StrictDeviceNameMatching is enabled (default since
+// v1.3.0), only case-folding is applied (preserving domain suffixes so
+// "core-sw.dc1" and "core-sw.dc2" remain distinct). When explicitly disabled,
+// it delegates to normalizeDeviceName which strips domain suffixes — the
+// pre-v1.3.0 behaviour for single-site reconciliation of FQDN/short pairs.
+//
+// A nil pointer is treated as the safe default (strict). applyDefaults
+// populates the pointer on config load; this defensive check protects test
+// fixtures that build Hub structs directly.
 func (h *Hub) canonicalizeDeviceName(s string) string {
-	if h.cfg.Hub.StrictDeviceNameMatching {
+	strict := h.cfg.Hub.StrictDeviceNameMatching
+	if strict == nil || *strict {
 		return strings.ToLower(s)
 	}
 	return normalizeDeviceName(s)
