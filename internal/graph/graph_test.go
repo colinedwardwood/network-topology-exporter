@@ -563,6 +563,22 @@ func TestNormalizePortName(t *testing.T) {
 		{"ge-0/0/0", "ge-0/0/0"},
 		{"xe-1/0/1", "xe-1/0/1"},
 		{"et-0/0/0", "et-0/0/0"},
+		{"ae0", "ae0"},
+		// Nokia SR-OS — native short form, pass through unchanged
+		{"1/1/1", "1/1/1"},
+		{"1/2/c1/1", "1/2/c1/1"},
+		{"lag-1", "lag-1"},
+		// Extreme EXOS — numeric / slot:port, pass through unchanged
+		{"1", "1"},
+		{"1:1", "1:1"},
+		{"2:48", "2:48"},
+		// Aruba/HPE — slot/module/port or trunk, pass through unchanged
+		{"A1", "A1"},
+		{"Trk1", "Trk1"},
+		// Arista EOS native short form — pass through unchanged
+		{"Et1/1", "Et1/1"},
+		// Cisco NX-OS mgmt — pass through unchanged
+		{"mgmt0", "mgmt0"},
 	}
 	for _, tc := range cases {
 		got := NormalizePortName(tc.in)
