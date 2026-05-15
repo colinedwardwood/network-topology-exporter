@@ -1,7 +1,7 @@
 # Plan: OTLP SDK Migration
 
 **Status:** Proposed
-**Author:** ARCHITECTURAL_REVIEW.md remediation
+**Author:** docs/audits/2026-05-architectural-review.md remediation
 **Created:** 2026-05-14
 **Estimate:** 3–5 engineering days
 **Risk:** High — replaces a deliberate "no SDK" architectural stance
