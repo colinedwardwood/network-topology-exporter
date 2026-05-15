@@ -7,6 +7,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -53,10 +54,44 @@ import (
 const snapshotWriteTimeout = 30 * time.Second
 
 // largeTopologyEdgeThreshold is the edge count above which the exporter
-// emits a one-time startup warning pointing operators at docs/operator/scale.md.
-// Intentionally well below the documented scale ceiling so the warning
-// arrives before scrape latency becomes a problem — not after.
+// emits a warning pointing operators at docs/operator/scale.md. Intentionally
+// well below the documented scale ceiling so the warning arrives before
+// scrape latency becomes a problem — not after. The warning fires on the
+// upward crossing of this threshold (issue #9), not on every cycle while
+// above it, and is rate-limited by largeTopologyWarnCooldownCycles to keep
+// an oscillating topology from flooding the log.
 const largeTopologyEdgeThreshold = 5000
+
+// largeTopologyWarnCooldownCycles caps the large-topology warning at one
+// emission per N discovery cycles, even if the topology oscillates around
+// the threshold and would otherwise re-cross upward on every cycle.
+const largeTopologyWarnCooldownCycles = 60
+
+// maybeWarnLargeTopology emits the large-topology warning when the edge
+// count crosses largeTopologyEdgeThreshold upward (was at-or-below on the
+// previous cycle, now strictly above), subject to a cooldown of
+// largeTopologyWarnCooldownCycles between warnings. It returns the
+// updated (prevAboveThreshold, lastWarnCycle) pair so the caller can
+// thread state across cycles. Extracted from the cycle closure so the
+// crossing rule can be unit-tested without driving full discovery cycles
+// (issue #9).
+func maybeWarnLargeTopology(
+	logger *slog.Logger,
+	edges, devices int,
+	prevAbove bool,
+	cycleNum, lastWarnCycle int,
+) (nowAbove bool, newLastWarnCycle int) {
+	nowAbove = edges > largeTopologyEdgeThreshold
+	if nowAbove && !prevAbove && cycleNum-lastWarnCycle >= largeTopologyWarnCooldownCycles {
+		logger.Warn("topology size is large; review scale guidance",
+			"edges", edges,
+			"devices", devices,
+			"threshold", largeTopologyEdgeThreshold,
+			"guidance", "docs/operator/scale.md")
+		return nowAbove, cycleNum
+	}
+	return nowAbove, lastWarnCycle
+}
 
 type cycleStatus struct {
 	LastCycleAt  time.Time
@@ -83,9 +118,9 @@ func newReadyzHandler(isReady func() bool) http.HandlerFunc {
 // instrumentMetricsHandler wraps the Prometheus /metrics handler so that
 // each scrape contributes one observation to the render-duration and payload-
 // size histograms. Operators alert on the p99 of duration against the
-// scraper's scrape_timeout — see docs/operator/scale.md. The wrapper buffers
-// the response body once to measure size; this is acceptable because the
-// gauges this exporter emits are already in-memory.
+// scraper's scrape_timeout — see docs/operator/scale.md. The wrapper streams
+// the response body through to the underlying writer without buffering and
+// counts the bytes that flow through Write().
 func instrumentMetricsHandler(inner http.Handler, duration, payload prometheus.Histogram) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -96,10 +131,21 @@ func instrumentMetricsHandler(inner http.Handler, duration, payload prometheus.H
 	})
 }
 
-// countingResponseWriter wraps http.ResponseWriter to record the number of
-// body bytes written without buffering them. It satisfies http.Flusher when
-// the underlying writer does, which the promhttp handler exercises during
-// chunked exposition.
+// countingResponseWriter wraps http.ResponseWriter and counts the bytes
+// passed to Write(). It does NOT buffer the body — each Write call streams
+// straight to the wrapped writer and the counter is incremented by the
+// number of bytes the wrapped writer reports as written. The counter is
+// therefore exact for response bodies emitted via Write().
+//
+// This wrapper deliberately does NOT promote http.Hijacker or http.Pusher.
+// Embedding http.ResponseWriter would otherwise silently promote any
+// interfaces the underlying writer implements; if a future inner handler
+// or middleware invoked Hijack() (RFC 6455 WebSocket upgrade) or Push()
+// (HTTP/2 server push), the connection would be detached or pushed without
+// passing through Write(), and bytesWritten would diverge from reality
+// without any indication. The /metrics path served by this wrapper does
+// not use WebSocket upgrade or HTTP/2 server push, so a loud panic on
+// those code paths is preferable to a silently wrong byte counter.
 type countingResponseWriter struct {
 	http.ResponseWriter
 	bytesWritten int
@@ -115,6 +161,21 @@ func (c *countingResponseWriter) Flush() {
 	if f, ok := c.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// Hijack panics: the /metrics handler does not use WebSocket upgrade, and
+// allowing Hijack to promote silently through the embedded ResponseWriter
+// would let a future middleware detach the connection without passing
+// through Write(), invalidating bytesWritten without any signal.
+func (c *countingResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	panic("countingResponseWriter: Hijack not supported — wrapper is for the /metrics path only; WebSocket upgrade would bypass the byte counter")
+}
+
+// Push panics: the /metrics handler does not use HTTP/2 server push.
+// Allowing Push to promote silently would let the inner handler emit
+// bytes that never pass through Write(), invalidating bytesWritten.
+func (c *countingResponseWriter) Push(target string, opts *http.PushOptions) error {
+	panic("countingResponseWriter: Push not supported — wrapper is for the /metrics path only; HTTP/2 server push would bypass the byte counter")
 }
 
 func newHealthzHandler(status *atomic.Pointer[cycleStatus]) http.HandlerFunc {
@@ -499,6 +560,12 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 	}
 
 	var cycleNum int
+	// State for the large-topology warning (issue #9): track whether the
+	// previous cycle was above the threshold so we only emit on upward
+	// crossings, and remember the cycle of the last warning so an
+	// oscillating topology cannot flood the log.
+	prevAboveThreshold := false
+	lastWarnCycle := -largeTopologyWarnCooldownCycles
 	cycle := func() {
 		cycleNum++
 		lc.m.GoRoutines.Set(float64(runtime.NumGoroutine()))
@@ -564,21 +631,11 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 		lc.m.GraphStale.Set(0)
 		lc.m.Topology.Update(newGraph)
 		if lc.ready != nil {
-			if lc.ready.CompareAndSwap(false, true) {
-				// First successful cycle. Warn once if the topology is large
-				// enough that scrape latency may become a concern. The threshold
-				// is intentionally conservative — well below the documented
-				// scale ceiling — so operators get the doc pointer before any
-				// real degradation happens. See docs/operator/scale.md.
-				if n := len(newGraph.Edges); n > largeTopologyEdgeThreshold {
-					lc.logger.Warn("topology size is large; review scale guidance",
-						"edges", n,
-						"devices", len(newGraph.Devices),
-						"threshold", largeTopologyEdgeThreshold,
-						"guidance", "docs/operator/scale.md")
-				}
-			}
+			lc.ready.CompareAndSwap(false, true)
 		}
+		prevAboveThreshold, lastWarnCycle = maybeWarnLargeTopology(
+			lc.logger, len(newGraph.Edges), len(newGraph.Devices),
+			prevAboveThreshold, cycleNum, lastWarnCycle)
 		lc.m.DiscoveryCycleDuration.Observe(time.Since(start).Seconds())
 
 		// LD-13: write snapshot via the bounded writer channel so an NFS stall
