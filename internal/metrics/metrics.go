@@ -95,6 +95,17 @@ type Metrics struct {
 	// cycle because the cycle budget deadline expired before their goroutine could
 	// acquire the parallelism semaphore.
 	CycleBudgetSkipsTotal prometheus.Counter
+
+	// BGPWalkerOutcomeTotal counts the outcome of each BGP walker pass.
+	// Labels:
+	//   walker  ∈ {v2_draft, vendor_cisco, vendor_juniper, vendor_nokia, rfc4273}
+	//   outcome ∈ {edges, empty, error, malformed_index}
+	// One counter per (walker, outcome) is incremented per device per cycle —
+	// "edges" means the walker produced at least one row, "empty" means it
+	// returned no rows (e.g. table not implemented), "error" means the SNMP
+	// walk itself failed, and "malformed_index" is incremented per dropped row
+	// inside a walker that rejected a row via decodeBgp4V2Index.
+	BGPWalkerOutcomeTotal *prometheus.CounterVec
 }
 
 // New builds and registers the exporter's metric set. emitBoundaryObs should
@@ -225,6 +236,10 @@ func New(emitBoundaryObs bool) *Metrics {
 			// scrape that will be killed by the timeout.
 			Buckets: prometheus.ExponentialBuckets(0.001, 2, 16),
 		}),
+		BGPWalkerOutcomeTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "network_topology_bgp_walker_outcome_total",
+			Help: "BGP walker pass outcomes. walker ∈ {v2_draft, vendor_cisco, vendor_juniper, vendor_nokia, rfc4273}; outcome ∈ {edges, empty, error, malformed_index}.",
+		}, []string{"walker", "outcome"}),
 		MetricsPayloadBytes: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name: "network_topology_metrics_payload_bytes",
 			Help: "Response body size of one /metrics scrape in bytes. Tracks growth as the topology scales.",
@@ -267,6 +282,7 @@ func New(emitBoundaryObs bool) *Metrics {
 		m.CycleBudgetSkipsTotal,
 		m.MetricsRenderDuration,
 		m.MetricsPayloadBytes,
+		m.BGPWalkerOutcomeTotal,
 	)
 
 	return m

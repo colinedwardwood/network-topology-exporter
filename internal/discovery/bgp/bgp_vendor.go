@@ -23,6 +23,7 @@ package bgp
 
 import (
 	"context"
+	"log/slog"
 	"net"
 
 	gsnmp "github.com/gosnmp/gosnmp"
@@ -117,6 +118,8 @@ func walkVendorPeerTable(ctx context.Context, client *gsnmp.GoSNMP, spec vendorT
 		if peer == nil {
 			localIP, remoteIP, ok := decodeBgp4V2Index(rest)
 			if !ok {
+				recordWalkerOutcome(vendorWalkerLabel(spec.name), "malformed_index")
+				slog.Debug("bgp vendor: malformed index, dropping row", "walker", vendorWalkerLabel(spec.name), "vendor_table", spec.name, "index_suffix", truncateForLog(rest, 50))
 				continue
 			}
 			peer = &bgp4V2Peer{indexLocalIP: localIP, indexRemoteIP: remoteIP}
@@ -150,14 +153,22 @@ func walkAndBuildVendorEdges(
 	localDevice string,
 	allowedNets []*net.IPNet,
 ) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, bool, error) {
+	walker := vendorWalkerLabel(spec.name)
 	peers, ok, err := walkVendorPeerTable(ctx, client, spec)
 	if err != nil {
+		recordWalkerOutcome(walker, "error")
 		return nil, nil, false, err
 	}
 	if !ok {
+		recordWalkerOutcome(walker, "empty")
 		return nil, nil, false, nil
 	}
 	edges, oos := buildV2Edges(localDevice, peers, allowedNets)
+	if len(edges) > 0 {
+		recordWalkerOutcome(walker, "edges")
+	} else {
+		recordWalkerOutcome(walker, "empty")
+	}
 	return edges, oos, true, nil
 }
 

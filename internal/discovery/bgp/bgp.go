@@ -45,13 +45,76 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	gsnmp "github.com/gosnmp/gosnmp"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 	snmputil "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
 )
+
+// walkerOutcomeCounter is the package-level sink for BGP walker outcome
+// observations. It is set once at process startup by main via
+// SetWalkerOutcomeCounter and is safe to read from any goroutine after that —
+// the atomic.Pointer guarantees a happens-before edge between Set and Load
+// across goroutines, and Load returning nil is the documented "not wired"
+// state used in tests that don't spin up the full process.
+//
+// Why a package-level setter rather than threading the counter through
+// snmputil.Params or the Walk signature: the project's module dispatch in
+// cmd/topology-exporter/main.go invokes every protocol walker through a
+// shared func signature (ctx, params, deviceID, allowedNets) → (edges, oos,
+// error). Adding a metrics handle to either the signature or Params bleeds
+// observability plumbing into every other module that doesn't need it.
+// Option A keeps the change scoped to this package and matches how
+// non-call-site config is already handled by other modules that need
+// process-wide singletons. The trade-off is that tests must either set the
+// counter explicitly (and reset it in cleanup) or accept nil (which the
+// helpers below handle without panicking).
+var walkerOutcomeCounter atomic.Pointer[prometheus.CounterVec]
+
+// SetWalkerOutcomeCounter wires the package's outcome counter. Call once at
+// startup before any Walk invocation; subsequent calls overwrite the previous
+// value. Passing nil disables outcome accounting (useful in tests).
+func SetWalkerOutcomeCounter(c *prometheus.CounterVec) {
+	walkerOutcomeCounter.Store(c)
+}
+
+// recordWalkerOutcome increments the {walker, outcome} counter if one is wired.
+// Safe to call when no counter is set — the call is a cheap atomic load + nil
+// check, so production paths can call it unconditionally.
+func recordWalkerOutcome(walker, outcome string) {
+	if c := walkerOutcomeCounter.Load(); c != nil {
+		c.WithLabelValues(walker, outcome).Inc()
+	}
+}
+
+// Walker label constants. Keep these in sync with the metric's documented
+// label set in internal/metrics/metrics.go.
+const (
+	walkerV2Draft       = "v2_draft"
+	walkerVendorCisco   = "vendor_cisco"
+	walkerVendorJuniper = "vendor_juniper"
+	walkerVendorNokia   = "vendor_nokia"
+	walkerRFC4273       = "rfc4273"
+)
+
+// vendorWalkerLabel maps a vendorTableSpec.name to its outcome counter label.
+// Centralised so test assertions match the dispatcher exactly.
+func vendorWalkerLabel(specName string) string {
+	switch specName {
+	case ciscoCbgpPeer2Spec.name:
+		return walkerVendorCisco
+	case juniperJnxBgpM2PeerSpec.name:
+		return walkerVendorJuniper
+	case nokiaTBgpPeerSpec.name:
+		return walkerVendorNokia
+	default:
+		return "vendor_unknown"
+	}
+}
 
 const (
 	oidBgpPeerTable = "1.3.6.1.2.1.15.3"
@@ -101,23 +164,38 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	}
 	defer func() { _ = client.Conn.Close() }()
 
+	// v2Err holds a v2 draft walk error so we can promote it to Warn iff a
+	// later walker succeeds. Per issue #8: a silently-discarded v2 error
+	// while RFC 4273 limps along masks the real failure (vendor MIB column
+	// drift) — log at Warn when the fallback chain papered over a v2 error.
+	var v2Err error
+	// vendorErr / vendorSpec capture the vendor-walk error for the same
+	// promotion rationale.
+	var vendorErr error
+	var vendorSpec *vendorTableSpec
+
 	if p.UseBGPV2MIB {
 		// Step 1: try the IETF draft form first.
 		edges, oos, ok, err := walkAndBuildV2Edges(ctx, client, localDevice, allowedNets)
 		if err != nil {
-			// A walk error here is logged at debug but doesn't fail the module —
-			// the device may simply not implement the draft. Fall through.
-			slog.Debug("bgp v2: draft walk error, falling back", "target", p.IP, "error", err)
+			// A walk error here doesn't fail the module — the device may simply
+			// not implement the draft. Stash the error and fall through; if a
+			// later walker succeeds we promote this to Warn (see end of fn).
+			v2Err = err
 		} else if ok {
 			return edges, oos, nil
 		}
 
 		// Step 2: try the vendor-specific table.
 		if spec := vendorSpecFor(resolveVendor(ctx, p, client)); spec != nil {
+			vendorSpec = spec
 			edges, oos, ok, err := walkAndBuildVendorEdges(ctx, client, *spec, localDevice, allowedNets)
 			if err != nil {
-				slog.Debug("bgp v2: vendor walk error, falling back", "target", p.IP, "vendor_table", spec.name, "error", err)
+				vendorErr = err
 			} else if ok {
+				if v2Err != nil {
+					slog.Warn("bgp v2: draft walk error, vendor table succeeded", "target", p.IP, "error", v2Err, "vendor_table", spec.name)
+				}
 				return edges, oos, nil
 			}
 		}
@@ -126,10 +204,25 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	// Step 3 (always-on fallback): RFC 4273 bgpPeerTable.
 	peers, err := walkBgpPeerTable(ctx, client)
 	if err != nil {
+		recordWalkerOutcome(walkerRFC4273, "error")
 		return nil, nil, fmt.Errorf("bgp peer table %s: %w", p.IP, err)
 	}
 
 	edges, oos := buildEdges(localDevice, peers, allowedNets)
+	if len(edges) > 0 {
+		recordWalkerOutcome(walkerRFC4273, "edges")
+	} else {
+		recordWalkerOutcome(walkerRFC4273, "empty")
+	}
+
+	// Promote earlier errors to Warn now that a later walker delivered. If
+	// neither v2 nor the vendor walker errored, this block is a no-op.
+	if v2Err != nil {
+		slog.Warn("bgp v2: draft walk error, RFC 4273 fallback succeeded", "target", p.IP, "error", v2Err)
+	}
+	if vendorErr != nil && vendorSpec != nil {
+		slog.Warn("bgp v2: vendor walk error, RFC 4273 fallback succeeded", "target", p.IP, "vendor_table", vendorSpec.name, "error", vendorErr)
+	}
 	return edges, oos, nil
 }
 
