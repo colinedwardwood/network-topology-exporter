@@ -70,6 +70,14 @@ type Metrics struct {
 	TopologyLastScrapeDurationSeconds prometheus.Gauge
 	TopologyLastScrapeSamplesTotal     prometheus.Gauge
 
+	// Scrape-time scale signals (LD-XX scale-ceiling instrumentation). The
+	// gauges above carry only the last value; these histograms surface the
+	// distribution so operators can alert on p99 against their configured
+	// scrape_timeout. See docs/operator/scale.md for guidance on alerting
+	// against these and the three escape hatches when the curves trend high.
+	MetricsRenderDuration prometheus.Histogram
+	MetricsPayloadBytes   prometheus.Histogram
+
 	// FDBSuppressedMACs counts FDB MAC peers dropped because no LLDP chassis
 	// MAC correlation was found; these were not host MACs that passed the
 	// single-learned-MAC filter.
@@ -209,6 +217,22 @@ func New(emitBoundaryObs bool) *Metrics {
 			Name: "network_topology_cycle_budget_skips_total",
 			Help: "Targets skipped in a discovery cycle because the cycle budget deadline expired before their goroutine could start.",
 		}),
+		MetricsRenderDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name: "network_topology_metrics_render_duration_seconds",
+			Help: "Wall time to render one /metrics scrape response. Alert at p99 against the scraper's scrape_timeout.",
+			// 1ms .. ~32s. Covers a typical small instance (<10ms) through a
+			// stressed 50k-edge response (multi-second) up to a clearly-broken
+			// scrape that will be killed by the timeout.
+			Buckets: prometheus.ExponentialBuckets(0.001, 2, 16),
+		}),
+		MetricsPayloadBytes: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name: "network_topology_metrics_payload_bytes",
+			Help: "Response body size of one /metrics scrape in bytes. Tracks growth as the topology scales.",
+			// 1KB .. ~64MB. Covers tiny test responses through realistic large
+			// production payloads. Buckets are wide because the distribution
+			// per instance is typically narrow but absolute scale varies hugely.
+			Buckets: prometheus.ExponentialBuckets(1024, 4, 9),
+		}),
 	}
 	m.Topology = newTopologyCollector(emitBoundaryObs, m.TopologyLastScrapeDurationSeconds, m.TopologyLastScrapeSamplesTotal)
 
@@ -241,6 +265,8 @@ func New(emitBoundaryObs bool) *Metrics {
 		m.GoRoutines,
 		m.SnapshotQueueDepth,
 		m.CycleBudgetSkipsTotal,
+		m.MetricsRenderDuration,
+		m.MetricsPayloadBytes,
 	)
 
 	return m

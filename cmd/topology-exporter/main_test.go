@@ -24,7 +24,10 @@ import (
 	"testing"
 	"time"
 
+	dto "github.com/prometheus/client_model/go"
+
 	gsnmp "github.com/gosnmp/gosnmp"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
@@ -465,6 +468,46 @@ func TestReadyzHandlerNotReady(t *testing.T) {
 	handler(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want 503 when not ready", rec.Code)
+	}
+}
+
+// TestInstrumentMetricsHandlerRecordsScrape verifies the wrapper observes
+// both render duration and payload size into the supplied histograms.
+func TestInstrumentMetricsHandlerRecordsScrape(t *testing.T) {
+	duration := prometheus.NewHistogram(prometheus.HistogramOpts{Name: "dur"})
+	payload := prometheus.NewHistogram(prometheus.HistogramOpts{Name: "bytes"})
+
+	innerBody := "# TYPE foo gauge\nfoo 42\n"
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(innerBody))
+	})
+
+	wrapped := instrumentMetricsHandler(inner, duration, payload)
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	if rec.Body.String() != innerBody {
+		t.Fatalf("body = %q, want %q (wrapper must not buffer or modify the response)", rec.Body.String(), innerBody)
+	}
+
+	// Histograms implement prometheus.Metric directly.
+	var dm dto.Metric
+	if err := payload.Write(&dm); err != nil {
+		t.Fatalf("payload.Write: %v", err)
+	}
+	if got, want := dm.GetHistogram().GetSampleCount(), uint64(1); got != want {
+		t.Errorf("payload sample count = %d, want %d", got, want)
+	}
+	if got, want := dm.GetHistogram().GetSampleSum(), float64(len(innerBody)); got != want {
+		t.Errorf("payload sum = %v, want %v (bytes of body)", got, want)
+	}
+
+	dm.Reset()
+	if err := duration.Write(&dm); err != nil {
+		t.Fatalf("duration.Write: %v", err)
+	}
+	if got, want := dm.GetHistogram().GetSampleCount(), uint64(1); got != want {
+		t.Errorf("duration sample count = %d, want %d", got, want)
 	}
 }
 

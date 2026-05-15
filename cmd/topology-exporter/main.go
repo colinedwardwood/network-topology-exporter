@@ -52,6 +52,12 @@ import (
 // waits before declaring an NFS stall and continuing the discovery cycle.
 const snapshotWriteTimeout = 30 * time.Second
 
+// largeTopologyEdgeThreshold is the edge count above which the exporter
+// emits a one-time startup warning pointing operators at docs/operator/scale.md.
+// Intentionally well below the documented scale ceiling so the warning
+// arrives before scrape latency becomes a problem — not after.
+const largeTopologyEdgeThreshold = 5000
+
 type cycleStatus struct {
 	LastCycleAt  time.Time
 	DeviceErrors int64
@@ -71,6 +77,43 @@ func newReadyzHandler(isReady func() bool) http.HandlerFunc {
 		}
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = w.Write([]byte(`{"status":"starting"}` + "\n"))
+	}
+}
+
+// instrumentMetricsHandler wraps the Prometheus /metrics handler so that
+// each scrape contributes one observation to the render-duration and payload-
+// size histograms. Operators alert on the p99 of duration against the
+// scraper's scrape_timeout — see docs/operator/scale.md. The wrapper buffers
+// the response body once to measure size; this is acceptable because the
+// gauges this exporter emits are already in-memory.
+func instrumentMetricsHandler(inner http.Handler, duration, payload prometheus.Histogram) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &countingResponseWriter{ResponseWriter: w}
+		inner.ServeHTTP(rec, r)
+		duration.Observe(time.Since(start).Seconds())
+		payload.Observe(float64(rec.bytesWritten))
+	})
+}
+
+// countingResponseWriter wraps http.ResponseWriter to record the number of
+// body bytes written without buffering them. It satisfies http.Flusher when
+// the underlying writer does, which the promhttp handler exercises during
+// chunked exposition.
+type countingResponseWriter struct {
+	http.ResponseWriter
+	bytesWritten int
+}
+
+func (c *countingResponseWriter) Write(b []byte) (int, error) {
+	n, err := c.ResponseWriter.Write(b)
+	c.bytesWritten += n
+	return n, err
+}
+
+func (c *countingResponseWriter) Flush() {
+	if f, ok := c.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
 	}
 }
 
@@ -144,7 +187,11 @@ func run(ctx context.Context, args []string) int {
 	isReadyFn := ready.Load
 
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.HandlerFor(m.Registry(), promhttp.HandlerOpts{Registry: m.Registry()}))
+	mux.Handle("/metrics", instrumentMetricsHandler(
+		promhttp.HandlerFor(m.Registry(), promhttp.HandlerOpts{Registry: m.Registry()}),
+		m.MetricsRenderDuration,
+		m.MetricsPayloadBytes,
+	))
 	mux.HandleFunc("/healthz", newHealthzHandler(&status))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -512,7 +559,20 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 		lc.m.GraphStale.Set(0)
 		lc.m.Topology.Update(newGraph)
 		if lc.ready != nil {
-			lc.ready.CompareAndSwap(false, true)
+			if lc.ready.CompareAndSwap(false, true) {
+				// First successful cycle. Warn once if the topology is large
+				// enough that scrape latency may become a concern. The threshold
+				// is intentionally conservative — well below the documented
+				// scale ceiling — so operators get the doc pointer before any
+				// real degradation happens. See docs/operator/scale.md.
+				if n := len(newGraph.Edges); n > largeTopologyEdgeThreshold {
+					lc.logger.Warn("topology size is large; review scale guidance",
+						"edges", n,
+						"devices", len(newGraph.Devices),
+						"threshold", largeTopologyEdgeThreshold,
+						"guidance", "docs/operator/scale.md")
+				}
+			}
 		}
 		lc.m.DiscoveryCycleDuration.Observe(time.Since(start).Seconds())
 
