@@ -106,7 +106,11 @@ func walkBGP4V2PeerTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]
 				// Malformed index. The MIB v2 draft is widely but not uniformly
 				// implemented; some vendors emit rows with truncated indices on
 				// peers that were never fully negotiated. Drop the row rather
-				// than fabricate a peer with zero addresses.
+				// than fabricate a peer with zero addresses, but record the
+				// drop so issue #1 (silent vendor-MIB drift) can be detected
+				// via metric + low-volume debug log.
+				recordWalkerOutcome(walkerV2Draft, "malformed_index")
+				slog.Debug("bgp v2: malformed index, dropping row", "walker", walkerV2Draft, "index_suffix", truncateForLog(rest, 50))
 				continue
 			}
 			peer = &bgp4V2Peer{indexLocalIP: localIP, indexRemoteIP: remoteIP}
@@ -273,13 +277,34 @@ func walkAndBuildV2Edges(
 ) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, bool, error) {
 	peers, ok, err := walkBGP4V2PeerTable(ctx, client)
 	if err != nil {
+		recordWalkerOutcome(walkerV2Draft, "error")
 		return nil, nil, false, err
 	}
 	if !ok {
+		recordWalkerOutcome(walkerV2Draft, "empty")
 		return nil, nil, false, nil
 	}
 	edges, oos := buildV2Edges(localDevice, peers, allowedNets)
+	if len(edges) > 0 {
+		recordWalkerOutcome(walkerV2Draft, "edges")
+	} else {
+		// Walker returned rows but every one was filtered out (non-established,
+		// missing remote address, etc.). Still "empty" from the perspective of
+		// the topology — record it so operators can tell apart "table missing"
+		// from "table populated but state filter eliminated everything".
+		recordWalkerOutcome(walkerV2Draft, "empty")
+	}
 	return edges, oos, true, nil
+}
+
+// truncateForLog returns s clipped to max bytes, appending an ellipsis if
+// truncation occurred. Used for malformed-index log fields to keep log volume
+// bounded — a misbehaving device could otherwise emit unbounded OID strings.
+func truncateForLog(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
 
 // buildV2Edges converts a bgp4V2Peer map into edges + OOS observations using

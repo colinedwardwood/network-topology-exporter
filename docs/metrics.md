@@ -39,6 +39,7 @@ All metrics use the `network_` prefix. No metric uses a raw IP address or free-f
 | `network_topology_discovery_degraded_total` | counter | `module`, `reason` | Module runs that completed in degraded mode (for example, missing optional metadata table). |
 | `network_topology_discovery_hard_fail_total` | counter | `module`, `reason` | Hard failures where required discovery policy was breached (for example, `required_table_no_valid_rows`, `required_table_invalid_ratio_exceeded`). |
 | `network_topology_credential_trials_total` | counter | `status` (ok\|failed) | Auth trial attempts against polled devices. A sustained `failed` rate on a fresh deployment may indicate auth lockout. |
+| `network_topology_bgp_walker_outcome_total` | counter | `walker` (v2_draft\|vendor_cisco\|vendor_juniper\|vendor_nokia\|rfc4273), `outcome` (edges\|empty\|error\|malformed_index) | Per-walker outcome accounting for the BGP module's fallback chain. `outcome=edges` means the walker produced rows; `empty` means the table returned no rows and the next walker was tried; `error` means the SNMP walk failed and the next walker was tried; `malformed_index` means a row was dropped because its InetAddress index could not be decoded. A non-zero `malformed_index` rate on a known vendor is a signal that the column numbers in `internal/discovery/bgp/bgp_vendor.go` may be wrong for that vendor's OS version — the documented failure mode this counter exists to surface. |
 
 ## Cardinality budget
 

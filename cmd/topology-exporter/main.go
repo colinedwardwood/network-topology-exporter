@@ -179,6 +179,11 @@ func run(ctx context.Context, args []string) int {
 	m := metrics.New(cfg.Federation.Role == "uncoordinated")
 	m.SnapshotLastWrittenUnix.SetToCurrentTime()
 
+	// Wire the BGP walker outcome counter so the bgp package can observe its
+	// own fallback paths without taking a Metrics handle on every call site.
+	// See bgp.SetWalkerOutcomeCounter for the rationale.
+	bgp.SetWalkerOutcomeCounter(m.BGPWalkerOutcomeTotal)
+
 	var status atomic.Pointer[cycleStatus]
 	var ready atomic.Bool // set to true after the first live cycle or spoke push
 
