@@ -106,12 +106,23 @@ type Metrics struct {
 	// BGPWalkerOutcomeTotal counts the outcome of each BGP walker pass.
 	// Labels:
 	//   walker  ∈ {v2_draft, vendor_cisco, vendor_juniper, vendor_nokia, rfc4273}
-	//   outcome ∈ {edges, empty, error, malformed_index}
-	// One counter per (walker, outcome) is incremented per device per cycle —
-	// "edges" means the walker produced at least one row, "empty" means it
-	// returned no rows (e.g. table not implemented), "error" means the SNMP
-	// walk itself failed, and "malformed_index" is incremented per dropped row
-	// inside a walker that rejected a row via decodeBgp4V2Index.
+	//   outcome ∈ {edges, no_peers, mib_unimplemented, error, malformed_index}
+	// One counter per (walker, outcome) is incremented per device per cycle.
+	// Semantics:
+	//   - "edges" — walker produced at least one established-peer row
+	//   - "mib_unimplemented" — BulkWalk returned zero PDUs; the device does
+	//     not implement the table at all (expected on non-BGP devices, must
+	//     not page)
+	//   - "no_peers" — PDUs arrived and a peers map was built, but no peer
+	//     reached bgpStateEstablished — BGP is configured but every session
+	//     is down (operationally distinct from mib_unimplemented; this is
+	//     the correct signal for "BGP broken" alerts)
+	//   - "error" — the SNMP walk itself failed
+	//   - "malformed_index" — incremented per dropped row inside a walker
+	//     that rejected a row via decodeBgp4V2Index
+	// Issue #15: the previous "empty" outcome was split into "no_peers" and
+	// "mib_unimplemented". Operator alerts on outcome="empty" must migrate
+	// to outcome="no_peers".
 	BGPWalkerOutcomeTotal *prometheus.CounterVec
 }
 

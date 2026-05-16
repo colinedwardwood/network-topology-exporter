@@ -30,10 +30,12 @@ func newOutcomeCounter(t *testing.T) *prometheus.CounterVec {
 	return c
 }
 
-// TestWalkerOutcomeEmpty: device responds but bgp4V2PeerTable has zero rows
-// and the RFC 4273 table also has zero rows. v2_draft should record "empty"
-// and rfc4273 should record "empty".
-func TestWalkerOutcomeEmpty(t *testing.T) {
+// TestWalkerOutcomeMibUnimplemented: device responds but neither bgp4V2PeerTable
+// nor the RFC 4273 table has any PDUs. BulkWalk returns zero PDUs for both
+// roots, so v2_draft and rfc4273 both record "mib_unimplemented" — the device
+// does not speak BGP at all. Per issue #15, this is operationally distinct
+// from "no_peers" (MIB implemented, no peers established) and must not page.
+func TestWalkerOutcomeMibUnimplemented(t *testing.T) {
 	c := newOutcomeCounter(t)
 
 	// snmptest with an unrelated PDU so BulkWalk against the BGP roots
@@ -61,22 +63,76 @@ func TestWalkerOutcomeEmpty(t *testing.T) {
 		t.Fatalf("expected 0 edges, got %d", len(edges))
 	}
 
-	if got := testutil.ToFloat64(c.WithLabelValues(walkerV2Draft, "empty")); got != 1 {
-		t.Errorf("v2_draft empty counter = %v, want 1", got)
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerV2Draft, "mib_unimplemented")); got != 1 {
+		t.Errorf("v2_draft mib_unimplemented counter = %v, want 1", got)
 	}
-	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, "empty")); got != 1 {
-		t.Errorf("rfc4273 empty counter = %v, want 1", got)
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, "mib_unimplemented")); got != 1 {
+		t.Errorf("rfc4273 mib_unimplemented counter = %v, want 1", got)
 	}
-	// "edges" should be unset.
+	// Neither "no_peers" nor "edges" should be set for either walker.
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerV2Draft, "no_peers")); got != 0 {
+		t.Errorf("v2_draft no_peers counter = %v, want 0 (MIB unimplemented, not no peers)", got)
+	}
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, "no_peers")); got != 0 {
+		t.Errorf("rfc4273 no_peers counter = %v, want 0 (MIB unimplemented, not no peers)", got)
+	}
 	if got := testutil.ToFloat64(c.WithLabelValues(walkerV2Draft, "edges")); got != 0 {
 		t.Errorf("v2_draft edges counter = %v, want 0", got)
 	}
 }
 
+// TestWalkerOutcomeNoPeers: device implements the RFC 4273 bgpPeerTable but
+// every row is in a non-established state — BGP is configured but no session
+// has come up. rfc4273 must record "no_peers" (not "mib_unimplemented"), so
+// operators can alert on this without false positives from non-BGP devices.
+// v2_draft still records "mib_unimplemented" because the device doesn't
+// expose the draft form.
+func TestWalkerOutcomeNoPeers(t *testing.T) {
+	c := newOutcomeCounter(t)
+
+	// RFC 4273 row in idle state (1) — MIB implemented, peer not established.
+	const base = ".1.3.6.1.2.1.15.3.1."
+	const peer = "10.0.0.1"
+	pdus := []gsnmp.SnmpPDU{
+		{Name: base + "2." + peer, Type: gsnmp.Integer, Value: 1}, // bgpPeerState = idle
+		{Name: base + "7." + peer, Type: gsnmp.IPAddress, Value: []byte{10, 0, 0, 1}},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{
+		IP:          ip,
+		Port:        port,
+		Community:   "public",
+		Timeout:     3 * time.Second,
+		UseBGPV2MIB: true,
+		Vendor:      "arista",
+	}
+
+	edges, _, err := Walk(context.Background(), p, "rtr-no-peers", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Fatalf("expected 0 edges (no established peers), got %d", len(edges))
+	}
+
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, "no_peers")); got != 1 {
+		t.Errorf("rfc4273 no_peers counter = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, "mib_unimplemented")); got != 0 {
+		t.Errorf("rfc4273 mib_unimplemented counter = %v, want 0 (MIB IS implemented)", got)
+	}
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerV2Draft, "mib_unimplemented")); got != 1 {
+		t.Errorf("v2_draft mib_unimplemented counter = %v, want 1", got)
+	}
+}
+
 // TestWalkerOutcomeMalformedIndex: feed bgp4V2PeerTable rows whose index does
 // not decode (truncated). The walker drops the row and increments the
-// malformed_index counter. The whole table is "empty" from an edge
-// perspective so v2_draft "empty" is also recorded.
+// malformed_index counter. PDUs did arrive (so the MIB is implemented) but
+// no peer was assembled, so v2_draft "no_peers" is also recorded — distinct
+// from "mib_unimplemented" (issue #15).
 func TestWalkerOutcomeMalformedIndex(t *testing.T) {
 	c := newOutcomeCounter(t)
 
@@ -176,8 +232,8 @@ func TestWalkerOutcomeRFC4273Edges(t *testing.T) {
 	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, "edges")); got != 1 {
 		t.Errorf("rfc4273 edges counter = %v, want 1", got)
 	}
-	if got := testutil.ToFloat64(c.WithLabelValues(walkerV2Draft, "empty")); got != 1 {
-		t.Errorf("v2_draft empty counter = %v, want 1", got)
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerV2Draft, "mib_unimplemented")); got != 1 {
+		t.Errorf("v2_draft mib_unimplemented counter = %v, want 1", got)
 	}
 }
 
@@ -253,8 +309,8 @@ func TestVendorWalkerEdges(t *testing.T) {
 	if got := testutil.ToFloat64(c.WithLabelValues(walkerVendorCisco, "edges")); got != 1 {
 		t.Errorf("vendor_cisco edges counter = %v, want 1", got)
 	}
-	if got := testutil.ToFloat64(c.WithLabelValues(walkerV2Draft, "empty")); got != 1 {
-		t.Errorf("v2_draft empty counter = %v, want 1", got)
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerV2Draft, "mib_unimplemented")); got != 1 {
+		t.Errorf("v2_draft mib_unimplemented counter = %v, want 1", got)
 	}
 	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, "edges")); got != 0 {
 		t.Errorf("rfc4273 must not have been invoked; got %v", got)

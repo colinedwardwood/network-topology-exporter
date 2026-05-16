@@ -90,15 +90,17 @@ func vendorSpecFor(vendor string) *vendorTableSpec {
 
 // walkVendorPeerTable runs a generic walk of a vendor-specific peer table
 // using the same InetAddress index decoder as bgp4V2PeerTable. Returns
-// (peers, ok). ok=false means the table returned no rows; the caller should
-// fall back to RFC 4273.
-func walkVendorPeerTable(ctx context.Context, client *gsnmp.GoSNMP, spec vendorTableSpec) (map[string]*bgp4V2Peer, bool, error) {
+// (peers, hadPDUs, ok, err) where hadPDUs reports whether BulkWalk produced
+// any PDUs at all (used by the caller to distinguish "MIB not implemented"
+// from "MIB implemented but no peers"); ok=false means no peer rows were
+// assembled and the caller should fall back to RFC 4273.
+func walkVendorPeerTable(ctx context.Context, client *gsnmp.GoSNMP, spec vendorTableSpec) (map[string]*bgp4V2Peer, bool, bool, error) {
 	pdus, err := snmputil.BulkWalk(ctx, client, spec.root)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	if len(pdus) == 0 {
-		return nil, false, nil
+		return nil, false, false, nil
 	}
 
 	prefix := "." + spec.root + ".1."
@@ -138,14 +140,20 @@ func walkVendorPeerTable(ctx context.Context, client *gsnmp.GoSNMP, spec vendorT
 		}
 	}
 	if len(peers) == 0 {
-		return nil, false, nil
+		// PDUs arrived but every row was rejected by the index decoder, or
+		// none matched the expected prefix. MIB is implemented; signal with
+		// hadPDUs=true so the caller records "no_peers".
+		return nil, true, false, nil
 	}
-	return peers, true, nil
+	return peers, true, true, nil
 }
 
 // walkAndBuildVendorEdges runs the vendor-specific walk and converts peers
 // to edges. Mirrors walkAndBuildV2Edges; the caller is responsible for
 // picking the spec.
+//
+// Outcome accounting (issue #15): see walkAndBuildV2Edges for the
+// mib_unimplemented vs no_peers split rationale.
 func walkAndBuildVendorEdges(
 	ctx context.Context,
 	client *gsnmp.GoSNMP,
@@ -154,20 +162,24 @@ func walkAndBuildVendorEdges(
 	allowedNets []*net.IPNet,
 ) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, bool, error) {
 	walker := vendorWalkerLabel(spec.name)
-	peers, ok, err := walkVendorPeerTable(ctx, client, spec)
+	peers, hadPDUs, ok, err := walkVendorPeerTable(ctx, client, spec)
 	if err != nil {
 		recordWalkerOutcome(walker, "error")
 		return nil, nil, false, err
 	}
 	if !ok {
-		recordWalkerOutcome(walker, "empty")
+		if hadPDUs {
+			recordWalkerOutcome(walker, "no_peers")
+		} else {
+			recordWalkerOutcome(walker, "mib_unimplemented")
+		}
 		return nil, nil, false, nil
 	}
 	edges, oos := buildV2Edges(localDevice, peers, allowedNets)
 	if len(edges) > 0 {
 		recordWalkerOutcome(walker, "edges")
 	} else {
-		recordWalkerOutcome(walker, "empty")
+		recordWalkerOutcome(walker, "no_peers")
 	}
 	return edges, oos, true, nil
 }
