@@ -359,19 +359,20 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 	if err := validateSpokePayload(payload); err != nil {
 		h.logger.Warn("hub: spoke payload failed semantic validation",
 			"spoke_id", payload.SpokeID, "error", err)
-		// GraphUpdatesRejectedTotal is a flat counter (not partitioned by
-		// reason); operators correlate the counter increment with the warn
-		// log line above to attribute rejects to label-injection attempts.
-		// See issue tracker for "partition GraphUpdatesRejectedTotal by reason".
-		h.m.GraphUpdatesRejectedTotal.Inc()
 		var verr *validationError
 		if errors.As(err, &verr) {
+			h.m.GraphUpdatesRejectedTotal.WithLabelValues(verr.reason).Inc()
 			// Structured reject: spokes branch on the reason enum, not text.
 			writePushRejection(w, http.StatusBadRequest, verr.reason, map[string]any{
 				"message": verr.msg,
 			})
 			return
 		}
+		// Non-validationError fallthrough: every validation site currently
+		// returns *validationError, so this branch is defensive. Attribute to
+		// invalid_label_value as the closest existing enum value rather than
+		// introducing an "unknown" reason that operators would have to learn.
+		h.m.GraphUpdatesRejectedTotal.WithLabelValues(rejectReasonInvalidLabelValue).Inc()
 		http.Error(w, "invalid payload: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -877,7 +878,7 @@ func (h *Hub) tryPublishMetrics(gen uint64, g discovery.Graph, clearStale bool, 
 				h.logger.Warn("graph update rejected: exceeds size budget",
 					"edges", len(g.Edges), "max_edges", maxEdges,
 					"devices", len(g.Devices), "max_devices", maxDevices)
-				h.m.GraphUpdatesRejectedTotal.Inc()
+				h.m.GraphUpdatesRejectedTotal.WithLabelValues(rejectReasonSizeBudgetExceeded).Inc()
 				return false, rejectReasonSizeBudgetExceeded
 			}
 			h.m.HubOOSUnmatchedTotal.Set(float64(unmatchedCount))

@@ -58,9 +58,16 @@ type Metrics struct {
 	// are exhausted. Alert on rate > 0 to detect silent channel breakage.
 	FederationSpokePushFailuresTotal prometheus.Counter
 
-	// GraphUpdatesRejectedTotal counts combined-graph updates rejected because
-	// they exceeded the configured size budget (MaxGraphEdges / MaxGraphDevices).
-	GraphUpdatesRejectedTotal prometheus.Counter
+	// GraphUpdatesRejectedTotal counts combined-graph updates rejected at
+	// publish time, partitioned by reason. Current reason values mirror the
+	// federation push-rejection enum: "size_budget_exceeded" (graph exceeded
+	// MaxGraphEdges or MaxGraphDevices), "invalid_label_key" /
+	// "invalid_label_value" (spoke payload failed label-injection validation).
+	// New reasons land alongside the emission site that introduces them;
+	// deprecated values are removed in a major version. Operators alert on
+	// rate(network_topology_graph_updates_rejected_total[5m]) > 0 to detect
+	// any reject pattern, and on the per-reason breakdown for triage.
+	GraphUpdatesRejectedTotal *prometheus.CounterVec
 
 	// Hub OOS matching health: non-zero means cross-domain auto-detection is
 	// partially failing; operators should add known_inter_domain_links entries.
@@ -196,10 +203,10 @@ func New(emitBoundaryObs bool) *Metrics {
 			Name: "network_topology_federation_spoke_push_failures_total",
 			Help: "Total number of spoke push attempts that failed after all retries. Alert on rate > 0.",
 		}),
-		GraphUpdatesRejectedTotal: prometheus.NewCounter(prometheus.CounterOpts{
+		GraphUpdatesRejectedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "network_topology_graph_updates_rejected_total",
-			Help: "Combined-graph updates rejected because they exceeded the configured size budget.",
-		}),
+			Help: "Combined-graph updates rejected at publish time, partitioned by reason (size_budget_exceeded, invalid_label_key, invalid_label_value).",
+		}, []string{"reason"}),
 		HubOOSUnmatchedTotal: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "network_topology_hub_oos_unmatched_total",
 			Help: "Count of OOS neighbour observations with no reverse match in the last hub graph rebuild. Non-zero means cross-domain auto-detection is partially failing; add known_inter_domain_links entries.",
