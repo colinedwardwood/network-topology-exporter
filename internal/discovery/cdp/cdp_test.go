@@ -5,8 +5,10 @@ import (
 	"net"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	gsnmp "github.com/gosnmp/gosnmp"
 
@@ -265,6 +267,44 @@ func TestWalkEndToEnd(t *testing.T) {
 	}
 	if e.DstPort != "GigabitEthernet0/2" {
 		t.Errorf("DstPort = %q, want GigabitEthernet0/2", e.DstPort)
+	}
+}
+
+// Walk: an oversized cdpCacheDevicePort is truncated at discovery time so that
+// a spoke push of the resulting Edge.DstPort survives the hub's 256-byte cap
+// (issue #13). Truncation must produce valid UTF-8.
+func TestWalkOversizedDevicePortTruncated(t *testing.T) {
+	ifNameOID := ".1.3.6.1.2.1.31.1.1.1.1.1"
+	base := ".1.3.6.1.4.1.9.9.23.1.2.1.1."
+	idx := "1.1"
+
+	// 254 ASCII bytes + 3-byte UTF-8 rune = 257 bytes. Naive byte-slice at 255
+	// would land mid-rune; SanitisePortName retreats to a rune boundary.
+	huge := strings.Repeat("a", 254) + "€"
+
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ifNameOID, Type: gsnmp.OctetString, Value: []byte("Gi0/1")},
+		{Name: base + strconv.Itoa(colAddressType) + "." + idx, Type: gsnmp.Integer, Value: int(1)},
+		{Name: base + strconv.Itoa(colAddress) + "." + idx, Type: gsnmp.OctetString, Value: []byte{10, 0, 0, 2}},
+		{Name: base + strconv.Itoa(colDeviceID) + "." + idx, Type: gsnmp.OctetString, Value: []byte("remote-sw")},
+		{Name: base + strconv.Itoa(colDevicePort) + "." + idx, Type: gsnmp.OctetString, Value: []byte(huge)},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	edges, _, err := Walk(context.Background(), p, "local-sw", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(edges))
+	}
+	if got := len(edges[0].DstPort); got > 255 {
+		t.Errorf("DstPort len = %d, want ≤255 (hub would reject this)", got)
+	}
+	if !utf8.ValidString(edges[0].DstPort) {
+		t.Errorf("DstPort is not valid UTF-8 — slice landed mid-rune: %q", edges[0].DstPort)
 	}
 }
 

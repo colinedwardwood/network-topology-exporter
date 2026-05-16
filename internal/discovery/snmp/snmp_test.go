@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	gsnmp "github.com/gosnmp/gosnmp"
 
@@ -1382,6 +1383,56 @@ func TestNormaliseNameStripsControlChars(t *testing.T) {
 			got := NormaliseName(c.input)
 			if got != c.want {
 				t.Errorf("NormaliseName(%q) = %q, want %q", c.input, got, c.want)
+			}
+		})
+	}
+}
+
+// SanitisePortName: 256-byte ASCII string is capped to 255.
+func TestSanitisePortNameCap(t *testing.T) {
+	input := strings.Repeat("a", 256)
+	got := SanitisePortName(input)
+	if len(got) != 255 {
+		t.Errorf("SanitisePortName(256-byte ASCII) len = %d, want 255", len(got))
+	}
+}
+
+// SanitisePortName: truncation retreats to a rune boundary so the result is
+// always valid UTF-8 even when a multi-byte rune straddles the 255-byte mark.
+func TestSanitisePortNameRuneBoundary(t *testing.T) {
+	threeByteRune := "€"                              // U+20AC, encoded as 0xE2 0x82 0xAC
+	input := strings.Repeat("a", 254) + threeByteRune // 254 + 3 = 257 bytes
+	got := SanitisePortName(input)
+	if len(got) != 254 {
+		t.Errorf("SanitisePortName(rune-boundary input) len = %d, want 254", len(got))
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("SanitisePortName produced invalid UTF-8: %q", got)
+	}
+}
+
+// SanitisePortName: control characters are stripped (mirrors NormaliseName)
+// because they otherwise cause edge-key instability across polling cycles.
+func TestSanitisePortNameStripsControlChars(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"embedded CR", "Gi0/1\rgarbage", "Gi0/1garbage"},
+		{"embedded SOH", "Eth\x011/1", "Eth1/1"},
+		{"embedded NUL middle", "xe-\x000/0/0", "xe-0/0/0"},
+		// Unlike NormaliseName, SanitisePortName must NOT lowercase or trim:
+		// port names are case-sensitive in some operator expectations and
+		// surrounding whitespace is graph.NormalizePortName's job, not ours.
+		{"case preserved", "GigabitEthernet0/1", "GigabitEthernet0/1"},
+		{"whitespace preserved", "  Gi0/1  ", "  Gi0/1  "},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := SanitisePortName(c.input)
+			if got != c.want {
+				t.Errorf("SanitisePortName(%q) = %q, want %q", c.input, got, c.want)
 			}
 		})
 	}

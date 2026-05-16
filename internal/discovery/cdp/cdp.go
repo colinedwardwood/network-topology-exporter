@@ -122,7 +122,12 @@ func walkCacheTable(ctx context.Context, client *gsnmp.GoSNMP) (map[cacheKey]*ca
 		case colDeviceID:
 			e.deviceID = snmputil.NormaliseName(snmputil.PDUString(pdu))
 		case colDevicePort:
-			e.devPort = snmputil.PDUString(pdu)
+			// SanitisePortName caps and control-strips the device-supplied
+			// port name; well-behaved devices conform to CISCO-CDP-MIB's
+			// OCTET STRING SIZE(0..255), but a non-conforming device would
+			// otherwise silently fail the hub's federation push validator.
+			// Issue #13.
+			e.devPort = snmputil.SanitisePortName(snmputil.PDUString(pdu))
 		}
 	}
 	return entries, nil

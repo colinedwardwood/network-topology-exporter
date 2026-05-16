@@ -248,7 +248,9 @@ func walkIntIndexedStrings(ctx context.Context, client *g.GoSNMP, oid string) (m
 		if err != nil {
 			continue
 		}
-		names[idx] = PDUString(pdu)
+		// SanitisePortName caps and control-strips: these values become
+		// localPort in LLDP/CDP edge construction. Issue #13.
+		names[idx] = SanitisePortName(PDUString(pdu))
 	}
 	return names, nil
 }
@@ -387,6 +389,45 @@ func NormaliseName(s string) string {
 	// utf8.RuneStart returns true for any byte that is not a UTF-8
 	// continuation byte (10xxxxxx), so the loop retreats at most 3 bytes
 	// for a 4-byte rune — O(1) per call.
+	if len(s) > 255 {
+		n := 255
+		for n > 0 && !utf8.RuneStart(s[n]) {
+			n--
+		}
+		s = s[:n]
+	}
+	return s
+}
+
+// SanitisePortName caps a port-name string at 255 bytes on a rune boundary
+// and strips embedded control characters. Use at every site where a device
+// PDU value flows into discovery.Edge.SrcPort, discovery.Edge.DstPort, or
+// discovery.OutOfScopeNeighbour.ReportingPort.
+//
+// Unlike NormaliseName above, SanitisePortName preserves case and surrounding
+// whitespace because port names are not normalised by the discovery layer —
+// graph.NormalizePortName handles canonical-form collapse downstream during
+// reconciliation. SanitisePortName is purely a boundary defence against
+// non-conforming device PDUs.
+//
+// The 255-byte cap matches the MIB definitions for the inbound fields:
+//
+//   - IEEE 802.1AB-2016 lldpLocPortDesc / lldpRemPortDesc — SnmpAdminString
+//     (RFC 3414) SIZE(0..255)
+//   - CISCO-CDP-MIB cdpCacheDevicePort — OCTET STRING SIZE(0..255)
+//   - RFC 2863 IF-MIB ifName / ifDescr — DisplayString SIZE(0..255)
+//
+// The hub's federation push validator (internal/federation/hub.go) enforces
+// a 256-byte ceiling on the same fields; the one-byte gap is defensive
+// headroom. Sanitising at discovery time prevents an oversized device PDU
+// from silently failing the entire spoke push at the hub.
+func SanitisePortName(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
 	if len(s) > 255 {
 		n := 255
 		for n > 0 && !utf8.RuneStart(s[n]) {

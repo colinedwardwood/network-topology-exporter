@@ -3,8 +3,10 @@ package lldp
 import (
 	"context"
 	"net"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	gsnmp "github.com/gosnmp/gosnmp"
 
@@ -645,6 +647,53 @@ func TestWalkRemEntriesPortDesc(t *testing.T) {
 	}
 	if len(edges) > 0 && edges[0].DstPort != "GigabitEthernet0/1" {
 		t.Errorf("DstPort = %q, want GigabitEthernet0/1", edges[0].DstPort)
+	}
+}
+
+// Walk: a remote portDesc exceeding 255 bytes is truncated at discovery time
+// (issue #13). A spoke pushing the resulting Edge.DstPort to the hub would
+// otherwise fail validateSpokePayload's 256-byte cap and lose the entire push.
+// The truncation must produce valid UTF-8 (no mid-rune slice).
+func TestWalkRemEntriesPortDescOversizedTruncated(t *testing.T) {
+	locBase := ".1.0.8802.1.1.2.1.3.7.1."
+	remBase := ".1.0.8802.1.1.2.1.4.1.1."
+	timeMark := "0"
+	portNum := "1"
+	remIdx := "1"
+	remSuffix := timeMark + "." + portNum + "." + remIdx
+
+	// 254 ASCII bytes followed by a 3-byte UTF-8 rune. Naive byte-slicing at
+	// 255 would land mid-rune and produce invalid UTF-8; SanitisePortName must
+	// retreat to a rune boundary.
+	huge := strings.Repeat("a", 254) + "€" // 257 bytes total
+
+	pdus := []gsnmp.SnmpPDU{
+		{Name: locBase + "2.1", Type: gsnmp.Integer, Value: int(portSubtypeInterfaceName)},
+		{Name: locBase + "3.1", Type: gsnmp.OctetString, Value: []byte("Eth1")},
+
+		{Name: remBase + "4." + remSuffix, Type: gsnmp.Integer, Value: int(chassisSubtypeMACAddress)},
+		{Name: remBase + "5." + remSuffix, Type: gsnmp.OctetString, Value: []byte{0, 1, 2, 3, 4, 5}},
+		{Name: remBase + "6." + remSuffix, Type: gsnmp.Integer, Value: int(portSubtypeLocal)},
+		{Name: remBase + "7." + remSuffix, Type: gsnmp.OctetString, Value: []byte{0, 0}}, // null portID → falls back to portDesc
+		{Name: remBase + "8." + remSuffix, Type: gsnmp.OctetString, Value: []byte(huge)},
+		{Name: remBase + "9." + remSuffix, Type: gsnmp.OctetString, Value: []byte("spine-01")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	edges, _, err := Walk(context.Background(), p, "local", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(edges))
+	}
+	if got := len(edges[0].DstPort); got > 255 {
+		t.Errorf("DstPort len = %d, want ≤255 (hub would reject this)", got)
+	}
+	if !utf8.ValidString(edges[0].DstPort) {
+		t.Errorf("DstPort is not valid UTF-8 — slice landed mid-rune: %q", edges[0].DstPort)
 	}
 }
 
