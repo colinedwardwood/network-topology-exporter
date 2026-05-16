@@ -24,9 +24,11 @@ topology:
     r1:
       kind: cisco_iol
       startup-config: configs/r1.cfg
+      mgmt-ipv4: 172.20.20.3
     r2:
       kind: cisco_iol
       startup-config: configs/r2.cfg
+      mgmt-ipv4: 172.20.20.2
 
   links:
-    - endpoints: ["r1:Ethernet0/0", "r2:Ethernet0/0"]
+    - endpoints: ["r1:Ethernet0/1", "r2:Ethernet0/1"]

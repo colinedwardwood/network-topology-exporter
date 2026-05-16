@@ -19,11 +19,12 @@
 # are still useful (a walk that returns "no such object" tells us the
 # device doesn't implement that MIB). Per-walk failures are logged.
 #
-set -uo pipefail
+set -o pipefail
 
 LAB_NAME="cisco-iol-bgp"
 COMMUNITY="${SNMP_COMMUNITY:-public}"
 OUTDIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")")/captures"
+declare -a NODES=()
 
 # OID roots probed on every node. Comments explain which walker each one
 # would feed in internal/discovery/bgp/.
@@ -49,20 +50,23 @@ declare -a OIDS=(
 mkdir -p "$OUTDIR"
 
 # Build the (name, host) list. Prefer `containerlab inspect` JSON if jq
-# is available; fall back to the conventional clab hostname pattern.
-declare -a NODES
+# is available; fall back to the topology.clab.yml mgmt-ipv4 pins.
+# Note: `containerlab inspect` typically requires sudo because the lab
+# was deployed under sudo; we use it here with the assumption that the
+# caller has sudo nopasswd or runs this script with sudo. If neither,
+# the fallback path takes over.
 if command -v jq >/dev/null 2>&1 && command -v containerlab >/dev/null 2>&1; then
   while IFS= read -r line; do
-    NODES+=("$line")
-  done < <(containerlab inspect --name "$LAB_NAME" --format json 2>/dev/null \
-    | jq -r '.containers[] | "\(.name) \(.ipv4_address)"' \
+    [ -n "$line" ] && NODES+=("$line")
+  done < <(sudo -n containerlab inspect --name "$LAB_NAME" --format json 2>/dev/null \
+    | jq -r '.containers[] // empty | "\(.name) \(.ipv4_address)"' 2>/dev/null \
     | sed 's|/[0-9]*$||')
 fi
-if [ "${#NODES[@]}" -eq 0 ]; then
-  echo "containerlab inspect failed or jq missing; falling back to default node names" >&2
+if [ ${#NODES[@]} -eq 0 ]; then
+  echo "containerlab inspect failed or jq missing; using topology pinned mgmt-ipv4" >&2
   NODES=(
-    "clab-${LAB_NAME}-r1 clab-${LAB_NAME}-r1"
-    "clab-${LAB_NAME}-r2 clab-${LAB_NAME}-r2"
+    "clab-${LAB_NAME}-r1 172.20.20.3"
+    "clab-${LAB_NAME}-r2 172.20.20.2"
   )
 fi
 

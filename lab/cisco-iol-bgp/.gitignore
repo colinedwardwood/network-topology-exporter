@@ -1,8 +1,8 @@
-# Raw capture output — local artefacts, not fixtures. Translate the
-# interesting ones into []gsnmp.SnmpPDU literals under
-# internal/snmptest/testdata/ instead.
-captures/*
-!captures/.gitkeep
+# Real-device captures landed in 2026-05-16 from vrnetlab/cisco_iol:L2-17.12.1.
+# Committed as evidence + future fixture-conversion source for issues #1 and #31.
+# Add captures/*.local.txt for one-off operator captures that should NOT be
+# committed.
+captures/*.local.txt
 
 # containerlab runtime artefacts.
 clab-cisco-iol-bgp/

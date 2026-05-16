@@ -1,0 +1,6 @@
+# captured 2026-05-16T23:39:25Z
+# device: cisco_iol L2-17.12.1, node=r1, host=172.20.20.3
+# image:  vrnetlab/cisco_iol:L2-17.12.1 (sysObjectID .1.3.6.1.4.1.9.1.1824)
+# oid root: 1.3.6.1.3.5.1.1.2
+
+.1.3.6.1.3.5.1.1.2 = No Such Object available on this agent at this OID
