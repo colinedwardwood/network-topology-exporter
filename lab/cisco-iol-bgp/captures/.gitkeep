@@ -1,0 +1,4 @@
+Raw snmpwalk output lands here. The captures themselves are gitignored
+(see ../.gitignore) — they're inputs to the fixture-conversion step,
+not the fixtures themselves. Reviewed and translated captures land in
+internal/snmptest/testdata/ as []gsnmp.SnmpPDU literals.

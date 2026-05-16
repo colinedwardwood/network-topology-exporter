@@ -152,9 +152,38 @@ Defer this decision until first production canary.
 - BGP-LS (RFC 7752) for full link-state discovery. Different protocol, different scope.
 - IPv6 routing protocols other than BGP (OSPFv3, IS-IS over IPv6). The architectural review only flagged BGP IPv6 specifically.
 
+## Lab environment for fixture capture (2026-05-16)
+
+Real-device fixture capture requires a containerlab-capable Linux host
+with hardware virt (KVM) enabled AND vendor licenses for each image.
+Attempted scaffold at `lab/cisco-iol-bgp/` on a macOS / Apple Silicon /
+OrbStack host hit two unworkable blockers:
+
+1. **Cisco IOL needs an `iourc` license file** keyed to the specific
+   `iol.bin`'s hostid. Per-build, Cisco-internal, not redistributable.
+2. **vrnetlab kinds that wrap qcow2 in QEMU (FortiOS, CSR1000v, vMX,
+   vSRX, SR-OS)** need `/dev/kvm` for usable performance. macOS doesn't
+   expose `/dev/kvm` to guest Linux VMs; QEMU falls back to TCG
+   software emulation, which is too slow or fails outright.
+
+The lab scaffold is portable; only the deploy host changes. Per-vendor
+status:
+
+| Vendor walker | Image source | Status |
+|---|---|---|
+| `v2_draft` (IETF draft) | Arista cEOS (free; needs Arista account download) | Not yet attempted; cEOS doesn't need KVM and has no licensing barrier — best candidate for first real capture |
+| `vendor_cisco` (cbgpPeer2Table) | vrnetlab/cisco_iol or CSR1000v/c8000v | Blocked on iourc (IOL) or eval license (CSR/c8000v) AND Linux+KVM host |
+| `vendor_juniper` (jnxBgpM2PeerTable) | vrnetlab/vmx or vrnetlab/vsrx | Blocked on Juniper account + Linux+KVM host |
+| `vendor_nokia` (tBgpPeerTable) | vrnetlab/sros (classic SR-OS) | Blocked on Nokia license + Linux+KVM host. **SR Linux does NOT serve this MIB** — wrong code base. |
+| `rfc4273` fallback | Any of the above; FortiOS specifically validates non-Cisco | Blocked same as above |
+
+Tracked under issue
+[#1](https://github.com/colinedwardwood/network-topology-exporter/issues/1),
+moved to milestone v1.3.1.
+
 ## Sign-off
 
 - [x] Vendor coverage: full (IETF draft + Cisco + Juniper + Nokia SR-OS)
 - [x] Kill-switch: `modules.bgp.use_v2_mib`, default true
 - [x] gNMI deferred to a separate initiative
-- [ ] Real-device fixtures: synthetic fixtures land with the first PR; real captures **must** be added before the kill-switch default flips to silent (i.e. before the next minor release after the v2 walker ships)
+- [ ] Real-device fixtures: synthetic fixtures land with the first PR; real captures **must** be added before the kill-switch default flips to silent (i.e. before the next minor release after the v2 walker ships). Lab scaffold at `lab/cisco-iol-bgp/`; environment requirements per the section above.
