@@ -1,0 +1,9 @@
+# Raw capture output — local artefacts, not fixtures. Translate the
+# interesting ones into []gsnmp.SnmpPDU literals under
+# internal/snmptest/testdata/ instead.
+captures/*
+!captures/.gitkeep
+
+# containerlab runtime artefacts.
+clab-cisco-iol-bgp/
+*.log

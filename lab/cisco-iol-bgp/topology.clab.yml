@@ -1,0 +1,32 @@
+# 2-node Cisco IOL iBGP topology for BGP4-V2 fixture capture.
+#
+# Purpose: drive snmpwalk against `cbgpPeer2Table` (1.3.6.1.4.1.9.9.187.1.2.5)
+# on a real Cisco IOS-XE-class stack so the fixtures used by the
+# `vendor_cisco` walker in internal/discovery/bgp/bgp_vendor.go are
+# validated against actual SNMP output rather than synthetic PDU
+# streams (issue #1).
+#
+# Image: vrnetlab/cisco_iol:L2-17.12.1 — loaded locally via `docker load`
+# from ../../network-topology-exporter-resources/cisco_iol-L2-17.12.1.bzip.
+#
+# IMPORTANT: this is the L2 (switch) variant of IOL. BGP support in L2 IOL
+# is not guaranteed — the first runbook step in README.md is to verify
+# that `router bgp` is accepted on this image. If not, fall back to
+# vr-fortios for RFC 4273 fixtures only.
+name: cisco-iol-bgp
+
+topology:
+  kinds:
+    cisco_iol:
+      image: vrnetlab/cisco_iol:L2-17.12.1
+
+  nodes:
+    r1:
+      kind: cisco_iol
+      startup-config: configs/r1.cfg
+    r2:
+      kind: cisco_iol
+      startup-config: configs/r2.cfg
+
+  links:
+    - endpoints: ["r1:Ethernet0/0", "r2:Ethernet0/0"]
