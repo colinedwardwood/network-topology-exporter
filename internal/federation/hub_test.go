@@ -2200,6 +2200,101 @@ func TestValidateSpokePayloadRejectsLabelInjection(t *testing.T) {
 	}
 }
 
+// TestValidateSpokePayloadRejectsEdgeMetadataInjection mirrors the
+// Device.Labels coverage in TestValidateSpokePayloadRejectsLabelInjection
+// for Edge.Metadata, the map[string]string field that flows into
+// /metrics labels on the same wire as Device.Labels. Filed as issue #25:
+// the original D26 validation hardening (commit d4439a3) covered Labels
+// but missed Metadata, leaving a parallel injection vector.
+func TestValidateSpokePayloadRejectsEdgeMetadataInjection(t *testing.T) {
+	edgeWithMetadata := func(k, v string) discovery.Edge {
+		return discovery.Edge{
+			SrcDevice: "sw-1", SrcPort: "Gi0/1",
+			DstDevice: "sw-2", DstPort: "Gi0/2",
+			Metadata: map[string]string{k: v},
+		}
+	}
+
+	cases := []struct {
+		name       string
+		payload    SpokePayload
+		wantReason string
+	}{
+		{
+			name:       "metadata key with newline",
+			payload:    SpokePayload{Edges: []discovery.Edge{edgeWithMetadata("bad\nkey", "v")}},
+			wantReason: rejectReasonInvalidLabelKey,
+		},
+		{
+			name:       "metadata key with NUL",
+			payload:    SpokePayload{Edges: []discovery.Edge{edgeWithMetadata("bad\x00key", "v")}},
+			wantReason: rejectReasonInvalidLabelKey,
+		},
+		{
+			name:       "metadata key exceeds size cap",
+			payload:    SpokePayload{Edges: []discovery.Edge{edgeWithMetadata(strings.Repeat("k", 257), "v")}},
+			wantReason: rejectReasonInvalidLabelKey,
+		},
+		{
+			name:       "metadata key empty",
+			payload:    SpokePayload{Edges: []discovery.Edge{edgeWithMetadata("", "v")}},
+			wantReason: rejectReasonInvalidLabelKey,
+		},
+		{
+			name:       "metadata value with newline",
+			payload:    SpokePayload{Edges: []discovery.Edge{edgeWithMetadata("k", "good\nbad")}},
+			wantReason: rejectReasonInvalidLabelValue,
+		},
+		{
+			name:       "metadata value with NUL",
+			payload:    SpokePayload{Edges: []discovery.Edge{edgeWithMetadata("k", "good\x00bad")}},
+			wantReason: rejectReasonInvalidLabelValue,
+		},
+		{
+			name:       "metadata value exceeds size cap",
+			payload:    SpokePayload{Edges: []discovery.Edge{edgeWithMetadata("k", strings.Repeat("a", 4097))}},
+			wantReason: rejectReasonInvalidLabelValue,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateSpokePayload(tc.payload)
+			if err == nil {
+				t.Fatalf("expected rejection for %q, got nil", tc.name)
+			}
+			var verr *validationError
+			if !errors.As(err, &verr) {
+				t.Fatalf("expected *validationError, got %T: %v", err, err)
+			}
+			if verr.reason != tc.wantReason {
+				t.Errorf("reason = %q, want %q (msg=%q)", verr.reason, tc.wantReason, verr.msg)
+			}
+		})
+	}
+}
+
+// TestValidateSpokePayloadAcceptsValidEdgeMetadata mirrors
+// TestValidateSpokePayloadAcceptsValidLabels for Edge.Metadata so the new
+// validation doesn't over-fit and reject legitimate metadata values that
+// the discovery layer already populates (e.g. bgp.remote_as,
+// peer_chassis_mac per internal/discovery/discovery.go).
+func TestValidateSpokePayloadAcceptsValidEdgeMetadata(t *testing.T) {
+	edge := discovery.Edge{
+		SrcDevice: "sw-1", SrcPort: "Gi0/1",
+		DstDevice: "sw-2", DstPort: "Gi0/2",
+		Metadata: map[string]string{
+			"bgp.remote_as":    "65001",
+			"peer_chassis_mac": "aa:bb:cc:dd:ee:ff",
+			"degraded":         "true",
+			"degraded_reason":  "optional_table_missing",
+			"normal_with_utf8": "São Paulo",
+		},
+	}
+	if err := validateSpokePayload(SpokePayload{Edges: []discovery.Edge{edge}}); err != nil {
+		t.Errorf("expected accept for valid metadata, got: %v", err)
+	}
+}
+
 // TestValidateSpokePayloadAcceptsValidLabels verifies that the validation
 // hardening did not over-fit: the allowed shape of Prometheus label names
 // (ASCII letter/underscore start, then alnum/underscore) and any UTF-8

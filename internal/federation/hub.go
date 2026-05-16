@@ -339,6 +339,50 @@ func validateSpokePayload(p SpokePayload) error {
 					"edge[%d]: %s: %s", i, f.name, err.Error())
 			}
 		}
+		// Edge.Metadata is a map[string]string that flows into OTLP
+		// attribute names+values via internal/output/otlp/otlp.go:201 (key
+		// prefixed with metadataAttrPrefix). Not a Prometheus label path —
+		// TopologyCollector does not emit it. Threat surface is therefore:
+		// log-line corruption (control chars), JSON encoding bloat (huge
+		// values), and OTLP attribute pollution (oversized keys/values).
+		// Validate accordingly:
+		//   - Cap key and value size (matches snapshot.go's caps; #22).
+		//   - Reject control characters in both keys and values.
+		//   - Do NOT enforce the Prometheus label-name grammar on keys:
+		//     production discovery code uses dotted keys like
+		//     "bgp.remote_as" and "mpls_te.admin_status" that conform to
+		//     OTLP attribute-name conventions but not Prometheus's
+		//     [a-zA-Z_][a-zA-Z0-9_]* grammar. Enforcing the strict shape
+		//     would reject every legitimate BGP/MPLS push.
+		// Issue #25 closed a gap left by #4 / D26.
+		for k, v := range e.Metadata {
+			if k == "" {
+				return newValidationError(rejectReasonInvalidLabelKey,
+					"edge[%d]: metadata key must not be empty", i)
+			}
+			if len(k) > maxLabelKeyBytes {
+				return newValidationError(rejectReasonInvalidLabelKey,
+					"edge[%d]: metadata key exceeds %d bytes", i, maxLabelKeyBytes)
+			}
+			if !utf8.ValidString(k) {
+				return newValidationError(rejectReasonInvalidLabelKey,
+					"edge[%d]: metadata key is not valid UTF-8", i)
+			}
+			for _, r := range k {
+				if r == 0x00 || r == '\n' || r == '\r' || r < 0x20 || r == 0x7F {
+					return newValidationError(rejectReasonInvalidLabelKey,
+						"edge[%d]: metadata key contains forbidden control char %#U", i, r)
+				}
+			}
+			if !utf8.ValidString(v) {
+				return newValidationError(rejectReasonInvalidLabelValue,
+					"edge[%d]: metadata %q value is not valid UTF-8", i, k)
+			}
+			if err := validateLabelValue(v); err != nil {
+				return newValidationError(rejectReasonInvalidLabelValue,
+					"edge[%d]: metadata %q: %s", i, k, err.Error())
+			}
+		}
 	}
 	for i, n := range p.OutOfScope {
 		for _, f := range []struct{ name, val string }{
