@@ -33,6 +33,18 @@ const (
 
 	maxDeviceIDBytes = 256
 	maxPortNameBytes = 256
+
+	// maxLabelKeyBytes and maxLabelValueBytes cap individual spoke-supplied
+	// label inputs before per-rune validation iterates the string. The
+	// http.MaxBytesReader on the push body bounds total payload size at 16 MiB,
+	// but a single 16 MiB label value would still force ~4M rune iterations in
+	// validateLabelValue — a CPU-DoS vector even against an mTLS-authenticated
+	// spoke. Prometheus / OpenMetrics impose no formal max on label values
+	// (REMEDIATION.md §3), but client_golang defaults and Grafana Cloud Mimir
+	// limits operate well under 4 KiB per value, so values exceeding 4096
+	// bytes are far outside any legitimate topology label and safe to reject.
+	maxLabelKeyBytes   = 256
+	maxLabelValueBytes = 4096
 )
 
 type spokeEntry struct {
@@ -181,6 +193,12 @@ func validateLabelKey(k string) error {
 	if k == "" {
 		return newValidationError(rejectReasonInvalidLabelKey, "label key must not be empty")
 	}
+	// Size cap runs before the regex match so a 16 MiB key cannot force the
+	// regex engine (or any future per-rune check) to walk the whole string.
+	if len(k) > maxLabelKeyBytes {
+		return newValidationError(rejectReasonInvalidLabelKey,
+			"label key exceeds %d bytes", maxLabelKeyBytes)
+	}
 	if strings.HasPrefix(k, "__") {
 		return newValidationError(rejectReasonInvalidLabelKey,
 			"label key %q starts with reserved prefix \"__\"", k)
@@ -200,6 +218,15 @@ func validateLabelKey(k string) error {
 // correctly on emission) is allowed. The caller has already checked that the
 // string is valid UTF-8 and within length bounds.
 func validateLabelValue(v string) error {
+	// Size cap runs before per-rune iteration so a 16 MiB value cannot force
+	// ~4M iterations of the control-char check. Prometheus / OpenMetrics
+	// impose no formal max on label value length (REMEDIATION.md §3), but
+	// client_golang defaults and Grafana Cloud Mimir limits operate well
+	// under 4 KiB per value, so 4096 bytes is a safe upper bound.
+	if len(v) > maxLabelValueBytes {
+		return newValidationError(rejectReasonInvalidLabelValue,
+			"label value exceeds %d bytes", maxLabelValueBytes)
+	}
 	for _, r := range v {
 		if r == 0x00 || r == '\n' || r == '\r' {
 			return newValidationError(rejectReasonInvalidLabelValue,
@@ -219,8 +246,11 @@ func validateLabelValue(v string) error {
 // validateMetricLabelString validates a string that becomes a Prometheus
 // label *value* (not key) on a metric with a static label name. Currently
 // applies to spoke-supplied edge port/device names and OOS-neighbour fields.
-// Same rules as validateLabelValue plus a length cap is enforced by the
-// caller upstream.
+// Same rules as validateLabelValue, which now enforces the maxLabelValueBytes
+// size cap before per-rune iteration — callers inherit that cap transitively.
+// Upstream callers also apply field-specific caps (maxPortNameBytes,
+// maxDeviceIDBytes) which are tighter; the cap inside validateLabelValue is
+// the universal floor that prevents CPU DoS on any path that reaches here.
 func validateMetricLabelString(s string) error {
 	return validateLabelValue(s)
 }

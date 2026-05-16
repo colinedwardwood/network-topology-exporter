@@ -16,6 +16,7 @@ and doing a project-wide string update at that time.
 
 ### Security
 
+- **D31** — Hub now caps individual spoke-supplied label keys at 256 bytes and label values at 4096 bytes *before* per-rune validation iterates the string. Closes a CPU-DoS vector: today's `http.MaxBytesReader` caps the whole push body at 16 MiB but individual fields had no separate cap, so a single 16 MiB label value forced ~4M rune iterations per validated field. mTLS scopes the attacker pool but does not prevent compute exhaustion from a misbehaving or compromised spoke. Sized against Prometheus / OpenMetrics conventions and Grafana Cloud Mimir limits, which operate well under these caps. Closes #14.
 - **D26** — Hub now validates spoke-pushed label keys and values at the trust boundary, rejecting the entire push with HTTP 400 + a structured `reason` enum when validation fails. New reject reasons: `invalid_label_key`, `invalid_label_value`. Label keys must match `^[a-zA-Z_][a-zA-Z0-9_]*$` and must not start with `__` (Prometheus reserved namespace); values must not contain NUL, newline, carriage return, other C0 control characters, or DEL. Applied to Device.Labels (keys + values), Device inventory string fields (Vendor/Model/OSVersion/Site), Edge fields (SrcDevice/SrcPort/DstDevice/DstPort/DiscoveryProto/LinkKind), and OutOfScopeNeighbour fields. mTLS authenticates WHO can push; this is the WHAT enforcement. Closes a /metrics line-protocol injection vector identified in the adversarial review. Closes #4.
 
 ### Discovery

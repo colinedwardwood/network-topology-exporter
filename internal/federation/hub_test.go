@@ -2402,5 +2402,68 @@ func TestValidateSpokePayloadRejectsEmptyLabelKeyTypedReason(t *testing.T) {
 	}
 }
 
+// TestValidateLabelKeyRejectsOversized verifies the size cap added to
+// validateLabelKey short-circuits before the regex / reserved-prefix checks
+// when a key exceeds maxLabelKeyBytes. The cap is exclusive: a 256-byte key
+// is the largest accepted value; 257 bytes rejects with invalid_label_key.
+// Mitigates CPU-DoS via a 16 MiB label key on an mTLS-authenticated spoke
+// push (issue #14).
+func TestValidateLabelKeyRejectsOversized(t *testing.T) {
+	oversized := strings.Repeat("a", maxLabelKeyBytes+1)
+	err := validateLabelKey(oversized)
+	if err == nil {
+		t.Fatalf("validateLabelKey(%d bytes) = nil, want validationError", len(oversized))
+	}
+	var verr *validationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("error type = %T, want *validationError", err)
+	}
+	if verr.reason != rejectReasonInvalidLabelKey {
+		t.Errorf("reason = %q, want %q", verr.reason, rejectReasonInvalidLabelKey)
+	}
+}
+
+// TestValidateLabelKeyAcceptsBoundary verifies the cap is exclusive (>),
+// not inclusive (>=): a key of exactly maxLabelKeyBytes is accepted. Uses
+// only valid label-key runes so the only possible reject path is the size
+// cap itself.
+func TestValidateLabelKeyAcceptsBoundary(t *testing.T) {
+	boundary := strings.Repeat("a", maxLabelKeyBytes)
+	if err := validateLabelKey(boundary); err != nil {
+		t.Errorf("validateLabelKey(%d bytes) = %v, want nil", len(boundary), err)
+	}
+}
+
+// TestValidateLabelValueRejectsOversized verifies the size cap added to
+// validateLabelValue short-circuits before the per-rune control-char loop
+// when a value exceeds maxLabelValueBytes. A 4097-byte value rejects with
+// invalid_label_value; mitigates the ~4M-rune-iteration vector described in
+// issue #14.
+func TestValidateLabelValueRejectsOversized(t *testing.T) {
+	oversized := strings.Repeat("a", maxLabelValueBytes+1)
+	err := validateLabelValue(oversized)
+	if err == nil {
+		t.Fatalf("validateLabelValue(%d bytes) = nil, want validationError", len(oversized))
+	}
+	var verr *validationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("error type = %T, want *validationError", err)
+	}
+	if verr.reason != rejectReasonInvalidLabelValue {
+		t.Errorf("reason = %q, want %q", verr.reason, rejectReasonInvalidLabelValue)
+	}
+}
+
+// TestValidateLabelValueAcceptsBoundary verifies the cap is exclusive (>),
+// not inclusive (>=): a value of exactly maxLabelValueBytes is accepted.
+// Uses only printable ASCII so the only possible reject path is the size
+// cap itself.
+func TestValidateLabelValueAcceptsBoundary(t *testing.T) {
+	boundary := strings.Repeat("a", maxLabelValueBytes)
+	if err := validateLabelValue(boundary); err != nil {
+		t.Errorf("validateLabelValue(%d bytes) = %v, want nil", len(boundary), err)
+	}
+}
+
 // Ensure unused import is compiled away by the test binary.
 var _ = os.DevNull
