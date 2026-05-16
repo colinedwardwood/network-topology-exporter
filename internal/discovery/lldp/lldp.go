@@ -269,12 +269,19 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 			continue
 		}
 
-		localPort := resolveLocalPort(k.portNum, locPorts)
+		// SanitisePortName at the variable assignment covers Edge.SrcPort,
+		// Edge.DstPort, and OutOfScopeNeighbour.ReportingPort with one wrap per
+		// variable. Defends against non-conforming device PDUs whose strings
+		// exceed the 255-byte SnmpAdminString limit (IEEE 802.1AB-2016) and
+		// would otherwise be rejected by the hub's federation push validator.
+		// Issue #13.
+		localPort := snmputil.SanitisePortName(resolveLocalPort(k.portNum, locPorts))
 		remDevice := resolveRemDevice(rem)
 		remPort := decodePortID(rem.portSubtype, rem.portID)
 		if remPort == "" {
 			remPort = rem.portDesc
 		}
+		remPort = snmputil.SanitisePortName(remPort)
 		if remDevice == "" || remPort == "" {
 			slog.Debug("lldp: unable to resolve neighbour device or port, skipping edge",
 				"local_device", localDevice, "local_port", localPort,
