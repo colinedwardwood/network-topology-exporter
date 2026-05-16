@@ -1,0 +1,30 @@
+# 2-node Arista cEOS iBGP topology for v2_draft walker fixture capture.
+#
+# Arista EOS implements the IETF draft bgp4V2PeerTable natively at OID
+# 1.3.6.1.3.5.1.1.2 — this is the primary target of our `v2_draft` walker
+# in internal/discovery/bgp/bgp_v2.go. The capture here is the
+# real-device fixture for that walker. See issue #1 / #31.
+#
+# Image: ceos:4.36.0F — loaded via `docker import` from
+# ../../network-topology-exporter-resources/cEOS64-lab-4.36.0F.tar.xz.
+# Arista cEOS is a free download (no licensing barrier beyond an Arista
+# account); 64-bit-lab variant runs on x86_64 Linux+KVM hosts.
+name: arista-ceos-bgp
+
+topology:
+  kinds:
+    arista_ceos:
+      image: ceos:4.36.0F
+
+  nodes:
+    r1:
+      kind: arista_ceos
+      startup-config: configs/r1.cfg
+      mgmt-ipv4: 172.20.20.13
+    r2:
+      kind: arista_ceos
+      startup-config: configs/r2.cfg
+      mgmt-ipv4: 172.20.20.12
+
+  links:
+    - endpoints: ["r1:eth1", "r2:eth1"]
