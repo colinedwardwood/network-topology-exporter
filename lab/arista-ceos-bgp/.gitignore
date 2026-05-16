@@ -1,0 +1,8 @@
+# Real-device captures land here. Committed as evidence for fixture work.
+# Add captures/*.local.txt for one-off operator captures that should NOT
+# be committed.
+captures/*.local.txt
+
+# containerlab runtime artefacts.
+clab-arista-ceos-bgp/
+*.log
