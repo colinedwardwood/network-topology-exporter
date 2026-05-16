@@ -590,7 +590,7 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 				"devices", len(newGraph.Devices), "max_devices", maxDevices,
 				"edges", len(newGraph.Edges), "max_edges", maxEdges)
 			ages = newAges // advance counters so unconfirmed edges can still expire
-			lc.m.GraphUpdatesRejectedTotal.Inc()
+			lc.m.GraphUpdatesRejectedTotal.WithLabelValues("size_budget_exceeded").Inc()
 			// Keep prevGraph as the published graph; skip all downstream updates.
 			return
 		}

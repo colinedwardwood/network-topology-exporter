@@ -2443,7 +2443,7 @@ func TestGraphSizeAdmissionControl(t *testing.T) {
 			if status.Load() == nil {
 				continue
 			}
-			rejected := testutil.ToFloat64(m.GraphUpdatesRejectedTotal)
+			rejected := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues("size_budget_exceeded"))
 			if rejected > 0 {
 				cancel()
 				<-done

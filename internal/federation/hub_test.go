@@ -1645,8 +1645,8 @@ func TestTryPublishMetricsRejectsOversizedGraphEdges(t *testing.T) {
 
 	h.tryPublishMetrics(1, g, false, 0)
 
-	if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal); got != 1 {
-		t.Errorf("GraphUpdatesRejectedTotal = %v, want 1", got)
+	if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(rejectReasonSizeBudgetExceeded)); got != 1 {
+		t.Errorf("GraphUpdatesRejectedTotal{reason=size_budget_exceeded} = %v, want 1", got)
 	}
 
 	// Topology must NOT have been updated — gather metrics and confirm no
@@ -1685,8 +1685,8 @@ func TestTryPublishMetricsRejectsOversizedGraphDevices(t *testing.T) {
 
 	h.tryPublishMetrics(1, g, false, 0)
 
-	if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal); got != 1 {
-		t.Errorf("GraphUpdatesRejectedTotal = %v, want 1", got)
+	if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(rejectReasonSizeBudgetExceeded)); got != 1 {
+		t.Errorf("GraphUpdatesRejectedTotal{reason=size_budget_exceeded} = %v, want 1", got)
 	}
 
 	// Topology must NOT have been updated — gather metrics and confirm no
@@ -1789,8 +1789,8 @@ func TestHubHandlePushRejectedGraphDoesNotMarkSpokeUp(t *testing.T) {
 	}
 
 	// GraphUpdatesRejectedTotal must have been incremented.
-	if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal); got != 1 {
-		t.Errorf("GraphUpdatesRejectedTotal = %v, want 1", got)
+	if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(rejectReasonSizeBudgetExceeded)); got != 1 {
+		t.Errorf("GraphUpdatesRejectedTotal{reason=size_budget_exceeded} = %v, want 1", got)
 	}
 }
 
@@ -2343,7 +2343,7 @@ func TestHubHandlePushRejectsLabelInjection(t *testing.T) {
 			m := metrics.New(false)
 			h := NewHub(config.FederationConfig{SpokeTimeout: time.Minute}, m, nil, "")
 
-			before := testutil.ToFloat64(m.GraphUpdatesRejectedTotal)
+			before := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(tc.wantReason))
 			body, err := json.Marshal(tc.payload)
 			if err != nil {
 				t.Fatalf("marshal: %v", err)
@@ -2369,8 +2369,8 @@ func TestHubHandlePushRejectsLabelInjection(t *testing.T) {
 			if resp.Reason != tc.wantReason {
 				t.Errorf("reason = %q, want %q", resp.Reason, tc.wantReason)
 			}
-			if after := testutil.ToFloat64(m.GraphUpdatesRejectedTotal); after != before+1 {
-				t.Errorf("GraphUpdatesRejectedTotal delta = %v, want 1", after-before)
+			if after := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(tc.wantReason)); after != before+1 {
+				t.Errorf("GraphUpdatesRejectedTotal{reason=%s} delta = %v, want 1", tc.wantReason, after-before)
 			}
 		})
 	}
