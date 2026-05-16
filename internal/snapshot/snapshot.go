@@ -61,6 +61,20 @@ var (
 //	    "%" must be escaped first to prevent double-encoding.
 const CurrentVersion = 3
 
+// Per-field byte caps applied by validateSnapshotFields. These guard against a
+// malicious or corrupted snapshot.json declaring multi-megabyte strings that
+// json.Unmarshal would happily allocate. Values mirror the caps used elsewhere
+// in the codebase (federation hub) and are duplicated here as local constants
+// to keep this package self-contained; a later cleanup can consolidate.
+const (
+	maxIDBytes         = 256  // device IDs, sysNames, port names
+	maxShortFieldBytes = 256  // vendor, model, OS version, site, src/dst device
+	maxPortBytes       = 256  // port names
+	maxProtoBytes      = 64   // enum-like values: discovery_proto, link_kind
+	maxLabelKeyBytes   = 256  // map key for Labels / Metadata
+	maxLabelValueBytes = 4096 // map value for Labels / Metadata
+)
+
 // File is the on-disk representation. Public fields and field tags are part
 // of the persistence contract; treat schema changes the same as a database
 // migration.
@@ -103,6 +117,9 @@ func Load(path string) (*File, error) {
 			return nil, fmt.Errorf("%w: got %d, want %d (quarantine also failed: %v)", ErrVersionMismatch, f.Version, CurrentVersion, qErr)
 		}
 		return nil, fmt.Errorf("%w: got %d, want %d", ErrVersionMismatch, f.Version, CurrentVersion)
+	}
+	if err := validateSnapshotFields(&f); err != nil {
+		return nil, fmt.Errorf("validate snapshot: %w", err)
 	}
 	return &f, nil
 }
@@ -185,6 +202,85 @@ func Write(path string, f File) error {
 	if fd, err := os.Open(dir); err == nil { //nolint:gosec
 		_ = fd.Sync()
 		_ = fd.Close()
+	}
+	return nil
+}
+
+// validateSnapshotFields enforces per-field length caps on the parsed snapshot.
+// It guards against a corrupted or hostile snapshot.json declaring multi-MB
+// strings that json.Unmarshal would happily allocate. Error messages include
+// the slice index and the actual byte length so an operator can locate the
+// offending entry.
+func validateSnapshotFields(f *File) error {
+	if f == nil {
+		return nil
+	}
+	for i, d := range f.Devices {
+		if n := len(d.ID); n > maxIDBytes {
+			return fmt.Errorf("device[%d]: id exceeds %d bytes (%d)", i, maxIDBytes, n)
+		}
+		if n := len(d.Vendor); n > maxShortFieldBytes {
+			return fmt.Errorf("device[%d]: vendor exceeds %d bytes (%d)", i, maxShortFieldBytes, n)
+		}
+		if n := len(d.Model); n > maxShortFieldBytes {
+			return fmt.Errorf("device[%d]: model exceeds %d bytes (%d)", i, maxShortFieldBytes, n)
+		}
+		if n := len(d.OSVersion); n > maxShortFieldBytes {
+			return fmt.Errorf("device[%d]: os_version exceeds %d bytes (%d)", i, maxShortFieldBytes, n)
+		}
+		if n := len(d.Site); n > maxShortFieldBytes {
+			return fmt.Errorf("device[%d]: site exceeds %d bytes (%d)", i, maxShortFieldBytes, n)
+		}
+		for k, v := range d.Labels {
+			if n := len(k); n > maxLabelKeyBytes {
+				return fmt.Errorf("device[%d]: labels key exceeds %d bytes (%d)", i, maxLabelKeyBytes, n)
+			}
+			if n := len(v); n > maxLabelValueBytes {
+				return fmt.Errorf("device[%d]: labels value for key %q exceeds %d bytes (%d)", i, k, maxLabelValueBytes, n)
+			}
+		}
+	}
+	for i, e := range f.Edges {
+		if n := len(e.SrcDevice); n > maxIDBytes {
+			return fmt.Errorf("edge[%d]: src_device exceeds %d bytes (%d)", i, maxIDBytes, n)
+		}
+		if n := len(e.DstDevice); n > maxIDBytes {
+			return fmt.Errorf("edge[%d]: dst_device exceeds %d bytes (%d)", i, maxIDBytes, n)
+		}
+		if n := len(e.SrcPort); n > maxPortBytes {
+			return fmt.Errorf("edge[%d]: src_port exceeds %d bytes (%d)", i, maxPortBytes, n)
+		}
+		if n := len(e.DstPort); n > maxPortBytes {
+			return fmt.Errorf("edge[%d]: dst_port exceeds %d bytes (%d)", i, maxPortBytes, n)
+		}
+		if n := len(e.DiscoveryProto); n > maxProtoBytes {
+			return fmt.Errorf("edge[%d]: discovery_proto exceeds %d bytes (%d)", i, maxProtoBytes, n)
+		}
+		if n := len(e.LinkKind); n > maxProtoBytes {
+			return fmt.Errorf("edge[%d]: link_kind exceeds %d bytes (%d)", i, maxProtoBytes, n)
+		}
+		for k, v := range e.Metadata {
+			if n := len(k); n > maxLabelKeyBytes {
+				return fmt.Errorf("edge[%d]: metadata key exceeds %d bytes (%d)", i, maxLabelKeyBytes, n)
+			}
+			if n := len(v); n > maxLabelValueBytes {
+				return fmt.Errorf("edge[%d]: metadata value for key %q exceeds %d bytes (%d)", i, k, maxLabelValueBytes, n)
+			}
+		}
+	}
+	for i, n := range f.OutOfScope {
+		if x := len(n.ReportingDevice); x > maxIDBytes {
+			return fmt.Errorf("out_of_scope[%d]: reporting_device exceeds %d bytes (%d)", i, maxIDBytes, x)
+		}
+		if x := len(n.ReportingPort); x > maxPortBytes {
+			return fmt.Errorf("out_of_scope[%d]: reporting_port exceeds %d bytes (%d)", i, maxPortBytes, x)
+		}
+		if x := len(n.NeighbourHint); x > maxIDBytes {
+			return fmt.Errorf("out_of_scope[%d]: neighbour_hint exceeds %d bytes (%d)", i, maxIDBytes, x)
+		}
+		if x := len(n.Proto); x > maxProtoBytes {
+			return fmt.Errorf("out_of_scope[%d]: proto exceeds %d bytes (%d)", i, maxProtoBytes, x)
+		}
 	}
 	return nil
 }

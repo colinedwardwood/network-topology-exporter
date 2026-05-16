@@ -630,3 +630,172 @@ func TestWriteRenameError(t *testing.T) {
 		t.Errorf("error = %v, want to wrap errInjected", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// validateSnapshotFields tests (issue #22)
+// ---------------------------------------------------------------------------
+
+// writeSnapshotForLoad writes a File to disk via Write so tests don't have to
+// hand-roll the JSON envelope (version, written_at). Returns the path.
+func writeSnapshotForLoad(t *testing.T, f File) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "snap.json")
+	if err := Write(path, f); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	return path
+}
+
+// TestLoadRejectsOversizedDeviceID: a snapshot whose first device ID is over
+// the 256-byte cap must be rejected with a message that names the index and
+// the field.
+func TestLoadRejectsOversizedDeviceID(t *testing.T) {
+	path := writeSnapshotForLoad(t, File{
+		Devices: []discovery.Device{
+			{ID: "ok"},
+			{ID: strings.Repeat("a", 1024)}, // 1 KB ID at index 1
+		},
+	})
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for oversized device ID, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "device[1]") {
+		t.Errorf("error should reference device[1], got %q", msg)
+	}
+	if !strings.Contains(msg, "id exceeds") {
+		t.Errorf("error should name the id field, got %q", msg)
+	}
+}
+
+// TestLoadRejectsOversizedPortName: Edge.SrcPort over 256 bytes must be
+// rejected with index + field name.
+func TestLoadRejectsOversizedPortName(t *testing.T) {
+	path := writeSnapshotForLoad(t, File{
+		Edges: []discovery.Edge{
+			{SrcDevice: "a", SrcPort: strings.Repeat("p", 257), DstDevice: "b", DstPort: "ok"},
+		},
+	})
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for oversized SrcPort, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "edge[0]") {
+		t.Errorf("error should reference edge[0], got %q", msg)
+	}
+	if !strings.Contains(msg, "src_port") {
+		t.Errorf("error should name the src_port field, got %q", msg)
+	}
+}
+
+// TestLoadRejectsOversizedLabelValue: a Device.Labels value over 4096 bytes
+// must be rejected with the index and labels field.
+func TestLoadRejectsOversizedLabelValue(t *testing.T) {
+	path := writeSnapshotForLoad(t, File{
+		Devices: []discovery.Device{
+			{ID: "dev-1", Labels: map[string]string{"env": strings.Repeat("v", 4097)}},
+		},
+	})
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for oversized label value, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "device[0]") {
+		t.Errorf("error should reference device[0], got %q", msg)
+	}
+	if !strings.Contains(msg, "labels value") {
+		t.Errorf("error should mention labels value, got %q", msg)
+	}
+}
+
+// TestLoadAcceptsBoundaryValues: exactly-at-the-cap inputs (256 / 4096)
+// succeed, and one-byte-over (257 / 4097) fails. Locks in the off-by-one
+// behaviour at every cap boundary the validator touches.
+func TestLoadAcceptsBoundaryValues(t *testing.T) {
+	atCap := File{
+		Devices: []discovery.Device{
+			{
+				ID:        strings.Repeat("i", 256),
+				Vendor:    strings.Repeat("v", 256),
+				Model:     strings.Repeat("m", 256),
+				OSVersion: strings.Repeat("o", 256),
+				Site:      strings.Repeat("s", 256),
+				Labels: map[string]string{
+					strings.Repeat("k", 256): strings.Repeat("V", 4096),
+				},
+			},
+		},
+		Edges: []discovery.Edge{
+			{
+				SrcDevice:      strings.Repeat("S", 256),
+				SrcPort:        strings.Repeat("P", 256),
+				DstDevice:      strings.Repeat("D", 256),
+				DstPort:        strings.Repeat("Q", 256),
+				DiscoveryProto: strings.Repeat("p", 64),
+				LinkKind:       strings.Repeat("l", 64),
+				Metadata: map[string]string{
+					strings.Repeat("k", 256): strings.Repeat("V", 4096),
+				},
+			},
+		},
+	}
+	path := writeSnapshotForLoad(t, atCap)
+	if _, err := Load(path); err != nil {
+		t.Fatalf("Load at-cap snapshot: %v", err)
+	}
+
+	// One byte over each cap must fail. Each sub-case mutates one field at a time.
+	cases := []struct {
+		name  string
+		mut   func(*File)
+		field string
+	}{
+		{"device id +1", func(f *File) { f.Devices[0].ID = strings.Repeat("i", 257) }, "id"},
+		{"device vendor +1", func(f *File) { f.Devices[0].Vendor = strings.Repeat("v", 257) }, "vendor"},
+		{"device label value +1", func(f *File) {
+			f.Devices[0].Labels = map[string]string{"env": strings.Repeat("V", 4097)}
+		}, "labels value"},
+		{"edge src_port +1", func(f *File) { f.Edges[0].SrcPort = strings.Repeat("P", 257) }, "src_port"},
+		{"edge discovery_proto +1", func(f *File) { f.Edges[0].DiscoveryProto = strings.Repeat("p", 65) }, "discovery_proto"},
+		{"edge metadata value +1", func(f *File) {
+			f.Edges[0].Metadata = map[string]string{"k": strings.Repeat("V", 4097)}
+		}, "metadata value"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Start from a fresh at-cap snapshot for each sub-case so earlier
+			// mutations don't bleed across.
+			f := File{
+				Devices: []discovery.Device{{
+					ID:        strings.Repeat("i", 256),
+					Vendor:    strings.Repeat("v", 256),
+					Model:     strings.Repeat("m", 256),
+					OSVersion: strings.Repeat("o", 256),
+					Site:      strings.Repeat("s", 256),
+					Labels:    map[string]string{strings.Repeat("k", 256): strings.Repeat("V", 4096)},
+				}},
+				Edges: []discovery.Edge{{
+					SrcDevice:      strings.Repeat("S", 256),
+					SrcPort:        strings.Repeat("P", 256),
+					DstDevice:      strings.Repeat("D", 256),
+					DstPort:        strings.Repeat("Q", 256),
+					DiscoveryProto: strings.Repeat("p", 64),
+					LinkKind:       strings.Repeat("l", 64),
+					Metadata:       map[string]string{strings.Repeat("k", 256): strings.Repeat("V", 4096)},
+				}},
+			}
+			tc.mut(&f)
+			p := writeSnapshotForLoad(t, f)
+			_, err := Load(p)
+			if err == nil {
+				t.Fatalf("expected validation error mentioning %q, got nil", tc.field)
+			}
+			if !strings.Contains(err.Error(), tc.field) {
+				t.Errorf("error should mention %q, got %q", tc.field, err.Error())
+			}
+		})
+	}
+}
