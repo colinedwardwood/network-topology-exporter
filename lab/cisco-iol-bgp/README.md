@@ -32,61 +32,46 @@ stays blocked on a different image (e.g. CSR1000v, c8000v, or the L3
 variant of IOL). The FortiOS image stays useful for RFC 4273 fixtures —
 see `lab/fortios-bgp/` (not scaffolded yet).
 
-## Caveat 2: this lab CANNOT run on macOS / Apple Silicon
+## Caveat 2: vrnetlab kinds that wrap qcow2 need Linux + KVM
 
-Verified on 2026-05-16: a macOS / Apple Silicon / OrbStack host hits
-two blockers that no amount of containerlab configuration can work
-around.
+Cisco IOL itself is a Linux ELF binary that runs directly under the
+container's process namespace — no nested virt — so it works on macOS
+hosts too (via OrbStack's Rosetta amd64 translation). But the vrnetlab
+images for **FortiOS, CSR1000v, vMX, vSRX, SR-OS classic** wrap a
+qcow2 disk in QEMU/KVM inside the container. macOS does not expose
+`/dev/kvm` to guest Linux VMs, so QEMU falls back to TCG software
+emulation: 30-minute boots or outright failure depending on the image.
 
-1. **Cisco IOL requires an `iourc` license file** keyed to the specific
-   `iol.bin`'s hostid. The vrnetlab image is built without one; IOL
-   refuses to boot otherwise. The file is per-image-derived,
-   Cisco-internal, and not redistributable. If you don't have an
-   `iourc` matching this build, this lab is not runnable on any host.
-2. **vrnetlab kinds that wrap a qcow2 in QEMU (FortiOS, CSR1000v, vMX,
-   vSRX, SR-OS)** need `/dev/kvm` for usable performance. macOS's
-   hypervisor does not expose `/dev/kvm` to guest Linux VMs (including
-   OrbStack's), so QEMU falls back to TCG software emulation. Boot
-   times go from minutes to 30+ minutes, and some images simply fail
-   to come up. Cisco IOL itself is a Linux ELF binary running directly
-   under Rosetta — it doesn't have the nested-virt problem, only the
-   licensing one.
+If you only want IOL, this lab is usable on macOS. If you want any of
+the qcow2-wrapped kinds, deploy on a Linux host with VT-x/AMD-V and
+KVM accessible.
 
-**Run this lab on Linux with KVM enabled** (a CI runner, work desktop,
-or remote VM with hardware-virt passthrough). The scaffold in this
-directory is portable; only the deploy host changes. Issue
-[#1](https://github.com/colinedwardwood/network-topology-exporter/issues/1)
-is moved to milestone `v1.3.1 — Lab Fixture Capture` for that reason.
+## What containerlab handles for you
+
+Initial scaffolding (2026-05-15) assumed `cisco_iol` would refuse to
+boot without an operator-supplied `iourc` license file. Verified
+2026-05-16: **that assumption was wrong**. Containerlab's
+`cisco_iol` kind handler auto-generates an iourc keyed to the
+container hostname using the well-known community algorithm, and
+bind-mounts it into the container at deploy time. The image's
+entrypoint doesn't generate iourc itself, but containerlab does. Net:
+operators do NOT need to provide an iourc separately.
+
+The 2015-MBP Ubuntu Server lab run on 2026-05-16 confirmed IOL boots
+cleanly, BGP comes up between r1 and r2, SNMP responds — see
+`captures/` for the resulting `snmpwalk` output that became the
+real-device evidence for issue #1 (and that surfaced issue #31).
 
 ## Prerequisites
 
 | Tool | How |
 |---|---|
-| Linux host with hardware virt (KVM) | Verify `/dev/kvm` exists and `kvm-ok` reports ok. Do not attempt on macOS/Apple Silicon — see Caveat 2. |
-| Docker image `vrnetlab/cisco_iol:L2-17.12.1` loaded | `docker load -i path/to/cisco_iol-L2-17.12.1.bzip`. The .bzip artefacts live in the sibling `network-topology-exporter-resources/` directory on the original Mac; copy to the Linux host first. |
-| Cisco `iourc` license file matching this IOL build | Place at `iourc.txt` in this directory. NOT provided in the repo (license-restricted). See "iourc requirement" below. |
-| containerlab | `bash -c "$(curl -sL https://get.containerlab.dev)"` on the Linux host |
+| Host with Docker + KVM-or-Rosetta | Linux with `/dev/kvm`, or macOS with OrbStack (IOL works via Rosetta amd64 translation; qcow2-wrapped kinds in other labs need real KVM). |
+| Docker image `vrnetlab/cisco_iol:L2-17.12.1` loaded | `docker load -i path/to/cisco_iol-L2-17.12.1.bzip`. The .bzip artefacts live in the sibling `network-topology-exporter-resources/` directory; copy to the deploy host if it's different from where the .bzip lives. |
+| containerlab | `bash -c "$(curl -sL https://get.containerlab.dev)"`. Verified working with v0.75.0. |
 | `snmpwalk` (net-snmp) | `apt-get install -y snmp` |
-| `jq` (optional, helps capture.sh) | `apt-get install -y jq` |
-
-### iourc requirement
-
-Cisco IOL embeds a hostid check; the binary refuses to boot without an
-`iourc` file matching its compiled hostid. The file format is:
-
-```
-[license]
-<hostname> = <16-hex-char-checksum>;
-```
-
-The checksum is derived from the iol.bin's hostid + an internal Cisco
-algorithm. Generation requires Cisco-internal scripts. If you have an
-iourc that matches the iol.bin in `vrnetlab/cisco_iol:L2-17.12.1`,
-place it at `./iourc.txt` and the containerlab cisco_iol kind will
-bind-mount it into the container. If you don't, this image is not
-runnable for you — pivot to a vendor whose images don't require
-per-build licensing (CSR1000v with eval license, or different platform
-entirely).
+| `jq` (optional, helps capture.sh parse `containerlab inspect`) | `apt-get install -y jq` |
+| User in `docker` and `kvm` groups | `sudo usermod -aG docker,kvm $USER && newgrp docker` (or log out / back in) |
 
 ## Deploy
 
