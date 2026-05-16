@@ -73,16 +73,24 @@ type bgp4V2Peer struct {
 	indexRemoteIP net.IP // parsed from the index suffix
 }
 
-// walkBGP4V2PeerTable walks bgp4V2PeerTable. Returns (peers, ok) where ok is
-// false if the table returned no rows — the caller uses this to short-circuit
-// to vendor-specific or RFC 4273 fallbacks.
-func walkBGP4V2PeerTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*bgp4V2Peer, bool, error) {
+// walkBGP4V2PeerTable walks bgp4V2PeerTable. Returns (peers, hadPDUs, ok, err)
+// where hadPDUs reports whether the underlying BulkWalk produced any PDUs at
+// all (used by the caller to distinguish "MIB not implemented" from "MIB
+// implemented but no peers") and ok is false if no peer rows were assembled —
+// the caller uses ok to short-circuit to vendor-specific or RFC 4273
+// fallbacks.
+func walkBGP4V2PeerTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*bgp4V2Peer, bool, bool, error) {
 	pdus, err := snmputil.BulkWalk(ctx, client, oidBgp4V2PeerTable)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	if len(pdus) == 0 {
-		return nil, false, nil
+		// Zero PDUs from BulkWalk means the agent has no objects under the
+		// table OID — i.e. the MIB is not implemented (RFC 1213 / 3416:
+		// noSuchObject or an empty walk). Signal that with hadPDUs=false so
+		// the caller can record outcome="mib_unimplemented" instead of
+		// "no_peers".
+		return nil, false, false, nil
 	}
 
 	const prefix = "." + oidBgp4V2PeerTable + ".1."
@@ -132,9 +140,13 @@ func walkBGP4V2PeerTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]
 		}
 	}
 	if len(peers) == 0 {
-		return nil, false, nil
+		// PDUs arrived but every row was rejected by the index decoder, or
+		// none matched the expected prefix. The MIB is implemented; we just
+		// produced no usable peers. Signal hadPDUs=true so the caller records
+		// "no_peers" rather than "mib_unimplemented".
+		return nil, true, false, nil
 	}
-	return peers, true, nil
+	return peers, true, true, nil
 }
 
 // decodeBgp4V2Index parses a bgp4V2PeerTable index suffix.
@@ -269,30 +281,43 @@ func pduInetAddress(pdu gsnmp.SnmpPDU) net.IP {
 // walkAndBuildV2Edges runs the v2 walk and converts peers to edges. Returns
 // (edges, oos, ok) where ok=false means no v2-shaped data was found; the
 // caller should try vendor fallbacks or RFC 4273.
+//
+// Outcome accounting (issue #15): the "empty" outcome was split into two
+// operationally distinct counters. "mib_unimplemented" fires when BulkWalk
+// returned zero PDUs (the device does not implement the table). "no_peers"
+// fires when PDUs arrived and a peers map was built but no peer reached
+// bgpStateEstablished (BGP is configured but every session is down). Operators
+// alerting on the old aggregate "empty" should migrate to "no_peers"; the
+// "mib_unimplemented" condition is expected on non-BGP devices and should not
+// page.
 func walkAndBuildV2Edges(
 	ctx context.Context,
 	client *gsnmp.GoSNMP,
 	localDevice string,
 	allowedNets []*net.IPNet,
 ) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, bool, error) {
-	peers, ok, err := walkBGP4V2PeerTable(ctx, client)
+	peers, hadPDUs, ok, err := walkBGP4V2PeerTable(ctx, client)
 	if err != nil {
 		recordWalkerOutcome(walkerV2Draft, "error")
 		return nil, nil, false, err
 	}
 	if !ok {
-		recordWalkerOutcome(walkerV2Draft, "empty")
+		if hadPDUs {
+			// MIB implemented; rows arrived but none decoded into a usable peer.
+			recordWalkerOutcome(walkerV2Draft, "no_peers")
+		} else {
+			recordWalkerOutcome(walkerV2Draft, "mib_unimplemented")
+		}
 		return nil, nil, false, nil
 	}
 	edges, oos := buildV2Edges(localDevice, peers, allowedNets)
 	if len(edges) > 0 {
 		recordWalkerOutcome(walkerV2Draft, "edges")
 	} else {
-		// Walker returned rows but every one was filtered out (non-established,
-		// missing remote address, etc.). Still "empty" from the perspective of
-		// the topology — record it so operators can tell apart "table missing"
-		// from "table populated but state filter eliminated everything".
-		recordWalkerOutcome(walkerV2Draft, "empty")
+		// Walker returned rows and built a peers map, but every peer was
+		// filtered out (non-established, missing remote address, etc.).
+		// Record "no_peers" — the MIB is implemented, BGP is just down.
+		recordWalkerOutcome(walkerV2Draft, "no_peers")
 	}
 	return edges, oos, true, nil
 }

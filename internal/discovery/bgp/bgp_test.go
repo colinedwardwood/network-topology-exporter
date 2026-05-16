@@ -248,9 +248,12 @@ func TestWalkBgpPeerTableSkipsShortOIDs(t *testing.T) {
 	}
 	defer func() { _ = client.Conn.Close() }()
 
-	peers, err := walkBgpPeerTable(context.Background(), client)
+	peers, hadPDUs, err := walkBgpPeerTable(context.Background(), client)
 	if err != nil {
 		t.Fatalf("walkBgpPeerTable: %v", err)
+	}
+	if !hadPDUs {
+		t.Error("expected hadPDUs=true since the agent returned BGP rows")
 	}
 	if len(peers) != 1 {
 		t.Errorf("expected 1 peer, got %d", len(peers))

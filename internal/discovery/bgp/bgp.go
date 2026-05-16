@@ -202,7 +202,14 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	}
 
 	// Step 3 (always-on fallback): RFC 4273 bgpPeerTable.
-	peers, err := walkBgpPeerTable(ctx, client)
+	//
+	// Outcome accounting (issue #15): the RFC 4273 path now distinguishes
+	// "mib_unimplemented" (BulkWalk produced zero PDUs — device does not
+	// support the RFC 4273 BGP4-MIB at all, expected for non-BGP devices)
+	// from "no_peers" (PDUs arrived but no peer reached established —
+	// device implements the MIB but BGP is down). Operators alerting on
+	// the legacy "empty" outcome should switch to "no_peers".
+	peers, hadPDUs, err := walkBgpPeerTable(ctx, client)
 	if err != nil {
 		recordWalkerOutcome(walkerRFC4273, "error")
 		return nil, nil, fmt.Errorf("bgp peer table %s: %w", p.IP, err)
@@ -211,8 +218,10 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	edges, oos := buildEdges(localDevice, peers, allowedNets)
 	if len(edges) > 0 {
 		recordWalkerOutcome(walkerRFC4273, "edges")
+	} else if hadPDUs {
+		recordWalkerOutcome(walkerRFC4273, "no_peers")
 	} else {
-		recordWalkerOutcome(walkerRFC4273, "empty")
+		recordWalkerOutcome(walkerRFC4273, "mib_unimplemented")
 	}
 
 	// Promote earlier errors to Warn now that a later walker delivered. If
@@ -226,11 +235,18 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	return edges, oos, nil
 }
 
-func walkBgpPeerTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*bgpPeer, error) {
+// walkBgpPeerTable walks the RFC 4273 bgpPeerTable. Returns (peers, hadPDUs,
+// err) where hadPDUs reports whether the underlying BulkWalk produced any
+// PDUs at all. The caller uses hadPDUs to distinguish "MIB not implemented"
+// (zero PDUs — record outcome="mib_unimplemented") from "MIB implemented but
+// no established peers" (PDUs arrived but every peer was filtered out —
+// record outcome="no_peers"). See issue #15.
+func walkBgpPeerTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*bgpPeer, bool, error) {
 	pdus, err := snmputil.BulkWalk(ctx, client, oidBgpPeerTable)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
+	hadPDUs := len(pdus) > 0
 	const prefix = ".1.3.6.1.2.1.15.3.1."
 	peers := make(map[string]*bgpPeer)
 	for _, pdu := range pdus {
@@ -256,7 +272,7 @@ func walkBgpPeerTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*bg
 			peer.remoteAs = snmputil.PDUInt(pdu)
 		}
 	}
-	return peers, nil
+	return peers, hadPDUs, nil
 }
 
 func buildEdges(localDevice string, peers map[string]*bgpPeer, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour) {
