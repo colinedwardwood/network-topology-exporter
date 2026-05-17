@@ -28,6 +28,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/exporter-toolkit/web"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
@@ -389,10 +390,27 @@ func run(ctx context.Context, args []string) int {
 
 	go func() {
 		var serveErr error
-		if cfg.Listen.TLSCertFile != "" {
-			logger.Info("metrics TLS server listening", "addr", effectiveAddr)
+		switch {
+		case cfg.Listen.WebConfigFile != "":
+			// Prometheus exporter-toolkit web-config: supports basic_auth, server TLS,
+			// and mTLS via the same YAML schema as snmp_exporter / node_exporter /
+			// blackbox_exporter. The toolkit handles cert reload-on-change, bcrypt,
+			// and TLS-cipher hardening — no need to reimplement.
+			logger.Info("metrics server listening (web-config)", "addr", effectiveAddr, "web_config_file", cfg.Listen.WebConfigFile)
+			webFlags := &web.FlagConfig{
+				WebListenAddresses: &[]string{effectiveAddr},
+				WebSystemdSocket:   new(bool),
+				WebConfigFile:      &cfg.Listen.WebConfigFile,
+			}
+			serveErr = web.ListenAndServe(srv, webFlags, logger)
+		case cfg.Listen.TLSCertFile != "":
+			// Deprecated path — server-side TLS only, no client auth. Operators
+			// using this path saw a startup deprecation warning from
+			// EmitDeprecationWarnings; the path stays functional until v1.5.0
+			// removes the legacy fields.
+			logger.Info("metrics TLS server listening (deprecated tls_cert_file/tls_key_file)", "addr", effectiveAddr)
 			serveErr = srv.ListenAndServeTLS(cfg.Listen.TLSCertFile, cfg.Listen.TLSKeyFile)
-		} else {
+		default:
 			logger.Info("metrics server listening", "addr", effectiveAddr)
 			serveErr = srv.ListenAndServe()
 		}

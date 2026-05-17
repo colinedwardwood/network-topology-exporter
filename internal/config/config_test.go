@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -1570,6 +1571,99 @@ func TestListenTLSBothSetAndExist(t *testing.T) {
 	}
 	if c.Listen.TLSCertFile != certPath {
 		t.Errorf("TLSCertFile = %q, want %q", c.Listen.TLSCertFile, certPath)
+	}
+}
+
+// TestListenWebConfigFileAccepted verifies that setting web_config_file alone
+// (no tls_cert_file/tls_key_file) loads cleanly.
+func TestListenWebConfigFileAccepted(t *testing.T) {
+	dir := t.TempDir()
+	webCfgPath := filepath.Join(dir, "web-config.yml")
+	if err := os.WriteFile(webCfgPath, []byte("# empty web-config is valid\n"), 0o600); err != nil {
+		t.Fatalf("write web-config: %v", err)
+	}
+	cfgPath := filepath.Join(dir, "config.yaml")
+	body := "listen:\n  web_config_file: " + webCfgPath + "\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	c, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("expected valid config with web_config_file, got: %v", err)
+	}
+	if c.Listen.WebConfigFile != webCfgPath {
+		t.Errorf("Listen.WebConfigFile = %q, want %q", c.Listen.WebConfigFile, webCfgPath)
+	}
+}
+
+// TestListenWebConfigFileMissingFails verifies that a non-existent
+// web_config_file path causes Load to return an error.
+func TestListenWebConfigFileMissingFails(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	body := "listen:\n  web_config_file: /nonexistent/web-config.yml\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := Load(cfgPath); err == nil {
+		t.Fatal("expected error for non-existent web_config_file, got nil")
+	}
+}
+
+// TestListenWebConfigFileConflictsWithLegacyTLS verifies that setting BOTH
+// web_config_file AND the deprecated tls_cert_file/tls_key_file is rejected
+// at config load — there is one correct way to configure listener auth and
+// the operator must pick.
+func TestListenWebConfigFileConflictsWithLegacyTLS(t *testing.T) {
+	dir := t.TempDir()
+	webCfgPath := filepath.Join(dir, "web-config.yml")
+	certPath := filepath.Join(dir, "cert.pem")
+	keyPath := filepath.Join(dir, "key.pem")
+	for _, p := range []string{webCfgPath, certPath, keyPath} {
+		if err := os.WriteFile(p, []byte("dummy"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+	cfgPath := filepath.Join(dir, "config.yaml")
+	body := "listen:\n  web_config_file: " + webCfgPath + "\n  tls_cert_file: " + certPath + "\n  tls_key_file: " + keyPath + "\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := Load(cfgPath); err == nil {
+		t.Fatal("expected error when web_config_file is set alongside legacy tls fields, got nil")
+	}
+}
+
+// TestListenDeprecatedTLSEmitsWarning verifies that EmitDeprecationWarnings
+// fires when the legacy tls_cert_file/tls_key_file fields are set.
+func TestListenDeprecatedTLSEmitsWarning(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "cert.pem")
+	keyPath := filepath.Join(dir, "key.pem")
+	for _, p := range []string{certPath, keyPath} {
+		if err := os.WriteFile(p, []byte("dummy"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+	cfgPath := filepath.Join(dir, "config.yaml")
+	body := "listen:\n  tls_cert_file: " + certPath + "\n  tls_key_file: " + keyPath + "\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	c, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !c.HasDeprecatedListenTLS() {
+		t.Fatal("HasDeprecatedListenTLS() = false, want true")
+	}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	if !c.EmitDeprecationWarnings(logger) {
+		t.Error("EmitDeprecationWarnings returned false; expected a warning for the deprecated TLS keys")
+	}
+	if !strings.Contains(buf.String(), "tls_cert_file") {
+		t.Errorf("warning did not mention tls_cert_file; output: %s", buf.String())
 	}
 }
 

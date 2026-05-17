@@ -29,12 +29,29 @@ type Config struct {
 	Targets     []TargetConfig    `yaml:"targets"`
 }
 
-// ListenConfig holds the HTTP/HTTPS listen address and optional TLS files.
-// When TLSCertFile and TLSKeyFile are both empty the server uses plain HTTP.
+// ListenConfig holds the HTTP/HTTPS listen address and optional auth config.
+// The recommended way to enable TLS and/or authentication is WebConfigFile,
+// which points at a Prometheus exporter-toolkit web-config YAML — the same
+// schema operators know from snmp_exporter, node_exporter, blackbox_exporter,
+// etc. (see https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md).
+// The toolkit handles basic_auth, server TLS, and full mTLS in one file.
+//
+// TLSCertFile / TLSKeyFile remain accepted for one minor release as a
+// transitional path; they configure server-side TLS only (no client auth)
+// and are equivalent to a web-config with just tls_server_config.cert_file
+// and key_file set. Operators using these fields receive a startup
+// deprecation warning. New deployments should use WebConfigFile.
+//
+// When all three are empty the server uses plain HTTP — the default and the
+// canonical Prometheus convention of "scrape from a private network".
 type ListenConfig struct {
-	Addr        string `yaml:"addr"`          // default ":9100"
-	TLSCertFile string `yaml:"tls_cert_file"` // leave empty for plain HTTP
-	TLSKeyFile  string `yaml:"tls_key_file"`
+	Addr          string `yaml:"addr"`            // default ":9100"
+	WebConfigFile string `yaml:"web_config_file"` // exporter-toolkit web-config YAML; recommended
+
+	// Deprecated: use WebConfigFile.
+	TLSCertFile string `yaml:"tls_cert_file"`
+	// Deprecated: use WebConfigFile.
+	TLSKeyFile string `yaml:"tls_key_file"`
 }
 
 // OutputConfig holds optional push-mode output paths.
@@ -444,8 +461,19 @@ func (c *Config) applyDefaults() {
 }
 
 func (c *Config) validateListen() error {
+	webCfgSet := c.Listen.WebConfigFile != ""
 	certSet := c.Listen.TLSCertFile != ""
 	keySet := c.Listen.TLSKeyFile != ""
+
+	if webCfgSet && (certSet || keySet) {
+		return errors.New("listen.web_config_file conflicts with deprecated listen.tls_cert_file/listen.tls_key_file — set web_config_file only")
+	}
+	if webCfgSet {
+		if _, err := os.Stat(c.Listen.WebConfigFile); err != nil {
+			return fmt.Errorf("listen.web_config_file %q: %w", c.Listen.WebConfigFile, err)
+		}
+		return nil
+	}
 	if certSet != keySet {
 		return errors.New("listen.tls_cert_file and listen.tls_key_file must both be set or both be empty")
 	}
@@ -848,7 +876,20 @@ func (c *Config) EmitDeprecationWarnings(logger *slog.Logger) bool {
 		)
 		emitted = true
 	}
+	if c.Listen.TLSCertFile != "" || c.Listen.TLSKeyFile != "" {
+		logger.Warn("config: listen.tls_cert_file / listen.tls_key_file are deprecated and will be removed in v1.5.0; migrate to listen.web_config_file (Prometheus exporter-toolkit web-config YAML) which adds basic_auth and mTLS support — see docs/operator/security.md",
+			"deprecated_keys", "tls_cert_file,tls_key_file",
+			"replacement_key", "web_config_file",
+		)
+		emitted = true
+	}
 	return emitted
+}
+
+// HasDeprecatedListenTLS reports whether the operator set the legacy
+// `listen.tls_cert_file` or `listen.tls_key_file` keys. Test helper.
+func (c *Config) HasDeprecatedListenTLS() bool {
+	return c.Listen.TLSCertFile != "" || c.Listen.TLSKeyFile != ""
 }
 
 // HasDeprecatedFederationHubStrict reports whether the operator set the
