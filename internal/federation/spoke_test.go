@@ -167,7 +167,7 @@ func TestNewSpokeErrorOnMissingCAFile(t *testing.T) {
 			TLSKey:    "/nonexistent/client.key",
 		},
 	}
-	_, err := NewSpoke(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), metrics.New(false))
+	_, err := NewSpoke(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, metrics.New(false))
 	if err == nil {
 		t.Fatal("NewSpoke: expected error for missing CA file, got nil")
 	}
@@ -188,7 +188,7 @@ func TestNewSpokeErrorOnEmptyCAFile(t *testing.T) {
 			TLSKey:    filepath.Join(dir, "client.key"),
 		},
 	}
-	_, err := NewSpoke(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), metrics.New(false))
+	_, err := NewSpoke(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, metrics.New(false))
 	if err == nil {
 		t.Fatal("NewSpoke: expected error for non-PEM CA file, got nil")
 	}
@@ -256,7 +256,7 @@ func TestNewSpokeErrorOnBadKeyFile(t *testing.T) {
 			TLSKey:    keyPath,
 		},
 	}
-	_, err = NewSpoke(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), metrics.New(false))
+	_, err = NewSpoke(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, metrics.New(false))
 	if err == nil {
 		t.Fatal("NewSpoke: expected error for garbage key file, got nil")
 	}
@@ -396,7 +396,7 @@ func TestNewSpokeSuccess(t *testing.T) {
 			HubURL:    "https://hub:9101",
 		},
 	}
-	spoke, err := NewSpoke(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), metrics.New(false))
+	spoke, err := NewSpoke(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, metrics.New(false))
 	if err != nil {
 		t.Fatalf("NewSpoke: unexpected error: %v", err)
 	}

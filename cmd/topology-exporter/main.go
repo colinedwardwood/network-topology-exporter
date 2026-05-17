@@ -43,6 +43,7 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/events"
 	"github.com/colinedwardwood/network-topology-exporter/internal/federation"
 	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
+	"github.com/colinedwardwood/network-topology-exporter/internal/loglimit"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
 	"github.com/colinedwardwood/network-topology-exporter/internal/output/otlp"
 	"github.com/colinedwardwood/network-topology-exporter/internal/snapshot"
@@ -247,6 +248,14 @@ func run(ctx context.Context, args []string) int {
 	// below; see internal/metrics/walker_metrics_adapter.go for the adapter.
 	walkerMetrics := metrics.NewWalkerMetricsAdapter(m)
 
+	// warnLimiter caps chronic same-key Warn emissions (issue #16). Wraps
+	// `logger` and is threaded into spoke push, BGP/FDB walks, and the
+	// per-cycle NFS-stall sites below. Process-singleton: keys are stable
+	// across cycles so a chronic failure does not re-alert on every cycle.
+	// DefaultCooldown (1h) keeps operators alerted on first occurrence and
+	// re-alerted hourly thereafter without flooding the log.
+	warnLimiter := loglimit.New(logger, loglimit.DefaultCooldown)
+
 	var status atomic.Pointer[cycleStatus]
 	var ready atomic.Bool // set to true after the first live cycle or spoke push
 
@@ -335,7 +344,7 @@ func run(ctx context.Context, args []string) int {
 		var spoke *federation.Spoke
 		if cfg.Federation.Role == "spoke" {
 			var err error
-			spoke, err = federation.NewSpoke(cfg.Federation, logger, m)
+			spoke, err = federation.NewSpoke(cfg.Federation, logger, warnLimiter, m)
 			if err != nil {
 				logger.Error("building federation spoke", "error", err)
 				return 1
@@ -362,6 +371,7 @@ func run(ctx context.Context, args []string) int {
 			runDiscoveryLoop(ctx, loopConfig{
 				cancel:        cancel,
 				logger:        logger,
+				warnLimiter:   warnLimiter,
 				cfg:           cfg,
 				m:             m,
 				walkerMetrics: walkerMetrics,
@@ -421,8 +431,14 @@ const (
 type loopConfig struct {
 	cancel context.CancelFunc
 	logger *slog.Logger
-	cfg    *config.Config
-	m      *metrics.Metrics
+	// warnLimiter is the process-singleton rate-limiter for chronic
+	// per-cycle Warn emissions (issue #16). Threaded into snmputil.Params
+	// for per-walker use and consulted directly by the snapshot-writer
+	// goroutine. May be nil — sites that consult it MUST fall back to a
+	// direct slog.Warn in that case.
+	warnLimiter *loglimit.Limiter
+	cfg         *config.Config
+	m           *metrics.Metrics
 	// walkerMetrics is the snmputil.WalkerMetrics implementation threaded into
 	// every Params constructed in runCycle. Replaces the old bgp package-global
 	// counter wiring; see internal/metrics/walker_metrics_adapter.go.
@@ -435,13 +451,30 @@ type loopConfig struct {
 	otlpWg        *sync.WaitGroup // tracks in-flight OTLP push goroutines for clean shutdown
 }
 
+// warnSnapshot emits a chronic-shape snapshot Warn through the per-cycle
+// rate limiter. The key combines the named site with the configured
+// snapshot path so two operators running on the same host but writing to
+// different snapshot files do not share a suppression slot. Falls back to
+// a direct slog.Warn when no limiter is configured (e.g. in tests that
+// construct loopConfig inline). See issue #16.
+func (lc loopConfig) warnSnapshot(ctx context.Context, site, msg string, attrs ...any) {
+	if lc.warnLimiter != nil {
+		key := "snapshot|" + site + "|" + lc.cfg.Snapshot.Path
+		lc.warnLimiter.Warn(ctx, key, msg, attrs...)
+		return
+	}
+	lc.logger.WarnContext(ctx, msg, attrs...)
+}
+
 func (lc loopConfig) otlpPush(ctx context.Context, fn func(context.Context) error, warnMsg string) {
 	if lc.otlpSem != nil {
 		select {
 		case lc.otlpSem <- struct{}{}:
 		default:
 			lc.logger.Warn("otlp push dropped: concurrent limit reached")
-			lc.m.OTLPPushTotal.WithLabelValues("dropped").Inc()
+			// status="dropped" never carries a failure reason — use the
+			// shared n/a sentinel. Issue #20.
+			lc.m.OTLPPushTotal.WithLabelValues("dropped", metrics.ReasonNA).Inc()
 			return
 		}
 	}
@@ -459,9 +492,12 @@ func (lc loopConfig) otlpPush(ctx context.Context, fn func(context.Context) erro
 		defer cancel()
 		if err := fn(pushCtx); err != nil {
 			lc.logger.Warn(warnMsg, "error", err)
-			lc.m.OTLPPushTotal.WithLabelValues("error").Inc()
+			// Issue #20: partition status="error" by the OTLP sub-reason
+			// derived from the error (timeout / tls_error / http_4xx /
+			// http_5xx / network).
+			lc.m.OTLPPushTotal.WithLabelValues("error", string(otlp.ClassifyPushError(err))).Inc()
 		} else {
-			lc.m.OTLPPushTotal.WithLabelValues("ok").Inc()
+			lc.m.OTLPPushTotal.WithLabelValues("ok", metrics.ReasonNA).Inc()
 		}
 	}()
 }
@@ -544,7 +580,12 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 						}
 					default:
 						// Still blocked — drop this snapshot rather than spawning another goroutine.
-						lc.logger.Warn("snapshot write still in flight; dropping snapshot (NFS stall?)")
+						// Rate-limit per path (issue #16): a chronic NFS stall
+						// would emit this Warn every cycle until the stall
+						// clears. Limiter keeps the operator alerted at first
+						// occurrence and re-alerted hourly, not every minute.
+						lc.warnSnapshot(ctx, "snapshot_write_in_flight",
+							"snapshot write still in flight; dropping snapshot (NFS stall?)")
 						continue
 					}
 				}
@@ -559,7 +600,11 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 						lc.m.SnapshotLastWrittenUnix.Set(float64(time.Now().Unix()))
 					}
 				case <-time.After(snapshotWriteTimeout):
-					lc.logger.Warn("snapshot write timed out (NFS stall?); discovery continues", "timeout", snapshotWriteTimeout)
+					// Rate-limit per path (issue #16): same chronic-NFS
+					// pattern as the in-flight branch above.
+					lc.warnSnapshot(ctx, "snapshot_write_timeout",
+						"snapshot write timed out (NFS stall?); discovery continues",
+						"timeout", snapshotWriteTimeout)
 					// writeDone goroutine still running; next iteration will detect this.
 				}
 			}
@@ -577,7 +622,7 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 		cycleNum++
 		lc.m.GoRoutines.Set(float64(runtime.NumGoroutine()))
 		start := time.Now()
-		newGraph, newAges, conflicts, deviceErrors := runCycle(ctx, lc.logger, lc.cfg, lc.m, lc.walkerMetrics, resolver, allowedNets, ages)
+		newGraph, newAges, conflicts, deviceErrors := runCycle(ctx, lc.logger, lc.cfg, lc.m, lc.walkerMetrics, lc.warnLimiter, resolver, allowedNets, ages)
 		if ctx.Err() != nil {
 			return
 		}
@@ -662,7 +707,12 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 			case snapshotCh <- f:
 				lc.m.SnapshotQueueDepth.Set(float64(len(snapshotCh)))
 			default:
-				lc.logger.Warn("snapshot write queue full; dropping (previous write still in flight)")
+				// Rate-limit per path (issue #16): queue-full is the upstream
+				// symptom of the same chronic-NFS stall as the two branches
+				// in the writer goroutine. Keys are distinct so each path
+				// surfaces independently on first occurrence.
+				lc.warnSnapshot(ctx, "snapshot_queue_full",
+					"snapshot write queue full; dropping (previous write still in flight)")
 			}
 		}
 
@@ -719,6 +769,7 @@ func runCycle(
 	cfg *config.Config,
 	m *metrics.Metrics,
 	walkerMetrics snmpwalk.WalkerMetrics,
+	warnLimiter snmpwalk.WarnLimiter,
 	resolver *credentials.Resolver,
 	allowedNets []*net.IPNet,
 	prevAges map[graph.EdgeKey]int,
@@ -745,7 +796,18 @@ func runCycle(
 	var mu sync.Mutex
 	sem := make(chan struct{}, cfg.Discovery.Parallelism)
 	var wg sync.WaitGroup
-	var okCount, failCount int64
+	var okCount int64
+	// Issue #20: track per-reason device-failure counts so the
+	// network_topology_discovery_devices_total gauge can be emitted
+	// partitioned by {status, reason}. Keys are the closed
+	// metrics.DiscoveryFailReason enum. The pre-#20 unpartitioned
+	// failCount is recovered as sum(failByReason) at emission time.
+	failByReason := make(map[metrics.DiscoveryFailReason]int64)
+	recordFail := func(reason metrics.DiscoveryFailReason) {
+		mu.Lock()
+		failByReason[reason]++
+		mu.Unlock()
+	}
 
 	for i, t := range cfg.Targets {
 		target := t
@@ -756,18 +818,14 @@ func runCycle(
 			defer func() {
 				if r := recover(); r != nil {
 					logger.Error("per-device probe panicked", "target", target.Host, "panic", r)
-					mu.Lock()
-					failCount++
-					mu.Unlock()
+					recordFail(metrics.DiscoveryReasonPanic)
 				}
 			}()
 			select {
 			case sem <- struct{}{}:
 			case <-cycleCtx.Done():
 				m.CycleBudgetSkipsTotal.Inc()
-				mu.Lock()
-				failCount++
-				mu.Unlock()
+				recordFail(metrics.DiscoveryReasonBudgetExpired)
 				return
 			}
 			defer func() { <-sem }()
@@ -777,9 +835,7 @@ func runCycle(
 				addrs, err := net.DefaultResolver.LookupHost(cycleCtx, target.Host)
 				if err != nil || len(addrs) == 0 {
 					logger.Warn("host resolution failed", "host", target.Host, "error", err)
-					mu.Lock()
-					failCount++
-					mu.Unlock()
+					recordFail(metrics.DiscoveryReasonDNSFailed)
 					return
 				}
 				ip = net.ParseIP(addrs[0])
@@ -790,9 +846,7 @@ func runCycle(
 			if len(allowedNets) > 0 && !snmpwalk.IPInNets(ip, allowedNets) {
 				logger.Warn("resolved target outside allow-list, skipping",
 					"host", target.Host, "ip", ip)
-				mu.Lock()
-				failCount++
-				mu.Unlock()
+				recordFail(metrics.DiscoveryReasonOutsideAllowList)
 				return
 			}
 
@@ -801,14 +855,21 @@ func runCycle(
 				logger.Warn("snmp walk failed", "target", target.Host, "error", err)
 				m.DiscoveryHardFailTotal.WithLabelValues("system", "system_group_walk_error").Inc()
 				m.CredentialTrialsTotal.WithLabelValues("failed").Inc()
+				// Issue #20: partition the walk-failure counter by
+				// sub-reason. Timeouts surface via status="timeout"
+				// (reason=n/a — the status is the reason). Non-timeout
+				// failures from this layer are attributed to auth: the
+				// credential-rotation loop in walkSystemWithCredentials
+				// only returns a non-timeout error when at least one
+				// candidate was rejected non-silently (DeadlineExceeded
+				// is the silent-drop / unreachable case).
 				if errors.Is(err, context.DeadlineExceeded) {
-					m.SNMPWalksTotal.WithLabelValues("timeout").Inc()
+					m.SNMPWalksTotal.WithLabelValues("timeout", metrics.ReasonNA).Inc()
+					recordFail(metrics.DiscoveryReasonTimeout)
 				} else {
-					m.SNMPWalksTotal.WithLabelValues("error").Inc()
+					m.SNMPWalksTotal.WithLabelValues("error", string(metrics.WalkReasonAuthFailed)).Inc()
+					recordFail(metrics.DiscoveryReasonAuthFailed)
 				}
-				mu.Lock()
-				failCount++
-				mu.Unlock()
 				return
 			}
 			// Zeroize the winning credential bytes as soon as this device's
@@ -825,7 +886,7 @@ func runCycle(
 
 			resolver.RecordSuccess(ip.String(), profileName)
 			m.CredentialTrialsTotal.WithLabelValues("ok").Inc()
-			m.SNMPWalksTotal.WithLabelValues("ok").Inc()
+			m.SNMPWalksTotal.WithLabelValues("ok", metrics.ReasonNA).Inc()
 
 			dev.Site = target.Site
 			for k, v := range target.Labels {
@@ -850,6 +911,7 @@ func runCycle(
 			params.Vendor = dev.Vendor
 			params.UseBGPV2MIB = !cfg.Modules.BGP.DisableV2MIB
 			params.WalkerMetrics = walkerMetrics
+			params.WarnLimiter = warnLimiter
 
 			mods := []module{
 				{"lldp", cfg.Modules.LLDP.Enabled, lldp.Walk},
@@ -882,15 +944,22 @@ func runCycle(
 						reason = policyErr.Reason
 					}
 					m.DiscoveryHardFailTotal.WithLabelValues(mod.proto, reason).Inc()
+					// Issue #20: partition by walk sub-reason. Timeouts
+					// keep reason=n/a; module-level non-timeout errors
+					// are tagged WalkReasonModuleError. Per-module richer
+					// breakdowns (auth_failed at the module layer is
+					// already excluded — credentials succeeded for the
+					// system walk above) would require module-walker
+					// changes and are not in #20's scope.
 					if errors.Is(err, context.DeadlineExceeded) {
-						m.SNMPWalksTotal.WithLabelValues("timeout").Inc()
+						m.SNMPWalksTotal.WithLabelValues("timeout", metrics.ReasonNA).Inc()
 					} else {
-						m.SNMPWalksTotal.WithLabelValues("error").Inc()
+						m.SNMPWalksTotal.WithLabelValues("error", string(metrics.WalkReasonModuleError)).Inc()
 					}
 					modStatus[mod.proto] = 2
 					continue
 				}
-				m.SNMPWalksTotal.WithLabelValues("ok").Inc()
+				m.SNMPWalksTotal.WithLabelValues("ok", metrics.ReasonNA).Inc()
 				degradedReasons := collectDegradedReasons(edges)
 				for _, reason := range degradedReasons {
 					m.DiscoveryDegradedTotal.WithLabelValues(mod.proto, reason).Inc()
@@ -961,8 +1030,20 @@ func runCycle(
 		return a.targetIdx - b.targetIdx
 	})
 
-	m.DiscoveryDevicesTotal.WithLabelValues("success").Set(float64(okCount))
-	m.DiscoveryDevicesTotal.WithLabelValues("failed").Set(float64(failCount))
+	// Issue #20: emit the discovery-device gauge partitioned by
+	// {status, reason}. status="success" carries reason=n/a; status="failed"
+	// emits one series per reason in metrics.DiscoveryFailReason that was
+	// observed this cycle. Reasons with zero hits are not emitted (the
+	// gauge would be stale from the previous cycle — same as the
+	// pre-#20 behaviour, but the partitioning means dashboards must use
+	// `sum by (status)` to reproduce the old totals).
+	m.DiscoveryDevicesTotal.Reset()
+	m.DiscoveryDevicesTotal.WithLabelValues("success", metrics.ReasonNA).Set(float64(okCount))
+	var failCount int64
+	for reason, count := range failByReason {
+		m.DiscoveryDevicesTotal.WithLabelValues("failed", string(reason)).Set(float64(count))
+		failCount += count
+	}
 
 	// Aggregate per-module worst status across all devices and publish.
 	worstStatus := map[string]int{}

@@ -173,8 +173,8 @@ func New(emitBoundaryObs bool) *Metrics {
 		}),
 		DiscoveryDevicesTotal: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "network_topology_discovery_devices_total",
-			Help: "Per-cycle device-discovery outcome count.",
-		}, []string{"status"}), // success | failed | timeout
+			Help: "Per-cycle device-discovery outcome count, partitioned by status and sub-reason. Reason values are the underlying strings of the DiscoveryFailReason constants in sub_reason.go; status=success rows carry reason=n/a.",
+		}, []string{"status", "reason"}), // status ∈ {success, failed}; reason ∈ DiscoveryFailReason
 		DiscoveryCycleDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "network_topology_discovery_cycle_duration_seconds",
 			Help:    "End-to-end discovery cycle wall time.",
@@ -187,8 +187,8 @@ func New(emitBoundaryObs bool) *Metrics {
 		}, []string{"module"}),
 		SNMPWalksTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "network_topology_snmp_walks_total",
-			Help: "SNMP walk attempts, partitioned by terminal status.",
-		}, []string{"status"}), // ok | timeout | error
+			Help: "SNMP walk attempts, partitioned by terminal status and sub-reason. Reason values are the underlying strings of the WalkReason constants in sub_reason.go; status=ok and status=timeout rows carry reason=n/a.",
+		}, []string{"status", "reason"}), // status ∈ {ok, timeout, error}; reason ∈ WalkReason
 		DiscoveryDecodeIssues: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "network_topology_discovery_decode_issues_total",
 			Help: "SNMP decode anomalies by module, OID, and reason.",
@@ -215,8 +215,8 @@ func New(emitBoundaryObs bool) *Metrics {
 		}, []string{"status"}), // ok | failed
 		OTLPPushTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "network_topology_otlp_push_total",
-			Help: "OTLP push attempts by outcome (ok, error, dropped). Alert on error or dropped rate > 0.",
-		}, []string{"status"}),
+			Help: "OTLP push attempts by status and sub-reason. status ∈ {ok, error, dropped}; reason values are the underlying strings of the PushReason constants in sub_reason.go. status=ok and status=dropped rows carry reason=n/a. Alert on error or dropped rate > 0.",
+		}, []string{"status", "reason"}),
 		FederationSpokeUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "network_topology_federation_spoke_up",
 			Help: "Hub mode: 1 while a spoke is active (last push within federation.spoke_timeout); 0 after eviction.",

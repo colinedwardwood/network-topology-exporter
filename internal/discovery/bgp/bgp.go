@@ -240,9 +240,22 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 
 	// Promote a stashed vendor-walker error to Warn now that RFC 4273
 	// delivered. If the vendor path didn't error, this is a no-op.
+	//
+	// Rate-limit this emission per (device, vendor_table) tuple — issue
+	// #16. A device with a chronic vendor MIB column-drift would otherwise
+	// emit identical Warns every cycle (1440/day at 60s interval). The
+	// limiter still surfaces the first occurrence and re-surfaces after
+	// the configured cooldown so the signal is not lost; only repeats
+	// within the window are suppressed.
 	if vendorErr != nil && vendorSpec != nil {
-		slog.Warn("bgp vendor: walk error, RFC 4273 fallback succeeded",
-			"target", p.IP, "vendor_table", vendorSpec.name, "error", vendorErr)
+		key := "bgp_vendor_walk_fallback|" + p.IP.String() + "|" + vendorSpec.name
+		msg := "bgp vendor: walk error, RFC 4273 fallback succeeded"
+		attrs := []any{"target", p.IP, "vendor_table", vendorSpec.name, "error", vendorErr}
+		if p.WarnLimiter != nil {
+			p.WarnLimiter.Warn(ctx, key, msg, attrs...)
+		} else {
+			slog.WarnContext(ctx, msg, attrs...)
+		}
 	}
 	return edges, oos, nil
 }

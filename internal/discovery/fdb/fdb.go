@@ -328,13 +328,31 @@ func walkVlanCommunityFdbs(ctx context.Context, p snmputil.Params, client *gsnmp
 	// p.Community is []byte (see snmp.Params); use bytes-search to avoid an
 	// unnecessary string allocation that would create an unreachable copy.
 	if bytes.IndexByte(p.Community, '@') >= 0 {
-		slog.WarnContext(ctx, "fdb: community string contains '@'; skipping per-VLAN community walk to avoid ambiguity", "device", p.IP)
+		// Rate-limit per device (issue #16): a misconfigured community
+		// string is a static condition that would otherwise emit on every
+		// cycle. First occurrence still alerts; cooldown suppresses repeats.
+		msg := "fdb: community string contains '@'; skipping per-VLAN community walk to avoid ambiguity"
+		attrs := []any{"device", p.IP}
+		if p.WarnLimiter != nil {
+			p.WarnLimiter.Warn(ctx, "fdb_community_at_sign|"+p.IP.String(), msg, attrs...)
+		} else {
+			slog.WarnContext(ctx, msg, attrs...)
+		}
 		return
 	}
 	vlanIDs := discoverVlanIDs(ctx, client)
 	if len(vlanIDs) > maxVlans {
-		slog.WarnContext(ctx, "fdb: VLAN community walk truncated at max_vlans limit; increase fdb.max_vlans to see all VLANs",
-			"discovered", len(vlanIDs), "max_vlans", maxVlans)
+		// Rate-limit per device (issue #16): VLAN-count overflow is a
+		// configuration-shaped condition that persists across cycles until
+		// max_vlans is raised. The limiter keeps the operator alert on
+		// first detection without flooding the log every cycle thereafter.
+		msg := "fdb: VLAN community walk truncated at max_vlans limit; increase fdb.max_vlans to see all VLANs"
+		attrs := []any{"device", p.IP, "discovered", len(vlanIDs), "max_vlans", maxVlans}
+		if p.WarnLimiter != nil {
+			p.WarnLimiter.Warn(ctx, "fdb_vlan_truncated|"+p.IP.String(), msg, attrs...)
+		} else {
+			slog.WarnContext(ctx, msg, attrs...)
+		}
 		vlanIDs = vlanIDs[:maxVlans]
 	}
 
