@@ -206,81 +206,128 @@ func Write(path string, f File) error {
 	return nil
 }
 
+// maxValidationErrors caps the number of per-field errors validateSnapshotFields
+// will accumulate before stopping. Without this bound a deliberately-corrupt
+// snapshot with thousands of oversized fields could produce a multi-MB error
+// message. Operators recovering from corruption see the first 100 problems
+// plus an "omitted" sentinel and can fix them in batches.
+const maxValidationErrors = 100
+
 // validateSnapshotFields enforces per-field length caps on the parsed snapshot.
 // It guards against a corrupted or hostile snapshot.json declaring multi-MB
 // strings that json.Unmarshal would happily allocate. Error messages include
 // the slice index and the actual byte length so an operator can locate the
 // offending entry.
+//
+// Errors are accumulated (not returned on first failure) and joined via
+// errors.Join so an operator recovering from a corrupted snapshot can see
+// every offending field in one pass instead of fix-reload-repeat. The
+// accumulation is capped at maxValidationErrors to prevent a hostile file
+// from producing an unbounded error message.
 func validateSnapshotFields(f *File) error {
 	if f == nil {
 		return nil
 	}
+	var errs []error
+	// addErr appends a formatted error and returns true while there is still
+	// room under the cap. Callers may either ignore the return value (the next
+	// addErr call is itself a no-op once capped) or short-circuit on false.
+	addErr := func(format string, args ...any) bool {
+		if len(errs) >= maxValidationErrors {
+			return false
+		}
+		errs = append(errs, fmt.Errorf(format, args...))
+		return true
+	}
+
 	for i, d := range f.Devices {
+		if len(errs) >= maxValidationErrors {
+			break
+		}
 		if n := len(d.ID); n > maxIDBytes {
-			return fmt.Errorf("device[%d]: id exceeds %d bytes (%d)", i, maxIDBytes, n)
+			addErr("device[%d]: id exceeds %d bytes (%d)", i, maxIDBytes, n)
 		}
 		if n := len(d.Vendor); n > maxShortFieldBytes {
-			return fmt.Errorf("device[%d]: vendor exceeds %d bytes (%d)", i, maxShortFieldBytes, n)
+			addErr("device[%d]: vendor exceeds %d bytes (%d)", i, maxShortFieldBytes, n)
 		}
 		if n := len(d.Model); n > maxShortFieldBytes {
-			return fmt.Errorf("device[%d]: model exceeds %d bytes (%d)", i, maxShortFieldBytes, n)
+			addErr("device[%d]: model exceeds %d bytes (%d)", i, maxShortFieldBytes, n)
 		}
 		if n := len(d.OSVersion); n > maxShortFieldBytes {
-			return fmt.Errorf("device[%d]: os_version exceeds %d bytes (%d)", i, maxShortFieldBytes, n)
+			addErr("device[%d]: os_version exceeds %d bytes (%d)", i, maxShortFieldBytes, n)
 		}
 		if n := len(d.Site); n > maxShortFieldBytes {
-			return fmt.Errorf("device[%d]: site exceeds %d bytes (%d)", i, maxShortFieldBytes, n)
+			addErr("device[%d]: site exceeds %d bytes (%d)", i, maxShortFieldBytes, n)
 		}
 		for k, v := range d.Labels {
+			if len(errs) >= maxValidationErrors {
+				break
+			}
 			if n := len(k); n > maxLabelKeyBytes {
-				return fmt.Errorf("device[%d]: labels key exceeds %d bytes (%d)", i, maxLabelKeyBytes, n)
+				addErr("device[%d]: labels key exceeds %d bytes (%d)", i, maxLabelKeyBytes, n)
 			}
 			if n := len(v); n > maxLabelValueBytes {
-				return fmt.Errorf("device[%d]: labels value for key %q exceeds %d bytes (%d)", i, k, maxLabelValueBytes, n)
+				addErr("device[%d]: labels value for key %q exceeds %d bytes (%d)", i, k, maxLabelValueBytes, n)
 			}
 		}
 	}
 	for i, e := range f.Edges {
+		if len(errs) >= maxValidationErrors {
+			break
+		}
 		if n := len(e.SrcDevice); n > maxIDBytes {
-			return fmt.Errorf("edge[%d]: src_device exceeds %d bytes (%d)", i, maxIDBytes, n)
+			addErr("edge[%d]: src_device exceeds %d bytes (%d)", i, maxIDBytes, n)
 		}
 		if n := len(e.DstDevice); n > maxIDBytes {
-			return fmt.Errorf("edge[%d]: dst_device exceeds %d bytes (%d)", i, maxIDBytes, n)
+			addErr("edge[%d]: dst_device exceeds %d bytes (%d)", i, maxIDBytes, n)
 		}
 		if n := len(e.SrcPort); n > maxPortBytes {
-			return fmt.Errorf("edge[%d]: src_port exceeds %d bytes (%d)", i, maxPortBytes, n)
+			addErr("edge[%d]: src_port exceeds %d bytes (%d)", i, maxPortBytes, n)
 		}
 		if n := len(e.DstPort); n > maxPortBytes {
-			return fmt.Errorf("edge[%d]: dst_port exceeds %d bytes (%d)", i, maxPortBytes, n)
+			addErr("edge[%d]: dst_port exceeds %d bytes (%d)", i, maxPortBytes, n)
 		}
 		if n := len(e.DiscoveryProto); n > maxProtoBytes {
-			return fmt.Errorf("edge[%d]: discovery_proto exceeds %d bytes (%d)", i, maxProtoBytes, n)
+			addErr("edge[%d]: discovery_proto exceeds %d bytes (%d)", i, maxProtoBytes, n)
 		}
 		if n := len(e.LinkKind); n > maxProtoBytes {
-			return fmt.Errorf("edge[%d]: link_kind exceeds %d bytes (%d)", i, maxProtoBytes, n)
+			addErr("edge[%d]: link_kind exceeds %d bytes (%d)", i, maxProtoBytes, n)
 		}
 		for k, v := range e.Metadata {
+			if len(errs) >= maxValidationErrors {
+				break
+			}
 			if n := len(k); n > maxLabelKeyBytes {
-				return fmt.Errorf("edge[%d]: metadata key exceeds %d bytes (%d)", i, maxLabelKeyBytes, n)
+				addErr("edge[%d]: metadata key exceeds %d bytes (%d)", i, maxLabelKeyBytes, n)
 			}
 			if n := len(v); n > maxLabelValueBytes {
-				return fmt.Errorf("edge[%d]: metadata value for key %q exceeds %d bytes (%d)", i, k, maxLabelValueBytes, n)
+				addErr("edge[%d]: metadata value for key %q exceeds %d bytes (%d)", i, k, maxLabelValueBytes, n)
 			}
 		}
 	}
 	for i, n := range f.OutOfScope {
+		if len(errs) >= maxValidationErrors {
+			break
+		}
 		if x := len(n.ReportingDevice); x > maxIDBytes {
-			return fmt.Errorf("out_of_scope[%d]: reporting_device exceeds %d bytes (%d)", i, maxIDBytes, x)
+			addErr("out_of_scope[%d]: reporting_device exceeds %d bytes (%d)", i, maxIDBytes, x)
 		}
 		if x := len(n.ReportingPort); x > maxPortBytes {
-			return fmt.Errorf("out_of_scope[%d]: reporting_port exceeds %d bytes (%d)", i, maxPortBytes, x)
+			addErr("out_of_scope[%d]: reporting_port exceeds %d bytes (%d)", i, maxPortBytes, x)
 		}
 		if x := len(n.NeighbourHint); x > maxIDBytes {
-			return fmt.Errorf("out_of_scope[%d]: neighbour_hint exceeds %d bytes (%d)", i, maxIDBytes, x)
+			addErr("out_of_scope[%d]: neighbour_hint exceeds %d bytes (%d)", i, maxIDBytes, x)
 		}
 		if x := len(n.Proto); x > maxProtoBytes {
-			return fmt.Errorf("out_of_scope[%d]: proto exceeds %d bytes (%d)", i, maxProtoBytes, x)
+			addErr("out_of_scope[%d]: proto exceeds %d bytes (%d)", i, maxProtoBytes, x)
 		}
 	}
-	return nil
+
+	if len(errs) >= maxValidationErrors {
+		errs = append(errs, fmt.Errorf("and more errors omitted (cap=%d)", maxValidationErrors))
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return errors.Join(errs...)
 }

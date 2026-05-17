@@ -799,3 +799,97 @@ func TestLoadAcceptsBoundaryValues(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateSnapshotFieldsAccumulatesMultipleErrors confirms that a snapshot
+// with several oversized fields across multiple devices and edges reports
+// every offending field in a single Load error, not just the first one.
+// Operators recovering from a corrupted snapshot should not have to fix-reload
+// repeatedly to discover each problem.
+func TestValidateSnapshotFieldsAccumulatesMultipleErrors(t *testing.T) {
+	f := &File{
+		Devices: []discovery.Device{
+			{ID: strings.Repeat("a", 1024)},                   // device[0]: id
+			{ID: "ok", Vendor: strings.Repeat("v", 1024)},     // device[1]: vendor
+			{ID: "ok2", OSVersion: strings.Repeat("o", 1024)}, // device[2]: os_version
+		},
+		Edges: []discovery.Edge{
+			{SrcDevice: "a", SrcPort: strings.Repeat("p", 1024), DstDevice: "b", DstPort: "ok"},                      // edge[0]: src_port
+			{SrcDevice: "a", SrcPort: "ok", DstDevice: "b", DstPort: strings.Repeat("p", 1024)},                      // edge[1]: dst_port
+			{SrcDevice: "a", SrcPort: "ok", DstDevice: "b", DstPort: "ok", DiscoveryProto: strings.Repeat("x", 128)}, // edge[2]: discovery_proto
+		},
+		OutOfScope: []discovery.OutOfScopeNeighbour{
+			{ReportingDevice: strings.Repeat("r", 1024)}, // out_of_scope[0]: reporting_device
+		},
+	}
+
+	err := validateSnapshotFields(f)
+	if err == nil {
+		t.Fatal("expected accumulated validation error, got nil")
+	}
+	msg := err.Error()
+
+	wantSubstrings := []string{
+		"device[0]", "id exceeds",
+		"device[1]", "vendor exceeds",
+		"device[2]", "os_version exceeds",
+		"edge[0]", "src_port exceeds",
+		"edge[1]", "dst_port exceeds",
+		"edge[2]", "discovery_proto exceeds",
+		"out_of_scope[0]", "reporting_device exceeds",
+	}
+	for _, want := range wantSubstrings {
+		if !strings.Contains(msg, want) {
+			t.Errorf("accumulated error missing %q in:\n%s", want, msg)
+		}
+	}
+
+	// errors.Join produces a multi-error that unwraps to its components; each
+	// sub-error should be discoverable via errors.Is on a sentinel-like check.
+	// We can't use errors.Is on fmt.Errorf strings directly, so confirm at
+	// least that the unwrap returns more than one error.
+	type multiUnwrap interface{ Unwrap() []error }
+	mu, ok := err.(multiUnwrap)
+	if !ok {
+		t.Fatalf("expected joined error to expose Unwrap() []error, got %T", err)
+	}
+	if got := len(mu.Unwrap()); got < len(wantSubstrings)/2 {
+		t.Errorf("expected at least %d sub-errors, got %d", len(wantSubstrings)/2, got)
+	}
+}
+
+// TestValidateSnapshotFieldsCapsAtMaxErrors guards the upper bound on
+// accumulated errors: a deliberately-corrupt snapshot with thousands of
+// oversized fields must not produce an unbounded multi-MB error blob. The
+// validator stops at maxValidationErrors and appends an "omitted" sentinel.
+func TestValidateSnapshotFieldsCapsAtMaxErrors(t *testing.T) {
+	// Build 200 devices each with an oversized ID — well past the 100 cap.
+	const numDevices = 200
+	devices := make([]discovery.Device, 0, numDevices)
+	for i := 0; i < numDevices; i++ {
+		devices = append(devices, discovery.Device{ID: strings.Repeat("a", 1024)})
+	}
+	f := &File{Devices: devices}
+
+	err := validateSnapshotFields(f)
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+
+	type multiUnwrap interface{ Unwrap() []error }
+	mu, ok := err.(multiUnwrap)
+	if !ok {
+		t.Fatalf("expected joined error to expose Unwrap() []error, got %T", err)
+	}
+	subs := mu.Unwrap()
+	// 100 real errors + 1 "omitted" sentinel = 101.
+	if got, want := len(subs), 101; got != want {
+		t.Errorf("expected %d sub-errors (cap + sentinel), got %d", want, got)
+	}
+
+	if !strings.Contains(err.Error(), "omitted") {
+		t.Errorf("expected omitted-sentinel in error, got:\n%s", err.Error())
+	}
+	if !strings.Contains(err.Error(), "cap=100") {
+		t.Errorf("expected cap=100 in error, got:\n%s", err.Error())
+	}
+}
