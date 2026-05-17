@@ -56,7 +56,9 @@ import (
 // root 1.3.6.1.4.1.9.9.187.1.2.5 and col 3, the suffix is "1.4.10.0.0.2".
 //
 // Returns (nil, false) on any malformed input. Callers increment the
-// "malformed_index" outcome counter on false return.
+// outcomeMalformedIndex per-row counter on false return; if every unique
+// row in the table fails decoding, the walk-level outcome rolls up to
+// outcomeWalkerDrift (issue #27).
 type vendorIndexDecoder func(suffix string) (net.IP, bool)
 
 // vendorTableSpec describes one vendor's BGP4-V2-equivalent peer table.
@@ -199,24 +201,39 @@ func decodeBgp4v2InstanceIndex(suffix string) (net.IP, bool) {
 // because real-device captures showed the index format differs across
 // Cisco / Arista / IETF-draft / Juniper / Nokia.
 //
-// Returns (peers, hadPDUs, ok, err):
+// Returns (peers, hadPDUs, allRowsMalformed, ok, err):
 //   - hadPDUs reports whether BulkWalk produced any PDUs at all. Used by
-//     the caller to distinguish "MIB not implemented" (zero PDUs) from
-//     "MIB implemented but no peers" (PDUs arrived, but no row reached
-//     bgpStateEstablished).
+//     the caller to distinguish outcomeMIBUnimplemented (zero PDUs) from
+//     all the "PDUs arrived but no peers assembled" cases.
+//   - allRowsMalformed=true means at least one unique row index was
+//     attempted AND every attempted decode failed. Used by the caller to
+//     record outcomeWalkerDrift (issue #27) — operationally distinct from
+//     outcomeNoPeers, which assumes at least one row decoded cleanly and
+//     was simply in a non-Established state.
 //   - ok=false means no peer rows were assembled; the caller should fall
 //     back to RFC 4273.
-func walkVendorPeerTable(ctx context.Context, client *gsnmp.GoSNMP, spec vendorTableSpec) (map[string]*vendorPeer, bool, bool, error) {
+//
+// Per-row decode failures are also surfaced via the per-row
+// outcomeMalformedIndex counter (one increment per PDU whose index could
+// not be decoded; same index decoded multiple times by repeated column
+// PDUs is counted each time, preserving the existing soft-signal semantics).
+func walkVendorPeerTable(ctx context.Context, client *gsnmp.GoSNMP, spec vendorTableSpec) (map[string]*vendorPeer, bool, bool, bool, error) {
 	pdus, err := snmputil.BulkWalk(ctx, client, spec.root)
 	if err != nil {
-		return nil, false, false, err
+		return nil, false, false, false, err
 	}
 	if len(pdus) == 0 {
-		return nil, false, false, nil
+		return nil, false, false, false, nil
 	}
 
 	prefix := "." + spec.root + ".1."
 	peers := make(map[string]*vendorPeer)
+	// failedIndexes tracks UNIQUE row indexes whose decode attempt failed.
+	// We need this — not just the per-PDU malformed_index count — to
+	// detect the issue #27 walker_drift case: "every unique row attempted
+	// was rejected". Multiple PDUs per row (one per column) would otherwise
+	// double-count; we want a row-level signal.
+	failedIndexes := make(map[string]struct{})
 
 	for _, pdu := range pdus {
 		suffix, ok := snmputil.TrimOIDPrefix(pdu.Name, prefix)
@@ -232,7 +249,8 @@ func walkVendorPeerTable(ctx context.Context, client *gsnmp.GoSNMP, spec vendorT
 		if peer == nil {
 			peerIP, ok := spec.decodeIndex(rest)
 			if !ok {
-				recordWalkerOutcome(vendorWalkerLabel(spec.name), "malformed_index")
+				recordWalkerOutcome(vendorWalkerLabel(spec.name), outcomeMalformedIndex)
+				failedIndexes[rest] = struct{}{}
 				slog.Debug("bgp vendor: malformed index, dropping row",
 					"walker", vendorWalkerLabel(spec.name),
 					"vendor_table", spec.name,
@@ -251,21 +269,42 @@ func walkVendorPeerTable(ctx context.Context, client *gsnmp.GoSNMP, spec vendorT
 		}
 	}
 	if len(peers) == 0 {
-		// PDUs arrived but every row was rejected by the index decoder, or
-		// none matched the expected prefix. MIB is implemented; signal with
-		// hadPDUs=true so the caller records "no_peers".
-		return nil, true, false, nil
+		// PDUs arrived but no peer row was assembled. Two sub-cases:
+		//   - failedIndexes non-empty AND peers empty → every row we tried
+		//     to decode was rejected. The MIB is implemented but the
+		//     walker is broken on this vendor → walker_drift (issue #27).
+		//   - failedIndexes empty AND peers empty → no row had a valid
+		//     prefix/column split. Treat as the existing no_peers case
+		//     for backward compatibility (the prefix split is structural,
+		//     not a decoder mismatch).
+		allRowsMalformed := len(failedIndexes) > 0
+		return nil, true, allRowsMalformed, false, nil
 	}
-	return peers, true, true, nil
+	return peers, true, false, true, nil
 }
 
 // walkAndBuildVendorEdges runs the vendor-specific walk and converts the
 // resulting peers map into discovery.Edge / OutOfScopeNeighbour values.
 // The caller picks the spec via vendorSpecFor before invoking this.
 //
-// Outcome accounting (issue #15): records one of
-// {edges, no_peers, mib_unimplemented, error} per walker invocation, plus
-// one malformed_index increment per dropped row inside walkVendorPeerTable.
+// Outcome accounting (issues #15, #27): records exactly one of
+// {edges, no_peers, mib_unimplemented, walker_drift, error} per walker
+// invocation, plus one malformed_index increment per dropped row inside
+// walkVendorPeerTable. The five buckets are mutually exclusive at the
+// walker-invocation level (the per-row malformed_index counter is the
+// only one that may co-occur).
+//
+// Bucket selection logic:
+//   - walk errored                                              → error
+//   - zero PDUs returned                                        → mib_unimplemented
+//   - PDUs returned, ≥1 peer assembled, ≥1 in Established       → edges
+//   - PDUs returned, ≥1 peer assembled, none in Established     → no_peers
+//   - PDUs returned, ≥1 row attempted decoding, all rows failed → walker_drift  (issue #27)
+//
+// walker_drift exists because the previous code lumped "every row was
+// rejected by decodeIndex" into no_peers — operationally that conflated
+// "BGP is broken on every session" with "our walker is broken on this
+// vendor's MIB", which require very different alerting responses.
 func walkAndBuildVendorEdges(
 	ctx context.Context,
 	client *gsnmp.GoSNMP,
@@ -274,24 +313,27 @@ func walkAndBuildVendorEdges(
 	allowedNets []*net.IPNet,
 ) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, bool, error) {
 	walker := vendorWalkerLabel(spec.name)
-	peers, hadPDUs, ok, err := walkVendorPeerTable(ctx, client, spec)
+	peers, hadPDUs, allRowsMalformed, ok, err := walkVendorPeerTable(ctx, client, spec)
 	if err != nil {
-		recordWalkerOutcome(walker, "error")
+		recordWalkerOutcome(walker, outcomeError)
 		return nil, nil, false, err
 	}
 	if !ok {
-		if hadPDUs {
-			recordWalkerOutcome(walker, "no_peers")
-		} else {
-			recordWalkerOutcome(walker, "mib_unimplemented")
+		switch {
+		case !hadPDUs:
+			recordWalkerOutcome(walker, outcomeMIBUnimplemented)
+		case allRowsMalformed:
+			recordWalkerOutcome(walker, outcomeWalkerDrift)
+		default:
+			recordWalkerOutcome(walker, outcomeNoPeers)
 		}
 		return nil, nil, false, nil
 	}
 	edges, oos := buildVendorEdges(localDevice, peers, allowedNets)
 	if len(edges) > 0 {
-		recordWalkerOutcome(walker, "edges")
+		recordWalkerOutcome(walker, outcomeEdges)
 	} else {
-		recordWalkerOutcome(walker, "no_peers")
+		recordWalkerOutcome(walker, outcomeNoPeers)
 	}
 	return edges, oos, true, nil
 }

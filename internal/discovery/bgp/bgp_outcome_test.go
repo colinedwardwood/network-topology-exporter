@@ -61,13 +61,13 @@ func TestWalkerOutcomeMibUnimplemented(t *testing.T) {
 		t.Fatalf("expected 0 edges, got %d", len(edges))
 	}
 
-	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, "mib_unimplemented")); got != 1 {
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, outcomeMIBUnimplemented)); got != 1 {
 		t.Errorf("rfc4273 mib_unimplemented counter = %v, want 1", got)
 	}
-	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, "no_peers")); got != 0 {
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, outcomeNoPeers)); got != 0 {
 		t.Errorf("rfc4273 no_peers counter = %v, want 0 (MIB unimplemented, not no peers)", got)
 	}
-	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, "edges")); got != 0 {
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, outcomeEdges)); got != 0 {
 		t.Errorf("rfc4273 edges counter = %v, want 0", got)
 	}
 }
@@ -102,10 +102,10 @@ func TestWalkerOutcomeNoPeers(t *testing.T) {
 		t.Fatalf("Walk: %v", err)
 	}
 
-	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, "no_peers")); got != 1 {
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, outcomeNoPeers)); got != 1 {
 		t.Errorf("rfc4273 no_peers counter = %v, want 1", got)
 	}
-	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, "mib_unimplemented")); got != 0 {
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, outcomeMIBUnimplemented)); got != 0 {
 		t.Errorf("rfc4273 mib_unimplemented counter = %v, want 0 (PDUs arrived; MIB is implemented)", got)
 	}
 }
@@ -131,7 +131,7 @@ func TestWalkerOutcomeRFC4273Edges(t *testing.T) {
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d", len(edges))
 	}
-	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, "edges")); got != 1 {
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, outcomeEdges)); got != 1 {
 		t.Errorf("rfc4273 edges counter = %v, want 1", got)
 	}
 }
@@ -161,7 +161,7 @@ func TestWalkerOutcomeVendorCiscoEdges(t *testing.T) {
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge from Cisco walker, got %d", len(edges))
 	}
-	if got := testutil.ToFloat64(c.WithLabelValues(walkerVendorCisco, "edges")); got != 1 {
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerVendorCisco, outcomeEdges)); got != 1 {
 		t.Errorf("vendor_cisco edges counter = %v, want 1", got)
 	}
 }
@@ -189,17 +189,21 @@ func TestWalkerOutcomeVendorAristaEdges(t *testing.T) {
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge from Arista walker, got %d", len(edges))
 	}
-	if got := testutil.ToFloat64(c.WithLabelValues(walkerVendorArista, "edges")); got != 1 {
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerVendorArista, outcomeEdges)); got != 1 {
 		t.Errorf("vendor_arista edges counter = %v, want 1", got)
 	}
 }
 
-// TestWalkerOutcomeMalformedIndex: a Cisco-dispatched walk against rows
-// whose index suffix doesn't match the Cisco format. Every row drops via
-// the malformed_index path; the per-row counter records each drop, and
-// the walk-level outcome records "no_peers" (PDUs arrived but no peer
-// assembled).
-func TestWalkerOutcomeMalformedIndex(t *testing.T) {
+// TestRecordWalkerOutcomeAllPDUsMalformedIsDrift (issue #27): a Cisco-
+// dispatched walk against rows whose index suffix doesn't match the
+// Cisco format. Every row drops via the malformed_index path; the
+// per-PDU counter records each drop, and — critically — the walk-level
+// outcome records "walker_drift", NOT "no_peers". Operators alerting on
+// outcome=walker_drift get the signal that our walker is broken on this
+// vendor's MIB; operators alerting on outcome=no_peers get a clean
+// "BGP is broken on every session" signal without the conflation that
+// shipped before #27.
+func TestRecordWalkerOutcomeAllPDUsMalformedIsDrift(t *testing.T) {
 	c := newOutcomeCounter(t)
 
 	// Use the Arista index format (peerInst.type.len.addr) against the
@@ -229,12 +233,167 @@ func TestWalkerOutcomeMalformedIndex(t *testing.T) {
 		t.Fatalf("Walk: %v", err)
 	}
 
-	// Two rows in the input, both malformed for the Cisco decoder.
-	if got := testutil.ToFloat64(c.WithLabelValues(walkerVendorCisco, "malformed_index")); got != 2 {
+	// Two rows in the input, both malformed for the Cisco decoder — the
+	// per-PDU malformed_index counter still increments per-PDU so the
+	// soft-signal semantics are preserved.
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerVendorCisco, outcomeMalformedIndex)); got != 2 {
 		t.Errorf("vendor_cisco malformed_index counter = %v, want 2", got)
 	}
-	if got := testutil.ToFloat64(c.WithLabelValues(walkerVendorCisco, "no_peers")); got != 1 {
-		t.Errorf("vendor_cisco no_peers counter = %v, want 1 (PDUs arrived, no peer assembled)", got)
+	// The walk-level outcome must be walker_drift (NOT no_peers — issue #27).
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerVendorCisco, outcomeWalkerDrift)); got != 1 {
+		t.Errorf("vendor_cisco walker_drift counter = %v, want 1 (every row rejected by decoder)", got)
+	}
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerVendorCisco, outcomeNoPeers)); got != 0 {
+		t.Errorf("vendor_cisco no_peers counter = %v, want 0 (all rows malformed, not no peers)", got)
+	}
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerVendorCisco, outcomeMIBUnimplemented)); got != 0 {
+		t.Errorf("vendor_cisco mib_unimplemented counter = %v, want 0 (PDUs arrived)", got)
+	}
+	// Walk falls back to RFC 4273 after the vendor walker returns no
+	// peers; RFC 4273 has no data in this test, so it records
+	// mib_unimplemented. That's the documented behaviour of the fallback
+	// chain — assert it so a future refactor that breaks the fallback
+	// surfaces here.
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, outcomeMIBUnimplemented)); got != 1 {
+		t.Errorf("rfc4273 mib_unimplemented counter = %v, want 1 (vendor drift → fallback ran)", got)
+	}
+}
+
+// TestRecordWalkerOutcomeSomeMalformedSomeValid (issue #27): a Cisco
+// walk where half the rows decode cleanly (and reach Established) and
+// half are rejected by the decoder. The walk-level outcome is "edges"
+// (success path); the soft malformed_index signal increments per-row
+// in the other counter. This is the case where outcomeWalkerDrift
+// must NOT fire — a partial decoder mismatch is a warn-level signal,
+// not a page-level one.
+func TestRecordWalkerOutcomeSomeMalformedSomeValid(t *testing.T) {
+	c := newOutcomeCounter(t)
+
+	const base = ".1.3.6.1.4.1.9.9.187.1.2.5.1."
+	const goodIdx = "1.4.10.0.0.2"  // Cisco-decoder-clean: ipv4 10.0.0.2
+	const badIdx = "1.1.4.10.0.0.3" // Arista-shape: rejected by Cisco decoder
+	pdus := []gsnmp.SnmpPDU{
+		// Good row: col 3 (state) + col 11 (as) for 10.0.0.2 → established.
+		{Name: base + "3." + goodIdx, Type: gsnmp.Integer, Value: bgpStateEstablished},
+		{Name: base + "11." + goodIdx, Type: gsnmp.Gauge32, Value: uint(65001)},
+		// Bad row: both PDUs trigger decoder failure for the same index;
+		// the failedIndexes set tracks one unique row, but malformed_index
+		// counter increments per PDU.
+		{Name: base + "3." + badIdx, Type: gsnmp.Integer, Value: bgpStateEstablished},
+		{Name: base + "11." + badIdx, Type: gsnmp.Gauge32, Value: uint(65002)},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{
+		IP:          ip,
+		Port:        port,
+		Community:   "public",
+		Timeout:     3 * time.Second,
+		UseBGPV2MIB: true,
+		Vendor:      "cisco",
+	}
+
+	edges, _, err := Walk(context.Background(), p, "rtr", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge from the good row, got %d", len(edges))
+	}
+	// Walk-level outcome: edges (success — at least one peer decoded
+	// AND reached Established).
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerVendorCisco, outcomeEdges)); got != 1 {
+		t.Errorf("vendor_cisco edges counter = %v, want 1", got)
+	}
+	// Walker drift must NOT fire — the decoder worked on at least one row.
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerVendorCisco, outcomeWalkerDrift)); got != 0 {
+		t.Errorf("vendor_cisco walker_drift counter = %v, want 0 (one row decoded cleanly)", got)
+	}
+	// Per-PDU malformed_index still increments (2 PDUs for the bad index).
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerVendorCisco, outcomeMalformedIndex)); got != 2 {
+		t.Errorf("vendor_cisco malformed_index counter = %v, want 2 (per-PDU)", got)
+	}
+}
+
+// TestRecordWalkerOutcomeNoPDUsIsMIBUnimplemented (issue #27 regression
+// guard): the zero-PDU case must still record mib_unimplemented, not
+// walker_drift — a non-BGP device must not page on this counter.
+func TestRecordWalkerOutcomeNoPDUsIsMIBUnimplemented(t *testing.T) {
+	c := newOutcomeCounter(t)
+
+	// Agent responds only to sysDescr; vendor table walk returns empty.
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.1.1.0", Type: gsnmp.OctetString, Value: []byte("test-device")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{
+		IP:          ip,
+		Port:        port,
+		Community:   "public",
+		Timeout:     3 * time.Second,
+		UseBGPV2MIB: true,
+		Vendor:      "cisco",
+	}
+
+	if _, _, err := Walk(context.Background(), p, "rtr", nil); err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerVendorCisco, outcomeMIBUnimplemented)); got != 1 {
+		t.Errorf("vendor_cisco mib_unimplemented counter = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerVendorCisco, outcomeWalkerDrift)); got != 0 {
+		t.Errorf("vendor_cisco walker_drift counter = %v, want 0 (no PDUs, no rows attempted)", got)
+	}
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerVendorCisco, outcomeNoPeers)); got != 0 {
+		t.Errorf("vendor_cisco no_peers counter = %v, want 0", got)
+	}
+}
+
+// TestRecordWalkerOutcomePDUsButNoneEstablished (issue #27 regression
+// guard): the genuine no_peers case — rows decode cleanly but every
+// peer's state is non-Established — must continue to record no_peers
+// (NOT walker_drift, NOT mib_unimplemented).
+func TestRecordWalkerOutcomePDUsButNoneEstablished(t *testing.T) {
+	c := newOutcomeCounter(t)
+
+	const base = ".1.3.6.1.4.1.9.9.187.1.2.5.1."
+	const idx = "1.4.10.0.0.2" // clean Cisco-format index
+	pdus := []gsnmp.SnmpPDU{
+		// State = idle(1); decoder will accept the row but the peer is
+		// not Established → no edge → outcomeNoPeers.
+		{Name: base + "3." + idx, Type: gsnmp.Integer, Value: 1},
+		{Name: base + "11." + idx, Type: gsnmp.Gauge32, Value: uint(65001)},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{
+		IP:          ip,
+		Port:        port,
+		Community:   "public",
+		Timeout:     3 * time.Second,
+		UseBGPV2MIB: true,
+		Vendor:      "cisco",
+	}
+
+	edges, _, err := Walk(context.Background(), p, "rtr", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Fatalf("expected 0 edges (no Established peer), got %d", len(edges))
+	}
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerVendorCisco, outcomeNoPeers)); got != 1 {
+		t.Errorf("vendor_cisco no_peers counter = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerVendorCisco, outcomeWalkerDrift)); got != 0 {
+		t.Errorf("vendor_cisco walker_drift counter = %v, want 0 (rows decoded cleanly)", got)
+	}
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerVendorCisco, outcomeMalformedIndex)); got != 0 {
+		t.Errorf("vendor_cisco malformed_index counter = %v, want 0 (no decode failures)", got)
 	}
 }
 
@@ -262,7 +421,7 @@ func TestWalkerOutcomeError(t *testing.T) {
 	// Walk may return an error; we just verify the rfc4273 path didn't
 	// inappropriately record "edges". One of error / mib_unimplemented is
 	// expected.
-	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, "edges")); got != 0 {
+	if got := testutil.ToFloat64(c.WithLabelValues(walkerRFC4273, outcomeEdges)); got != 0 {
 		t.Errorf("rfc4273 edges = %v, want 0 on failure path", got)
 	}
 }
@@ -300,14 +459,14 @@ func TestRecordWalkerOutcomeNilSafe(t *testing.T) {
 
 	sentinel := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_sentinel"}, []string{"walker", "outcome"})
 	SetWalkerOutcomeCounter(sentinel)
-	recordWalkerOutcome(walkerVendorCisco, "edges")
-	if v := testutil.ToFloat64(sentinel.WithLabelValues(walkerVendorCisco, "edges")); v != 1 {
+	recordWalkerOutcome(walkerVendorCisco, outcomeEdges)
+	if v := testutil.ToFloat64(sentinel.WithLabelValues(walkerVendorCisco, outcomeEdges)); v != 1 {
 		t.Fatalf("baseline: sentinel counter = %v, want 1", v)
 	}
 
 	SetWalkerOutcomeCounter(nil)
-	recordWalkerOutcome(walkerVendorCisco, "edges")
-	if v := testutil.ToFloat64(sentinel.WithLabelValues(walkerVendorCisco, "edges")); v != 1 {
+	recordWalkerOutcome(walkerVendorCisco, outcomeEdges)
+	if v := testutil.ToFloat64(sentinel.WithLabelValues(walkerVendorCisco, outcomeEdges)); v != 1 {
 		t.Errorf("after nil set: sentinel counter = %v, want 1 (increment must be dropped, not landed on stale pointer)", v)
 	}
 }

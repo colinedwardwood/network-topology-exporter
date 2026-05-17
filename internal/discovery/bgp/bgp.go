@@ -107,6 +107,44 @@ const (
 	walkerRFC4273       = "rfc4273"
 )
 
+// Walker outcome label values for network_topology_bgp_walker_outcome_total.
+// The set is closed — only these values are emitted. Operators alert on
+// these label values; adding/removing is a breaking change tracked in
+// CHANGELOG. Keep in sync with the metric's documented label set in
+// internal/metrics/metrics.go and docs/metrics.md.
+//
+// Operational meaning (the four-bucket categorisation that issue #27 settled):
+//
+//   - outcomeEdges            — success: ≥1 peer reached bgpStateEstablished
+//     and produced a discovery.Edge.
+//   - outcomeMIBUnimplemented — BulkWalk returned zero PDUs; the device does
+//     not implement the table at all. Expected on non-BGP devices, MUST NOT
+//     page.
+//   - outcomeNoPeers          — PDUs arrived AND at least one row decoded
+//     cleanly, but no peer reached bgpStateEstablished. The device speaks
+//     BGP, the MIB is implemented, every session is down. SHOULD page —
+//     this is the canonical "BGP broken" signal.
+//   - outcomeMalformedIndex   — per-row counter incremented inside the
+//     walker for each row whose index suffix was rejected by the spec's
+//     decodeIndex. Soft signal — a non-zero rate means walker drift on
+//     this vendor's MIB but at least one peer still decoded. Warn-level.
+//   - outcomeWalkerDrift      — PDUs arrived but EVERY row was rejected
+//     by decodeIndex; zero peers assembled. Operationally distinct from
+//     mib_unimplemented (the device DOES implement the MIB, our decoder
+//     just doesn't match) and from no_peers (which assumes at least one
+//     row decoded cleanly and was simply in a non-Established state).
+//     Page-level signal that the walker is broken on this vendor.
+//   - outcomeError            — the SNMP walk itself errored; the next
+//     walker in the fallback chain will be tried.
+const (
+	outcomeEdges            = "edges"
+	outcomeMIBUnimplemented = "mib_unimplemented"
+	outcomeNoPeers          = "no_peers"
+	outcomeMalformedIndex   = "malformed_index"
+	outcomeWalkerDrift      = "walker_drift"
+	outcomeError            = "error"
+)
+
 // vendorWalkerLabel maps a vendorTableSpec.name to its outcome counter label.
 // Centralised so test assertions match the dispatcher exactly.
 func vendorWalkerLabel(specName string) string {
@@ -208,17 +246,17 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	// device implements the MIB but BGP is down).
 	peers, hadPDUs, err := walkBgpPeerTable(ctx, client)
 	if err != nil {
-		recordWalkerOutcome(walkerRFC4273, "error")
+		recordWalkerOutcome(walkerRFC4273, outcomeError)
 		return nil, nil, fmt.Errorf("bgp peer table %s: %w", p.IP, err)
 	}
 
 	edges, oos := buildEdges(localDevice, peers, allowedNets)
 	if len(edges) > 0 {
-		recordWalkerOutcome(walkerRFC4273, "edges")
+		recordWalkerOutcome(walkerRFC4273, outcomeEdges)
 	} else if hadPDUs {
-		recordWalkerOutcome(walkerRFC4273, "no_peers")
+		recordWalkerOutcome(walkerRFC4273, outcomeNoPeers)
 	} else {
-		recordWalkerOutcome(walkerRFC4273, "mib_unimplemented")
+		recordWalkerOutcome(walkerRFC4273, outcomeMIBUnimplemented)
 	}
 
 	// Promote a stashed vendor-walker error to Warn now that RFC 4273

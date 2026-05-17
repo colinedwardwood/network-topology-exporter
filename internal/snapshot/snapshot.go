@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+	"github.com/colinedwardwood/network-topology-exporter/internal/limits"
 )
 
 // tmpFile is the subset of *os.File used by Write. Defined as an interface so
@@ -61,18 +62,17 @@ var (
 //	    "%" must be escaped first to prevent double-encoding.
 const CurrentVersion = 3
 
-// Per-field byte caps applied by validateSnapshotFields. These guard against a
+// Per-field byte caps applied by validateSnapshotFields, beyond the four
+// caps shared with the federation push validator (which live in
+// internal/limits — see limits.MaxDeviceIDBytes etc.). These guard against a
 // malicious or corrupted snapshot.json declaring multi-megabyte strings that
-// json.Unmarshal would happily allocate. Values mirror the caps used elsewhere
-// in the codebase (federation hub) and are duplicated here as local constants
-// to keep this package self-contained; a later cleanup can consolidate.
+// json.Unmarshal would happily allocate. Only snapshot-only caps live here;
+// device-id, port-name, label-key, and label-value caps are imported from
+// internal/limits so the on-disk validator and the wire-format validator stay
+// in lockstep.
 const (
-	maxIDBytes         = 256  // device IDs, sysNames, port names
-	maxShortFieldBytes = 256  // vendor, model, OS version, site, src/dst device
-	maxPortBytes       = 256  // port names
-	maxProtoBytes      = 64   // enum-like values: discovery_proto, link_kind
-	maxLabelKeyBytes   = 256  // map key for Labels / Metadata
-	maxLabelValueBytes = 4096 // map value for Labels / Metadata
+	maxShortFieldBytes = 256 // vendor, model, OS version, site
+	maxProtoBytes      = 64  // enum-like values: discovery_proto, link_kind
 )
 
 // File is the on-disk representation. Public fields and field tags are part
@@ -244,8 +244,8 @@ func validateSnapshotFields(f *File) error {
 		if len(errs) >= maxValidationErrors {
 			break
 		}
-		if n := len(d.ID); n > maxIDBytes {
-			addErr("device[%d]: id exceeds %d bytes (%d)", i, maxIDBytes, n)
+		if n := len(d.ID); n > limits.MaxDeviceIDBytes {
+			addErr("device[%d]: id exceeds %d bytes (%d)", i, limits.MaxDeviceIDBytes, n)
 		}
 		if n := len(d.Vendor); n > maxShortFieldBytes {
 			addErr("device[%d]: vendor exceeds %d bytes (%d)", i, maxShortFieldBytes, n)
@@ -263,11 +263,11 @@ func validateSnapshotFields(f *File) error {
 			if len(errs) >= maxValidationErrors {
 				break
 			}
-			if n := len(k); n > maxLabelKeyBytes {
-				addErr("device[%d]: labels key exceeds %d bytes (%d)", i, maxLabelKeyBytes, n)
+			if n := len(k); n > limits.MaxLabelKeyBytes {
+				addErr("device[%d]: labels key exceeds %d bytes (%d)", i, limits.MaxLabelKeyBytes, n)
 			}
-			if n := len(v); n > maxLabelValueBytes {
-				addErr("device[%d]: labels value for key %q exceeds %d bytes (%d)", i, k, maxLabelValueBytes, n)
+			if n := len(v); n > limits.MaxLabelValueBytes {
+				addErr("device[%d]: labels value for key %q exceeds %d bytes (%d)", i, k, limits.MaxLabelValueBytes, n)
 			}
 		}
 	}
@@ -275,17 +275,17 @@ func validateSnapshotFields(f *File) error {
 		if len(errs) >= maxValidationErrors {
 			break
 		}
-		if n := len(e.SrcDevice); n > maxIDBytes {
-			addErr("edge[%d]: src_device exceeds %d bytes (%d)", i, maxIDBytes, n)
+		if n := len(e.SrcDevice); n > limits.MaxDeviceIDBytes {
+			addErr("edge[%d]: src_device exceeds %d bytes (%d)", i, limits.MaxDeviceIDBytes, n)
 		}
-		if n := len(e.DstDevice); n > maxIDBytes {
-			addErr("edge[%d]: dst_device exceeds %d bytes (%d)", i, maxIDBytes, n)
+		if n := len(e.DstDevice); n > limits.MaxDeviceIDBytes {
+			addErr("edge[%d]: dst_device exceeds %d bytes (%d)", i, limits.MaxDeviceIDBytes, n)
 		}
-		if n := len(e.SrcPort); n > maxPortBytes {
-			addErr("edge[%d]: src_port exceeds %d bytes (%d)", i, maxPortBytes, n)
+		if n := len(e.SrcPort); n > limits.MaxPortNameBytes {
+			addErr("edge[%d]: src_port exceeds %d bytes (%d)", i, limits.MaxPortNameBytes, n)
 		}
-		if n := len(e.DstPort); n > maxPortBytes {
-			addErr("edge[%d]: dst_port exceeds %d bytes (%d)", i, maxPortBytes, n)
+		if n := len(e.DstPort); n > limits.MaxPortNameBytes {
+			addErr("edge[%d]: dst_port exceeds %d bytes (%d)", i, limits.MaxPortNameBytes, n)
 		}
 		if n := len(e.DiscoveryProto); n > maxProtoBytes {
 			addErr("edge[%d]: discovery_proto exceeds %d bytes (%d)", i, maxProtoBytes, n)
@@ -297,11 +297,11 @@ func validateSnapshotFields(f *File) error {
 			if len(errs) >= maxValidationErrors {
 				break
 			}
-			if n := len(k); n > maxLabelKeyBytes {
-				addErr("edge[%d]: metadata key exceeds %d bytes (%d)", i, maxLabelKeyBytes, n)
+			if n := len(k); n > limits.MaxLabelKeyBytes {
+				addErr("edge[%d]: metadata key exceeds %d bytes (%d)", i, limits.MaxLabelKeyBytes, n)
 			}
-			if n := len(v); n > maxLabelValueBytes {
-				addErr("edge[%d]: metadata value for key %q exceeds %d bytes (%d)", i, k, maxLabelValueBytes, n)
+			if n := len(v); n > limits.MaxLabelValueBytes {
+				addErr("edge[%d]: metadata value for key %q exceeds %d bytes (%d)", i, k, limits.MaxLabelValueBytes, n)
 			}
 		}
 	}
@@ -309,14 +309,14 @@ func validateSnapshotFields(f *File) error {
 		if len(errs) >= maxValidationErrors {
 			break
 		}
-		if x := len(n.ReportingDevice); x > maxIDBytes {
-			addErr("out_of_scope[%d]: reporting_device exceeds %d bytes (%d)", i, maxIDBytes, x)
+		if x := len(n.ReportingDevice); x > limits.MaxDeviceIDBytes {
+			addErr("out_of_scope[%d]: reporting_device exceeds %d bytes (%d)", i, limits.MaxDeviceIDBytes, x)
 		}
-		if x := len(n.ReportingPort); x > maxPortBytes {
-			addErr("out_of_scope[%d]: reporting_port exceeds %d bytes (%d)", i, maxPortBytes, x)
+		if x := len(n.ReportingPort); x > limits.MaxPortNameBytes {
+			addErr("out_of_scope[%d]: reporting_port exceeds %d bytes (%d)", i, limits.MaxPortNameBytes, x)
 		}
-		if x := len(n.NeighbourHint); x > maxIDBytes {
-			addErr("out_of_scope[%d]: neighbour_hint exceeds %d bytes (%d)", i, maxIDBytes, x)
+		if x := len(n.NeighbourHint); x > limits.MaxDeviceIDBytes {
+			addErr("out_of_scope[%d]: neighbour_hint exceeds %d bytes (%d)", i, limits.MaxDeviceIDBytes, x)
 		}
 		if x := len(n.Proto); x > maxProtoBytes {
 			addErr("out_of_scope[%d]: proto exceeds %d bytes (%d)", i, maxProtoBytes, x)

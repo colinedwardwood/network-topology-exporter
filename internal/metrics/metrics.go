@@ -59,12 +59,15 @@ type Metrics struct {
 	FederationSpokePushFailuresTotal prometheus.Counter
 
 	// GraphUpdatesRejectedTotal counts combined-graph updates rejected at
-	// publish time, partitioned by reason. Current reason values mirror the
-	// federation push-rejection enum: "size_budget_exceeded" (graph exceeded
-	// MaxGraphEdges or MaxGraphDevices), "invalid_label_key" /
-	// "invalid_label_value" (spoke payload failed label-injection validation).
-	// New reasons land alongside the emission site that introduces them;
-	// deprecated values are removed in a major version. Operators alert on
+	// publish time, partitioned by reason. Reason label values are the
+	// underlying strings of the RejectReason constants declared in
+	// reject_reason.go (size_budget_exceeded, invalid_label_key,
+	// invalid_label_value, structural_invalid, stale_generation). Emission
+	// sites must call WithLabelValues(string(reject.X)) — the typed
+	// constants keep label values in sync with the federation pushRejection
+	// JSON wire format. New reasons land alongside the emission site that
+	// introduces them; deprecated values are removed in a major version.
+	// Operators alert on
 	// rate(network_topology_graph_updates_rejected_total[5m]) > 0 to detect
 	// any reject pattern, and on the per-reason breakdown for triage.
 	GraphUpdatesRejectedTotal *prometheus.CounterVec
@@ -106,23 +109,35 @@ type Metrics struct {
 	// BGPWalkerOutcomeTotal counts the outcome of each BGP walker pass.
 	// Labels:
 	//   walker  ∈ {vendor_cisco, vendor_arista, vendor_juniper, vendor_nokia, rfc4273}
-	//   outcome ∈ {edges, no_peers, mib_unimplemented, error, malformed_index}
+	//   outcome ∈ {edges, no_peers, mib_unimplemented, walker_drift, error, malformed_index}
 	// One counter per (walker, outcome) is incremented per device per cycle.
 	// Semantics:
 	//   - "edges" — walker produced at least one established-peer row
 	//   - "mib_unimplemented" — BulkWalk returned zero PDUs; the device does
 	//     not implement the table at all (expected on non-BGP devices, must
 	//     not page)
-	//   - "no_peers" — PDUs arrived and a peers map was built, but no peer
-	//     reached bgpStateEstablished — BGP is configured but every session
-	//     is down (operationally distinct from mib_unimplemented; this is
-	//     the correct signal for "BGP broken" alerts)
+	//   - "no_peers" — PDUs arrived AND at least one row decoded cleanly,
+	//     but no peer reached bgpStateEstablished — BGP is configured but
+	//     every session is down (operationally distinct from
+	//     mib_unimplemented; this is the correct signal for "BGP broken"
+	//     alerts)
+	//   - "walker_drift" — PDUs arrived but EVERY row was rejected by the
+	//     vendor decoder. The device DOES implement the MIB, our decoder
+	//     just doesn't match. Page-level signal that the walker is broken
+	//     on this vendor's MIB; operationally distinct from no_peers (which
+	//     means BGP itself is broken) and from mib_unimplemented (which is
+	//     expected on non-BGP devices). Added in issue #27.
 	//   - "error" — the SNMP walk itself failed
 	//   - "malformed_index" — incremented per dropped row inside a walker
 	//     that rejected a row via decodeBgp4V2Index
 	// Issue #15: the previous "empty" outcome was split into "no_peers" and
 	// "mib_unimplemented". Operator alerts on outcome="empty" must migrate
 	// to outcome="no_peers".
+	// Issue #27 (breaking): the all-rows-malformed sub-case of the prior
+	// "no_peers" semantics was hoisted to its own "walker_drift" outcome.
+	// Operator alerts on outcome="no_peers" that expected to fire on
+	// "every row was decoder-rejected" must migrate to
+	// outcome="walker_drift".
 	BGPWalkerOutcomeTotal *prometheus.CounterVec
 }
 
