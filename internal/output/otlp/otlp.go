@@ -190,8 +190,8 @@ func (e *Exporter) PushGraph(ctx context.Context, g discovery.Graph) error {
 			{Key: "src_port", Value: kvValue{StringValue: sanitizeUTF8(edge.SrcPort)}},
 			{Key: "dst_device", Value: kvValue{StringValue: sanitizeUTF8(edge.DstDevice)}},
 			{Key: "dst_port", Value: kvValue{StringValue: sanitizeUTF8(edge.DstPort)}},
-			{Key: "proto", Value: kvValue{StringValue: sanitizeUTF8(edge.DiscoveryProto)}},
-			{Key: "link_kind", Value: kvValue{StringValue: sanitizeUTF8(edge.LinkKind)}},
+			{Key: "proto", Value: kvValue{StringValue: sanitizeUTF8(string(edge.DiscoveryProto))}},
+			{Key: "link_kind", Value: kvValue{StringValue: sanitizeUTF8(string(edge.LinkKind))}},
 			{Key: "direction", Value: kvValue{StringValue: sanitizeUTF8(string(edge.Direction))}},
 			{Key: "confidence", Value: kvValue{StringValue: sanitizeUTF8(string(edge.Confidence))}},
 			{Key: "adjacency", Value: kvValue{StringValue: sanitizeUTF8(string(edge.Adjacency))}},
@@ -278,15 +278,15 @@ func (e *Exporter) PushChanges(ctx context.Context, changes []graph.EdgeChange) 
 			srcPort = c.After.SrcPort
 			dstDevice = c.After.DstDevice
 			dstPort = c.After.DstPort
-			proto = c.After.DiscoveryProto
-			linkKind = c.After.LinkKind
+			proto = string(c.After.DiscoveryProto)
+			linkKind = string(c.After.LinkKind)
 		case c.Before != nil:
 			srcDevice = c.Before.SrcDevice
 			srcPort = c.Before.SrcPort
 			dstDevice = c.Before.DstDevice
 			dstPort = c.Before.DstPort
-			proto = c.Before.DiscoveryProto
-			linkKind = c.Before.LinkKind
+			proto = string(c.Before.DiscoveryProto)
+			linkKind = string(c.Before.LinkKind)
 		}
 
 		var ts time.Time

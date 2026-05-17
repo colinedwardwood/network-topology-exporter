@@ -97,6 +97,65 @@ type Device struct {
 	Labels    map[string]string // free-form labels from per-target enrichment config
 }
 
+// DiscoveryProtocol identifies the discovery source that produced an Edge.
+// The underlying string is the wire-format value emitted in Prometheus labels,
+// OTLP attributes, and snapshot JSON — changing these strings breaks consumers.
+type DiscoveryProtocol string
+
+// DiscoveryProtocol values: one constant per emitter that constructs an Edge.
+// "configured" is reserved for federation hub-injected LD-19 inter-domain links.
+const (
+	DiscoveryProtocolLLDP       DiscoveryProtocol = "lldp"
+	DiscoveryProtocolCDP        DiscoveryProtocol = "cdp"
+	DiscoveryProtocolBGP        DiscoveryProtocol = "bgp"
+	DiscoveryProtocolOSPF       DiscoveryProtocol = "ospf"
+	DiscoveryProtocolFDB        DiscoveryProtocol = "fdb"
+	DiscoveryProtocolISIS       DiscoveryProtocol = "isis"
+	DiscoveryProtocolMPLSTE     DiscoveryProtocol = "mpls_te"
+	DiscoveryProtocolConfigured DiscoveryProtocol = "configured" // hub-injected from LD-19 KnownInterDomainLinks
+)
+
+// String returns the underlying wire value, satisfying fmt.Stringer.
+func (p DiscoveryProtocol) String() string { return string(p) }
+
+// Valid reports whether p is one of the declared DiscoveryProtocol constants.
+func (p DiscoveryProtocol) Valid() bool {
+	switch p {
+	case DiscoveryProtocolLLDP, DiscoveryProtocolCDP, DiscoveryProtocolBGP,
+		DiscoveryProtocolOSPF, DiscoveryProtocolFDB, DiscoveryProtocolISIS,
+		DiscoveryProtocolMPLSTE, DiscoveryProtocolConfigured:
+		return true
+	}
+	return false
+}
+
+// LinkKind describes the transport semantics of a discovered link, independent
+// of how the link was discovered. Emitted as the `link_kind` Prometheus label
+// and OTLP attribute. The underlying string is the wire format.
+type LinkKind string
+
+// LinkKind values: one constant per transport semantic recognised by the
+// discovery layer. "logical" covers tunnel / VPN endpoints; "ip" covers
+// routing-protocol adjacencies (BGP/OSPF/IS-IS).
+const (
+	LinkKindEthernet LinkKind = "ethernet"
+	LinkKindMPLSTE   LinkKind = "mpls-te"
+	LinkKindIP       LinkKind = "ip"
+	LinkKindLogical  LinkKind = "logical"
+)
+
+// String returns the underlying wire value, satisfying fmt.Stringer.
+func (k LinkKind) String() string { return string(k) }
+
+// Valid reports whether k is one of the declared LinkKind constants.
+func (k LinkKind) Valid() bool {
+	switch k {
+	case LinkKindEthernet, LinkKindMPLSTE, LinkKindIP, LinkKindLogical:
+		return true
+	}
+	return false
+}
+
 // Direction records whether a link was confirmed from both endpoints (the
 // other end's discovery protocol agrees the link exists) or only one end.
 // Bidirectional confirmation is a strong signal; unidirectional links survive
@@ -108,6 +167,18 @@ const (
 	DirectionBidirectional  Direction = "bidirectional"
 	DirectionUnidirectional Direction = "unidirectional"
 )
+
+// String returns the underlying wire value, satisfying fmt.Stringer.
+func (d Direction) String() string { return string(d) }
+
+// Valid reports whether d is one of the declared Direction constants.
+func (d Direction) Valid() bool {
+	switch d {
+	case DirectionBidirectional, DirectionUnidirectional:
+		return true
+	}
+	return false
+}
 
 // Confidence is the coarse three-bucket classification used by LD-10. v1 does
 // not learn confidence from history; the bucket is a function of the source
@@ -122,6 +193,18 @@ const (
 	ConfidenceLow    Confidence = "low"
 )
 
+// String returns the underlying wire value, satisfying fmt.Stringer.
+func (c Confidence) String() string { return string(c) }
+
+// Valid reports whether c is one of the declared Confidence constants.
+func (c Confidence) Valid() bool {
+	switch c {
+	case ConfidenceHigh, ConfidenceMedium, ConfidenceLow:
+		return true
+	}
+	return false
+}
+
 // Adjacency is the NetXMS-style direct-vs-indirect classification: a port
 // with exactly one MAC in its bridge FDB is direct (probably points at a
 // real device); a port with multiple MACs is indirect (downstream switch,
@@ -135,6 +218,18 @@ const (
 	AdjacencyIndirect Adjacency = "indirect"
 	AdjacencyUnknown  Adjacency = "unknown" // for sources that can't tell (BGP, OSPF, manual)
 )
+
+// String returns the underlying wire value, satisfying fmt.Stringer.
+func (a Adjacency) String() string { return string(a) }
+
+// Valid reports whether a is one of the declared Adjacency constants.
+func (a Adjacency) Valid() bool {
+	switch a {
+	case AdjacencyDirect, AdjacencyIndirect, AdjacencyUnknown:
+		return true
+	}
+	return false
+}
 
 // Edge is one observation of a link between two devices, made by a single
 // discovery protocol. Multiple Edge values can describe the same physical
@@ -152,18 +247,18 @@ type Edge struct {
 
 	// LD-10 reconciliation labels. The metric layer maps these directly onto
 	// `network_topology_edge_info` labels.
-	DiscoveryProto string // "lldp" | "cdp" | "bgp" | "ospf" | "fdb"
+	DiscoveryProto DiscoveryProtocol // lldp | cdp | bgp | ospf | fdb | isis | mpls_te | configured
 	Direction      Direction
 	Confidence     Confidence
 	Adjacency      Adjacency
 	PrecedenceRank int // 0 = highest (LD-19 configured overrides); lower rank = higher priority. See LD-10 ladder.
 
 	// LinkKind describes the link's transport semantics, independent of how it
-	// was discovered: "ethernet" for L2 LLDP/CDP/FDB observations, "ibgp" or
-	// "ebgp" for BGP4-MIB peer adjacencies, "ospf-area" for OSPF-MIB peers,
-	// "logical" for tunnel / VPN endpoints, etc. Not part of the LD-10 label
-	// set; consumed by dashboards that want to filter by transport.
-	LinkKind string
+	// was discovered: "ethernet" for L2 LLDP/CDP/FDB observations, "ip" for
+	// routing-protocol peer adjacencies (BGP, OSPF, IS-IS), "mpls-te" for
+	// MPLS TE tunnels, "logical" for tunnel / VPN endpoints. Not part of the
+	// LD-10 label set; consumed by dashboards that want to filter by transport.
+	LinkKind LinkKind
 
 	// LD-14 lifecycle. ObservedAt timestamps the cycle this Edge was emitted;
 	// the graph layer tracks UnconfirmedCycles internally and removes a link

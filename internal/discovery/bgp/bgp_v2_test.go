@@ -96,7 +96,7 @@ func TestWalkVendorCisco(t *testing.T) {
 	p := snmputil.Params{
 		IP:          ip,
 		Port:        port,
-		Community:   "public",
+		Community:   []byte("public"),
 		Timeout:     3 * time.Second,
 		UseBGPV2MIB: true,
 		Vendor:      "cisco",
@@ -127,7 +127,7 @@ func TestWalkVendorArista(t *testing.T) {
 	p := snmputil.Params{
 		IP:          ip,
 		Port:        port,
-		Community:   "public",
+		Community:   []byte("public"),
 		Timeout:     3 * time.Second,
 		UseBGPV2MIB: true,
 		Vendor:      "arista",
@@ -161,7 +161,7 @@ func TestWalkUseV2MIBDisabledOnlyHitsRFC4273(t *testing.T) {
 	p := snmputil.Params{
 		IP:          ip,
 		Port:        port,
-		Community:   "public",
+		Community:   []byte("public"),
 		Timeout:     3 * time.Second,
 		UseBGPV2MIB: false, // kill-switch off
 		Vendor:      "cisco",
@@ -187,7 +187,7 @@ func TestWalkFallsBackToRFC4273WhenVendorEmpty(t *testing.T) {
 	p := snmputil.Params{
 		IP:          ip,
 		Port:        port,
-		Community:   "public",
+		Community:   []byte("public"),
 		Timeout:     3 * time.Second,
 		UseBGPV2MIB: true,
 		Vendor:      "cisco", // dispatched to Cisco spec but table is empty

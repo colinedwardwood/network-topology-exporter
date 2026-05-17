@@ -45,50 +45,29 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
-	"sync/atomic"
 	"time"
 
 	gsnmp "github.com/gosnmp/gosnmp"
-	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 	snmputil "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
 )
 
-// walkerOutcomeCounter is the package-level sink for BGP walker outcome
-// observations. It is set once at process startup by main via
-// SetWalkerOutcomeCounter and is safe to read from any goroutine after that —
-// the atomic.Pointer guarantees a happens-before edge between Set and Load
-// across goroutines, and Load returning nil is the documented "not wired"
-// state used in tests that don't spin up the full process.
+// recordWalkerOutcome forwards a {walker, outcome} observation to the
+// metrics sink carried on Params. Walker outcome accounting is dependency-
+// injected — the bgp package no longer holds a package-level counter handle.
+// See snmputil.WalkerMetrics for the interface and cmd/topology-exporter/
+// main.go for the adapter that wraps Metrics.BGPWalkerOutcomeTotal.
 //
-// Why a package-level setter rather than threading the counter through
-// snmputil.Params or the Walk signature: the project's module dispatch in
-// cmd/topology-exporter/main.go invokes every protocol walker through a
-// shared func signature (ctx, params, deviceID, allowedNets) → (edges, oos,
-// error). Adding a metrics handle to either the signature or Params bleeds
-// observability plumbing into every other module that doesn't need it.
-// Option A keeps the change scoped to this package and matches how
-// non-call-site config is already handled by other modules that need
-// process-wide singletons. The trade-off is that tests must either set the
-// counter explicitly (and reset it in cleanup) or accept nil (which the
-// helpers below handle without panicking).
-var walkerOutcomeCounter atomic.Pointer[prometheus.CounterVec]
-
-// SetWalkerOutcomeCounter wires the package's outcome counter. Call once at
-// startup before any Walk invocation; subsequent calls overwrite the previous
-// value. Passing nil disables outcome accounting (useful in tests).
-func SetWalkerOutcomeCounter(c *prometheus.CounterVec) {
-	walkerOutcomeCounter.Store(c)
-}
-
-// recordWalkerOutcome increments the {walker, outcome} counter if one is wired.
-// Safe to call when no counter is set — the call is a cheap atomic load + nil
-// check, so production paths can call it unconditionally.
-func recordWalkerOutcome(walker, outcome string) {
-	if c := walkerOutcomeCounter.Load(); c != nil {
-		c.WithLabelValues(walker, outcome).Inc()
+// nil-safety: drop the increment, don't crash. p may be nil in unit tests
+// that exercise recordWalkerOutcome directly, and p.WalkerMetrics may be
+// nil when discovery cycles run before main has finished wiring (or in
+// tests that intentionally inject no sink to verify the drop path).
+func recordWalkerOutcome(p *snmputil.Params, walker, outcome string) {
+	if p == nil || p.WalkerMetrics == nil {
+		return
 	}
+	p.WalkerMetrics.RecordWalkerOutcome(walker, outcome)
 }
 
 // Walker label constants. Keep these in sync with the metric's documented
@@ -228,7 +207,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 		// Step 1: try the vendor-specific table.
 		if spec := vendorSpecFor(resolveVendor(ctx, p, client)); spec != nil {
 			vendorSpec = spec
-			edges, oos, ok, err := walkAndBuildVendorEdges(ctx, client, *spec, localDevice, allowedNets)
+			edges, oos, ok, err := walkAndBuildVendorEdges(ctx, &p, client, *spec, localDevice, allowedNets)
 			if err != nil {
 				vendorErr = err
 			} else if ok {
@@ -246,17 +225,17 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	// device implements the MIB but BGP is down).
 	peers, hadPDUs, err := walkBgpPeerTable(ctx, client)
 	if err != nil {
-		recordWalkerOutcome(walkerRFC4273, outcomeError)
+		recordWalkerOutcome(&p, walkerRFC4273, outcomeError)
 		return nil, nil, fmt.Errorf("bgp peer table %s: %w", p.IP, err)
 	}
 
 	edges, oos := buildEdges(localDevice, peers, allowedNets)
 	if len(edges) > 0 {
-		recordWalkerOutcome(walkerRFC4273, outcomeEdges)
+		recordWalkerOutcome(&p, walkerRFC4273, outcomeEdges)
 	} else if hadPDUs {
-		recordWalkerOutcome(walkerRFC4273, outcomeNoPeers)
+		recordWalkerOutcome(&p, walkerRFC4273, outcomeNoPeers)
 	} else {
-		recordWalkerOutcome(walkerRFC4273, outcomeMIBUnimplemented)
+		recordWalkerOutcome(&p, walkerRFC4273, outcomeMIBUnimplemented)
 	}
 
 	// Promote a stashed vendor-walker error to Warn now that RFC 4273
@@ -343,12 +322,12 @@ func buildEdges(localDevice string, peers map[string]*bgpPeer, allowedNets []*ne
 		edges = append(edges, discovery.Edge{
 			SrcDevice:      localDevice,
 			DstDevice:      peer.remoteIP.String(),
-			DiscoveryProto: "bgp",
+			DiscoveryProto: discovery.DiscoveryProtocolBGP,
 			Direction:      discovery.DirectionUnidirectional,
 			Confidence:     discovery.ConfidenceLow,
 			Adjacency:      discovery.AdjacencyUnknown,
 			PrecedenceRank: precedenceRank,
-			LinkKind:       "ip",
+			LinkKind:       discovery.LinkKindIP,
 			ObservedAt:     now,
 			Metadata:       metadata,
 		})

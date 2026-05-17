@@ -173,12 +173,12 @@ func buildEdges(localDevice string, ifNames map[int]string, entries map[cacheKey
 			SrcPort:        localPort,
 			DstDevice:      e.deviceID,
 			DstPort:        e.devPort,
-			DiscoveryProto: "cdp",
+			DiscoveryProto: discovery.DiscoveryProtocolCDP,
 			Direction:      discovery.DirectionUnidirectional,
 			Confidence:     discovery.ConfidenceHigh,
 			Adjacency:      discovery.AdjacencyDirect,
 			PrecedenceRank: precedenceRank,
-			LinkKind:       "ethernet",
+			LinkKind:       discovery.LinkKindEthernet,
 			ObservedAt:     now,
 		})
 	}

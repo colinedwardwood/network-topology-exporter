@@ -734,8 +734,8 @@ func TestLoadAcceptsBoundaryValues(t *testing.T) {
 				SrcPort:        strings.Repeat("P", 256),
 				DstDevice:      strings.Repeat("D", 256),
 				DstPort:        strings.Repeat("Q", 256),
-				DiscoveryProto: strings.Repeat("p", 64),
-				LinkKind:       strings.Repeat("l", 64),
+				DiscoveryProto: discovery.DiscoveryProtocol(strings.Repeat("p", 64)),
+				LinkKind:       discovery.LinkKind(strings.Repeat("l", 64)),
 				Metadata: map[string]string{
 					strings.Repeat("k", 256): strings.Repeat("V", 4096),
 				},
@@ -759,7 +759,9 @@ func TestLoadAcceptsBoundaryValues(t *testing.T) {
 			f.Devices[0].Labels = map[string]string{"env": strings.Repeat("V", 4097)}
 		}, "labels value"},
 		{"edge src_port +1", func(f *File) { f.Edges[0].SrcPort = strings.Repeat("P", 257) }, "src_port"},
-		{"edge discovery_proto +1", func(f *File) { f.Edges[0].DiscoveryProto = strings.Repeat("p", 65) }, "discovery_proto"},
+		{"edge discovery_proto +1", func(f *File) {
+			f.Edges[0].DiscoveryProto = discovery.DiscoveryProtocol(strings.Repeat("p", 65))
+		}, "discovery_proto"},
 		{"edge metadata value +1", func(f *File) {
 			f.Edges[0].Metadata = map[string]string{"k": strings.Repeat("V", 4097)}
 		}, "metadata value"},
@@ -782,8 +784,8 @@ func TestLoadAcceptsBoundaryValues(t *testing.T) {
 					SrcPort:        strings.Repeat("P", 256),
 					DstDevice:      strings.Repeat("D", 256),
 					DstPort:        strings.Repeat("Q", 256),
-					DiscoveryProto: strings.Repeat("p", 64),
-					LinkKind:       strings.Repeat("l", 64),
+					DiscoveryProto: discovery.DiscoveryProtocol(strings.Repeat("p", 64)),
+					LinkKind:       discovery.LinkKind(strings.Repeat("l", 64)),
 					Metadata:       map[string]string{strings.Repeat("k", 256): strings.Repeat("V", 4096)},
 				}},
 			}
@@ -813,9 +815,9 @@ func TestValidateSnapshotFieldsAccumulatesMultipleErrors(t *testing.T) {
 			{ID: "ok2", OSVersion: strings.Repeat("o", 1024)}, // device[2]: os_version
 		},
 		Edges: []discovery.Edge{
-			{SrcDevice: "a", SrcPort: strings.Repeat("p", 1024), DstDevice: "b", DstPort: "ok"},                      // edge[0]: src_port
-			{SrcDevice: "a", SrcPort: "ok", DstDevice: "b", DstPort: strings.Repeat("p", 1024)},                      // edge[1]: dst_port
-			{SrcDevice: "a", SrcPort: "ok", DstDevice: "b", DstPort: "ok", DiscoveryProto: strings.Repeat("x", 128)}, // edge[2]: discovery_proto
+			{SrcDevice: "a", SrcPort: strings.Repeat("p", 1024), DstDevice: "b", DstPort: "ok"},                                                   // edge[0]: src_port
+			{SrcDevice: "a", SrcPort: "ok", DstDevice: "b", DstPort: strings.Repeat("p", 1024)},                                                   // edge[1]: dst_port
+			{SrcDevice: "a", SrcPort: "ok", DstDevice: "b", DstPort: "ok", DiscoveryProto: discovery.DiscoveryProtocol(strings.Repeat("x", 128))}, // edge[2]: discovery_proto
 		},
 		OutOfScope: []discovery.OutOfScopeNeighbour{
 			{ReportingDevice: strings.Repeat("r", 1024)}, // out_of_scope[0]: reporting_device

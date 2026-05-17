@@ -217,7 +217,7 @@ func decodeBgp4v2InstanceIndex(suffix string) (net.IP, bool) {
 // outcomeMalformedIndex counter (one increment per PDU whose index could
 // not be decoded; same index decoded multiple times by repeated column
 // PDUs is counted each time, preserving the existing soft-signal semantics).
-func walkVendorPeerTable(ctx context.Context, client *gsnmp.GoSNMP, spec vendorTableSpec) (map[string]*vendorPeer, bool, bool, bool, error) {
+func walkVendorPeerTable(ctx context.Context, p *snmputil.Params, client *gsnmp.GoSNMP, spec vendorTableSpec) (map[string]*vendorPeer, bool, bool, bool, error) {
 	pdus, err := snmputil.BulkWalk(ctx, client, spec.root)
 	if err != nil {
 		return nil, false, false, false, err
@@ -249,7 +249,7 @@ func walkVendorPeerTable(ctx context.Context, client *gsnmp.GoSNMP, spec vendorT
 		if peer == nil {
 			peerIP, ok := spec.decodeIndex(rest)
 			if !ok {
-				recordWalkerOutcome(vendorWalkerLabel(spec.name), outcomeMalformedIndex)
+				recordWalkerOutcome(p, vendorWalkerLabel(spec.name), outcomeMalformedIndex)
 				failedIndexes[rest] = struct{}{}
 				slog.Debug("bgp vendor: malformed index, dropping row",
 					"walker", vendorWalkerLabel(spec.name),
@@ -307,33 +307,34 @@ func walkVendorPeerTable(ctx context.Context, client *gsnmp.GoSNMP, spec vendorT
 // vendor's MIB", which require very different alerting responses.
 func walkAndBuildVendorEdges(
 	ctx context.Context,
+	p *snmputil.Params,
 	client *gsnmp.GoSNMP,
 	spec vendorTableSpec,
 	localDevice string,
 	allowedNets []*net.IPNet,
 ) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, bool, error) {
 	walker := vendorWalkerLabel(spec.name)
-	peers, hadPDUs, allRowsMalformed, ok, err := walkVendorPeerTable(ctx, client, spec)
+	peers, hadPDUs, allRowsMalformed, ok, err := walkVendorPeerTable(ctx, p, client, spec)
 	if err != nil {
-		recordWalkerOutcome(walker, outcomeError)
+		recordWalkerOutcome(p, walker, outcomeError)
 		return nil, nil, false, err
 	}
 	if !ok {
 		switch {
 		case !hadPDUs:
-			recordWalkerOutcome(walker, outcomeMIBUnimplemented)
+			recordWalkerOutcome(p, walker, outcomeMIBUnimplemented)
 		case allRowsMalformed:
-			recordWalkerOutcome(walker, outcomeWalkerDrift)
+			recordWalkerOutcome(p, walker, outcomeWalkerDrift)
 		default:
-			recordWalkerOutcome(walker, outcomeNoPeers)
+			recordWalkerOutcome(p, walker, outcomeNoPeers)
 		}
 		return nil, nil, false, nil
 	}
 	edges, oos := buildVendorEdges(localDevice, peers, allowedNets)
 	if len(edges) > 0 {
-		recordWalkerOutcome(walker, outcomeEdges)
+		recordWalkerOutcome(p, walker, outcomeEdges)
 	} else {
-		recordWalkerOutcome(walker, outcomeNoPeers)
+		recordWalkerOutcome(p, walker, outcomeNoPeers)
 	}
 	return edges, oos, true, nil
 }
@@ -379,12 +380,12 @@ func buildVendorEdges(localDevice string, peers map[string]*vendorPeer, allowedN
 		edges = append(edges, discovery.Edge{
 			SrcDevice:      localDevice,
 			DstDevice:      peer.peerIP.String(),
-			DiscoveryProto: "bgp",
+			DiscoveryProto: discovery.DiscoveryProtocolBGP,
 			Direction:      discovery.DirectionUnidirectional,
 			Confidence:     discovery.ConfidenceLow,
 			Adjacency:      discovery.AdjacencyUnknown,
 			PrecedenceRank: precedenceRank,
-			LinkKind:       "ip",
+			LinkKind:       discovery.LinkKindIP,
 			ObservedAt:     now,
 			Metadata:       metadata,
 		})

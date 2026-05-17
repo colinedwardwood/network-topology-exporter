@@ -203,7 +203,7 @@ func TestWalkEndToEnd(t *testing.T) {
 	p := snmputil.Params{
 		IP:        ip,
 		Port:      port,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   3 * time.Second,
 	}
 
@@ -304,7 +304,7 @@ func TestWalkEndToEndQBridge(t *testing.T) {
 	p := snmputil.Params{
 		IP:        ip,
 		Port:      port,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   3 * time.Second,
 	}
 
@@ -348,7 +348,7 @@ func TestDiscoverVlanIDs(t *testing.T) {
 	p := snmputil.Params{
 		IP:        ip,
 		Port:      port,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   3 * time.Second,
 	}
 	client, err := snmputil.Open(p)
@@ -399,7 +399,7 @@ func TestWalkVlanCommunityFdbDiscovery(t *testing.T) {
 	p := snmputil.Params{
 		IP:        ip,
 		Port:      port,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   3 * time.Second,
 	}
 
@@ -536,7 +536,7 @@ func openClientToAgent(t *testing.T, community string, pdus []gsnmp.SnmpPDU) *gs
 	p := snmputil.Params{
 		IP:        ip,
 		Port:      port,
-		Community: community,
+		Community: []byte(community),
 		Timeout:   3 * time.Second,
 	}
 	client, err := snmputil.Open(p)
@@ -556,7 +556,7 @@ func TestWalkOpenFails(t *testing.T) {
 	p := snmputil.Params{
 		IP:        net.IP(nil), // "nil" resolves to "<nil>" which fails DNS lookup
 		Port:      12345,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   50 * time.Millisecond,
 	}
 	_, _, err := Walk(context.Background(), p, "sw", nil)
@@ -574,7 +574,7 @@ func TestWalkFdbTableFails(t *testing.T) {
 	p := snmputil.Params{
 		IP:        ip,
 		Port:      port,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   50 * time.Millisecond,
 	}
 	_, _, err := Walk(context.Background(), p, "sw", nil)
@@ -594,7 +594,7 @@ func TestWalkBasePortTableFails(t *testing.T) {
 	p := snmputil.Params{
 		IP:        ip,
 		Port:      port,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   50 * time.Millisecond,
 	}
 	_, _, err := Walk(context.Background(), p, "sw", nil)
@@ -612,7 +612,7 @@ func TestWalkStpPortStatesFails(t *testing.T) {
 	p := snmputil.Params{
 		IP:        ip,
 		Port:      port,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   50 * time.Millisecond,
 	}
 	_, _, err := Walk(context.Background(), p, "sw", nil)
@@ -630,7 +630,7 @@ func TestWalkIfNamesFails(t *testing.T) {
 	p := snmputil.Params{
 		IP:        ip,
 		Port:      port,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   50 * time.Millisecond,
 	}
 	_, _, err := Walk(context.Background(), p, "sw", nil)
@@ -911,7 +911,7 @@ func TestWalkVlanCommunityFdbsMaxVlans(t *testing.T) {
 	mainClient, err := snmputil.Open(snmputil.Params{
 		IP:        ip,
 		Port:      port,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   3 * time.Second,
 	})
 	if err != nil {
@@ -922,7 +922,7 @@ func TestWalkVlanCommunityFdbsMaxVlans(t *testing.T) {
 	p := snmputil.Params{
 		IP:        ip,
 		Port:      port,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   3 * time.Second,
 	}
 	entries := make(map[string]*fdbEntry)
@@ -950,7 +950,7 @@ func TestWalkVlanCommunityFdbsMaxVlans(t *testing.T) {
 func TestWalkVlanCommunityFdbsV3Skip(t *testing.T) {
 	client := openDeadClient(t)
 	entries := make(map[string]*fdbEntry)
-	p := snmputil.Params{V3: true, Community: "public"}
+	p := snmputil.Params{V3: true, Community: []byte("public")}
 	// Should return without calling anything on client (which is dead).
 	walkVlanCommunityFdbs(context.Background(), p, client, entries, 100)
 }
@@ -973,7 +973,7 @@ func TestWalkVlanCommunityFdbsOpenFails(t *testing.T) {
 	realClient, err := snmputil.Open(snmputil.Params{
 		IP:        ip,
 		Port:      port,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   3 * time.Second,
 	})
 	if err != nil {
@@ -986,7 +986,7 @@ func TestWalkVlanCommunityFdbsOpenFails(t *testing.T) {
 	p := snmputil.Params{
 		IP:        net.IP(nil),
 		Port:      port,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   50 * time.Millisecond,
 	}
 	entries := make(map[string]*fdbEntry)
@@ -1048,7 +1048,7 @@ func TestWalkVlanCommunityFdbsParallel(t *testing.T) {
 	mainClient, err := snmputil.Open(snmputil.Params{
 		IP:        ip,
 		Port:      port,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   3 * time.Second,
 	})
 	if err != nil {
@@ -1059,7 +1059,7 @@ func TestWalkVlanCommunityFdbsParallel(t *testing.T) {
 	p := snmputil.Params{
 		IP:        ip,
 		Port:      port,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   3 * time.Second,
 	}
 

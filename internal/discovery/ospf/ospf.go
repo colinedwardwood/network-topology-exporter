@@ -146,12 +146,12 @@ func buildEdges(localDevice string, rows map[string]*nbrRow, allowedNets []*net.
 		edges = append(edges, discovery.Edge{
 			SrcDevice:      localDevice,
 			DstDevice:      row.nbrIP.String(),
-			DiscoveryProto: "ospf",
+			DiscoveryProto: discovery.DiscoveryProtocolOSPF,
 			Direction:      discovery.DirectionUnidirectional,
 			Confidence:     discovery.ConfidenceMedium,
 			Adjacency:      discovery.AdjacencyDirect,
 			PrecedenceRank: precedenceRank,
-			LinkKind:       "ip",
+			LinkKind:       discovery.LinkKindIP,
 			ObservedAt:     now,
 		})
 	}

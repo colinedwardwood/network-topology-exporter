@@ -424,11 +424,10 @@ func TestHubConcurrentPushAndEviction(t *testing.T) {
 // TestHubOOSDomainStripProducesEdge verifies that OOS matching strips domain
 // suffixes from device names: "core-01.internal.corp" and "core-01" are
 // treated as the same device. This is the pre-v1.3.0 default behaviour, now
-// opt-in via StrictDeviceNameMatching=false.
+// opt-in via LooseDeviceNameMatching=true.
 func TestHubOOSDomainStripProducesEdge(t *testing.T) {
-	loose := false
 	h := newTestHub(nil)
-	h.cfg.Hub.StrictDeviceNameMatching = &loose
+	h.cfg.Hub.LooseDeviceNameMatching = true
 	h.mu.Lock()
 	// dc-a sees the neighbour with its FQDN; dc-b reports its bare hostname.
 	h.spokes["dc-a"] = spokeEntry{
@@ -459,12 +458,12 @@ func TestHubOOSDomainStripProducesEdge(t *testing.T) {
 }
 
 // TestHubOOSStrictDefaultPreventsCrossDCCollision verifies that with the v1.3.0
-// default (StrictDeviceNameMatching unset → strict), two physically distinct
+// default (LooseDeviceNameMatching=false → strict), two physically distinct
 // devices that share a bare hostname across DCs ("core-01.dc1" and "core-01.dc2")
 // are NOT collapsed into one node by OOS matching. This is the bug the default
 // flip exists to prevent: docs/audits/2026-05-architectural-review.md §2.3.
 func TestHubOOSStrictDefaultPreventsCrossDCCollision(t *testing.T) {
-	h := newTestHub(nil) // StrictDeviceNameMatching is nil → defaults to strict
+	h := newTestHub(nil) // LooseDeviceNameMatching zero value → strict
 	h.mu.Lock()
 	// dc-a sees a neighbour it calls "core-01.dc1"; this is the dc1 core.
 	h.spokes["dc-a"] = spokeEntry{
@@ -1411,12 +1410,11 @@ func TestHubOOSAmbiguousFQDNNormalisationWarns(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
-	loose := false
 	m := metrics.New(false)
 	h := NewHub(
 		config.FederationConfig{
 			SpokeTimeout: 5 * time.Minute,
-			Hub:          config.FederationHubConfig{StrictDeviceNameMatching: &loose},
+			Hub:          config.FederationHubConfig{LooseDeviceNameMatching: true},
 		},
 		m,
 		logger,

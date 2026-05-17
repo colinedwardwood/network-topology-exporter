@@ -338,7 +338,7 @@ func TestWalkEndToEnd(t *testing.T) {
 	p := snmputil.Params{
 		IP:        ip,
 		Port:      port,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   3 * time.Second,
 	}
 
@@ -427,7 +427,7 @@ func TestWalkLocPortsFails(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancelled
@@ -462,7 +462,7 @@ func TestWalkRemEntriesFails(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 
 	// failAfter=1: first ctx.Err() call (walkLocPorts BulkWalk entry) returns nil;
 	// second call (walkRemEntries BulkWalk entry) returns Canceled.
@@ -492,7 +492,7 @@ func TestWalkLocPortsTrimOIDSkip(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	_, _, err := Walk(context.Background(), p, "local", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -527,7 +527,7 @@ func TestWalkLocPortsAtoiSkip(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, _, err := Walk(context.Background(), p, "local", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -566,7 +566,7 @@ func TestWalkRemEntriesTrimOIDSkip(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, _, err := Walk(context.Background(), p, "local", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -602,7 +602,7 @@ func TestWalkRemEntriesAtoiSkip(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, _, err := Walk(context.Background(), p, "local", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -637,7 +637,7 @@ func TestWalkRemEntriesPortDesc(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, _, err := Walk(context.Background(), p, "local", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -681,7 +681,7 @@ func TestWalkRemEntriesPortDescOversizedTruncated(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, _, err := Walk(context.Background(), p, "local", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)

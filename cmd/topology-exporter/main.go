@@ -228,6 +228,7 @@ func run(ctx context.Context, args []string) int {
 		logger.Error("loading config failed", "error", err)
 		return 1
 	}
+	cfg.EmitDeprecationWarnings(logger)
 	logger.Info("config loaded",
 		"discovery_interval", cfg.Discovery.Interval,
 		"parallelism", cfg.Discovery.Parallelism,
@@ -240,10 +241,11 @@ func run(ctx context.Context, args []string) int {
 	m := metrics.New(cfg.Federation.Role == "uncoordinated")
 	m.SnapshotLastWrittenUnix.SetToCurrentTime()
 
-	// Wire the BGP walker outcome counter so the bgp package can observe its
-	// own fallback paths without taking a Metrics handle on every call site.
-	// See bgp.SetWalkerOutcomeCounter for the rationale.
-	bgp.SetWalkerOutcomeCounter(m.BGPWalkerOutcomeTotal)
+	// walkerMetrics adapts m.BGPWalkerOutcomeTotal to the snmputil.WalkerMetrics
+	// interface so the bgp package can record walker outcomes without holding a
+	// package-global counter handle. Threaded per-cycle into snmputil.Params
+	// below; see internal/metrics/walker_metrics_adapter.go for the adapter.
+	walkerMetrics := metrics.NewWalkerMetricsAdapter(m)
 
 	var status atomic.Pointer[cycleStatus]
 	var ready atomic.Bool // set to true after the first live cycle or spoke push
@@ -358,16 +360,17 @@ func run(ctx context.Context, args []string) int {
 		go func() {
 			defer workerDone.Done()
 			runDiscoveryLoop(ctx, loopConfig{
-				cancel:  cancel,
-				logger:  logger,
-				cfg:     cfg,
-				m:       m,
-				status:  &status,
-				ready:   &ready,
-				spoke:   spoke,
-				otlpExp: otlpExp,
-				otlpSem: otlpSem,
-				otlpWg:  &otlpWg,
+				cancel:        cancel,
+				logger:        logger,
+				cfg:           cfg,
+				m:             m,
+				walkerMetrics: walkerMetrics,
+				status:        &status,
+				ready:         &ready,
+				spoke:         spoke,
+				otlpExp:       otlpExp,
+				otlpSem:       otlpSem,
+				otlpWg:        &otlpWg,
 			})
 		}()
 	}
@@ -416,16 +419,20 @@ const (
 )
 
 type loopConfig struct {
-	cancel  context.CancelFunc
-	logger  *slog.Logger
-	cfg     *config.Config
-	m       *metrics.Metrics
-	status  *atomic.Pointer[cycleStatus]
-	ready   *atomic.Bool
-	spoke   *federation.Spoke
-	otlpExp *otlp.Exporter
-	otlpSem chan struct{}   // semaphore bounding concurrent OTLP pushes; nil when OTLP disabled
-	otlpWg  *sync.WaitGroup // tracks in-flight OTLP push goroutines for clean shutdown
+	cancel context.CancelFunc
+	logger *slog.Logger
+	cfg    *config.Config
+	m      *metrics.Metrics
+	// walkerMetrics is the snmputil.WalkerMetrics implementation threaded into
+	// every Params constructed in runCycle. Replaces the old bgp package-global
+	// counter wiring; see internal/metrics/walker_metrics_adapter.go.
+	walkerMetrics snmpwalk.WalkerMetrics
+	status        *atomic.Pointer[cycleStatus]
+	ready         *atomic.Bool
+	spoke         *federation.Spoke
+	otlpExp       *otlp.Exporter
+	otlpSem       chan struct{}   // semaphore bounding concurrent OTLP pushes; nil when OTLP disabled
+	otlpWg        *sync.WaitGroup // tracks in-flight OTLP push goroutines for clean shutdown
 }
 
 func (lc loopConfig) otlpPush(ctx context.Context, fn func(context.Context) error, warnMsg string) {
@@ -570,7 +577,7 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 		cycleNum++
 		lc.m.GoRoutines.Set(float64(runtime.NumGoroutine()))
 		start := time.Now()
-		newGraph, newAges, conflicts, deviceErrors := runCycle(ctx, lc.logger, lc.cfg, lc.m, resolver, allowedNets, ages)
+		newGraph, newAges, conflicts, deviceErrors := runCycle(ctx, lc.logger, lc.cfg, lc.m, lc.walkerMetrics, resolver, allowedNets, ages)
 		if ctx.Err() != nil {
 			return
 		}
@@ -599,13 +606,13 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 		if len(changes) > 0 {
 			evLogger.Emit(ctx, changes)
 			for _, c := range changes {
-				proto := ""
+				var proto discovery.DiscoveryProtocol
 				if c.After != nil {
 					proto = c.After.DiscoveryProto
 				} else if c.Before != nil {
 					proto = c.Before.DiscoveryProto
 				}
-				lc.m.TopologyChangeTotal.WithLabelValues(string(c.Kind), proto).Inc()
+				lc.m.TopologyChangeTotal.WithLabelValues(string(c.Kind), string(proto)).Inc()
 			}
 			if lc.otlpExp != nil {
 				ch := changes
@@ -685,6 +692,12 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 				close(snapshotCh)
 			}
 			snapWg.Wait()
+			// Issue #5: per-device Zeroize defers in runCycle have already
+			// overwritten the in-flight cycle's SNMP credential bytes by the
+			// time runCycle's wg.Wait() returns. Logging here gives operators
+			// a concrete signal in the shutdown sequence. See
+			// docs/operator/security.md for the threat model and limits.
+			lc.logger.Info("snmp credentials zeroized; shutting down discovery loop")
 			return
 		case <-tick.C:
 			cycle()
@@ -695,11 +708,17 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 // runCycle probes all configured targets concurrently and returns the
 // resulting graph, updated unconfirmed-age counters, any reconciliation
 // conflicts, and the count of targets that failed discovery.
+//
+// walkerMetrics is threaded into every snmpwalk.Params constructed below so
+// that protocol walkers (currently only bgp) can record outcome counters
+// without holding a package-global counter handle. May be nil in tests; the
+// walker is expected to treat nil as "drop the increment".
 func runCycle(
 	ctx context.Context,
 	logger *slog.Logger,
 	cfg *config.Config,
 	m *metrics.Metrics,
+	walkerMetrics snmpwalk.WalkerMetrics,
 	resolver *credentials.Resolver,
 	allowedNets []*net.IPNet,
 	prevAges map[graph.EdgeKey]int,
@@ -792,6 +811,10 @@ func runCycle(
 				mu.Unlock()
 				return
 			}
+			// Zeroize the winning credential bytes as soon as this device's
+			// modules are finished, before the goroutine exits and params
+			// becomes unreachable to a sensible cleanup. Issue #5.
+			defer params.Zeroize()
 
 			devCtx, cancel := context.WithTimeout(cycleCtx, cfg.Discovery.TimeoutPerDevice)
 			defer cancel()
@@ -817,12 +840,16 @@ func runCycle(
 
 			// Propagate module-specific tuning into params. MaxVlans is only
 			// consumed by fdb.Walk; Vendor and UseBGPV2MIB are only consumed
-			// by bgp.Walk; other modules ignore them.
+			// by bgp.Walk; other modules ignore them. UseBGPV2MIB is the
+			// inverse of the operator-facing DisableV2MIB knob (default false
+			// = v2 enabled). WalkerMetrics is read by bgp.Walk via the
+			// recordWalkerOutcome helper; nil is tolerated (drops the
+			// increment) so unit tests that build Params inline don't need
+			// to wire a fake sink unless they care about the counter.
 			params.MaxVlans = cfg.Modules.FDB.MaxVlans
 			params.Vendor = dev.Vendor
-			if cfg.Modules.BGP.UseV2MIB != nil {
-				params.UseBGPV2MIB = *cfg.Modules.BGP.UseV2MIB
-			}
+			params.UseBGPV2MIB = !cfg.Modules.BGP.DisableV2MIB
+			params.WalkerMetrics = walkerMetrics
 
 			mods := []module{
 				{"lldp", cfg.Modules.LLDP.Enabled, lldp.Walk},
@@ -1114,7 +1141,7 @@ func synthesizeEdges(
 	// Build MAC→sysName index from LLDP chassis MAC annotations.
 	macToID := make(map[string]string)
 	for _, e := range rawEdges {
-		if e.DiscoveryProto == "lldp" {
+		if e.DiscoveryProto == discovery.DiscoveryProtocolLLDP {
 			if mac, ok := e.Metadata[discovery.MetadataKeyPeerChassisMac]; ok && e.DstDevice != "" {
 				hw, err := net.ParseMAC(mac)
 				if err != nil {
@@ -1161,12 +1188,12 @@ func synthesizeEdges(
 	type epKey struct{ src, srcPort, dst string }
 	lldpDstPort := make(map[epKey]string, len(edges))
 	for _, e := range edges {
-		if e.DiscoveryProto == "lldp" && e.DstPort != "" {
+		if e.DiscoveryProto == discovery.DiscoveryProtocolLLDP && e.DstPort != "" {
 			lldpDstPort[epKey{e.SrcDevice, e.SrcPort, e.DstDevice}] = e.DstPort
 		}
 	}
 	for i := range edges {
-		if edges[i].DiscoveryProto == "fdb" && edges[i].DstPort == "" {
+		if edges[i].DiscoveryProto == discovery.DiscoveryProtocolFDB && edges[i].DstPort == "" {
 			if p, ok := lldpDstPort[epKey{edges[i].SrcDevice, edges[i].SrcPort, edges[i].DstDevice}]; ok {
 				edges[i].DstPort = p
 			}
@@ -1196,7 +1223,7 @@ func resolveEdgeDstDevices(logger *slog.Logger, edges []discovery.Edge, ipToID m
 		} else if hw, err := net.ParseMAC(dst); err == nil {
 			if id, ok := macToID[hw.String()]; ok {
 				e.DstDevice = id
-			} else if e.DiscoveryProto != "fdb" {
+			} else if e.DiscoveryProto != discovery.DiscoveryProtocolFDB {
 				// Non-FDB protocol (e.g. LLDP) with MAC DstDevice and no sysName:
 				// the link is protocol-confirmed; keep the edge with MAC as DstDevice.
 			} else {
@@ -1246,10 +1273,14 @@ func credentialCandidates(cfg *config.Config, resolver *credentials.Resolver, ip
 		}
 		return append(candidates, credentialCandidate{
 			params: snmpwalk.Params{
-				IP:        ip,
-				Port:      port,
-				Timeout:   cfg.Discovery.TimeoutPerDevice,
-				Community: community,
+				IP:      ip,
+				Port:    port,
+				Timeout: cfg.Discovery.TimeoutPerDevice,
+				// Convert env-string to []byte so the discovery cycle can
+				// zeroize the credential at end-of-cycle (issue #5). This
+				// []byte is a fresh copy; the env-var storage owned by
+				// os.Getenv is out of our reach.
+				Community: []byte(community),
 			},
 		})
 	}
@@ -1280,21 +1311,38 @@ func walkSystemWithCredentials(ctx context.Context, cfg *config.Config, resolver
 		return nil, snmpwalk.Params{}, "", fmt.Errorf("no usable credential profiles for %s", ip)
 	}
 
+	// Credential zeroization (issue #5): every candidate carries SNMP secret
+	// bytes. On every exit path we overwrite the secrets of every candidate
+	// we will NOT return. The winning candidate's secrets stay alive until
+	// the caller zeroizes them after module walks complete.
+	zeroizeFromIdx := func(start int) {
+		for i := start; i < len(candidates); i++ {
+			candidates[i].params.Zeroize()
+		}
+	}
+
 	var lastErr error
 	allTimedOut := true // true until we see a non-timeout failure
-	for _, c := range candidates {
+	for i := range candidates {
+		c := &candidates[i]
 		if err := resolver.AcquireTrial(ctx); err != nil {
+			zeroizeFromIdx(i)
 			return nil, snmpwalk.Params{}, "", err
 		}
 		trialCtx, cancel := context.WithTimeout(ctx, cfg.Discovery.TimeoutPerDevice)
 		dev, err := snmpwalk.Walk(trialCtx, c.params)
 		cancel()
 		if err == nil {
+			// Caller owns c.params now and must zeroize it after module walks.
+			zeroizeFromIdx(i + 1)
 			return dev, c.params, c.profileName, nil
 		}
 		lastErr = err
+		// This candidate is finished — zeroize its credentials.
+		c.params.Zeroize()
 		if ctx.Err() != nil {
 			// Parent context done (SIGTERM or cycle budget expiry) — stop immediately.
+			zeroizeFromIdx(i + 1)
 			return nil, snmpwalk.Params{}, "", ctx.Err()
 		}
 		// SNMP v2c agents silently drop packets with a wrong community string —
@@ -1325,25 +1373,30 @@ func profileToParams(ip net.IP, port uint16, timeout time.Duration, p config.Cre
 	}
 	switch p.Type {
 	case config.ProfileTypeSNMPv2c:
+		// SNMP credentials are held as []byte so the discovery cycle can
+		// zeroize them at end-of-cycle (issue #5). Each []byte conversion
+		// below is a fresh copy of the env-var bytes.
 		community := os.Getenv(p.CommunityEnv)
 		if community == "" {
 			return params, fmt.Errorf("env %q is empty", p.CommunityEnv)
 		}
-		params.Community = community
+		params.Community = []byte(community)
 	case config.ProfileTypeSNMPv3:
 		params.V3 = true
 		params.Username = os.Getenv(p.UsernameEnv)
 		if params.Username == "" {
 			return params, fmt.Errorf("env %q is empty", p.UsernameEnv)
 		}
-		params.AuthKey = os.Getenv(p.AuthKeyEnv)
-		if p.AuthKeyEnv != "" && params.AuthKey == "" {
+		authKey := os.Getenv(p.AuthKeyEnv)
+		if p.AuthKeyEnv != "" && authKey == "" {
 			return params, fmt.Errorf("env %q is empty or unset", p.AuthKeyEnv)
 		}
-		params.PrivKey = os.Getenv(p.PrivKeyEnv)
-		if p.PrivKeyEnv != "" && params.PrivKey == "" {
+		params.AuthKey = []byte(authKey)
+		privKey := os.Getenv(p.PrivKeyEnv)
+		if p.PrivKeyEnv != "" && privKey == "" {
 			return params, fmt.Errorf("env %q is empty or unset", p.PrivKeyEnv)
 		}
+		params.PrivKey = []byte(privKey)
 		// Auth/priv protocol names are config-level (not secret); passed as
 		// strings so main.go doesn't need to import gosnmp directly.
 		params.AuthProto = p.AuthProtocol

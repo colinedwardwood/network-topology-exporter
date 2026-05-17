@@ -160,7 +160,7 @@ func TestWalkEndToEnd(t *testing.T) {
 	p := snmputil.Params{
 		IP:        ip,
 		Port:      port,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   3 * time.Second,
 	}
 
@@ -206,7 +206,7 @@ func TestWalkOpenFails(t *testing.T) {
 	p := snmputil.Params{
 		IP:        net.ParseIP("127.0.0.1"),
 		Port:      161,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   time.Nanosecond,
 	}
 	_, _, err := Walk(context.Background(), p, "router-a", nil)
@@ -225,7 +225,7 @@ func TestWalkOspfNbrTableFails(t *testing.T) {
 	p := snmputil.Params{
 		IP:        ip,
 		Port:      port,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   3 * time.Second,
 	}
 
@@ -260,7 +260,7 @@ func TestWalkOspfNbrTableSkipsOIDs(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	client, err := snmputil.Open(p)
 	if err != nil {
 		t.Fatalf("Open: %v", err)

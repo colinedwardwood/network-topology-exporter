@@ -71,6 +71,7 @@
 package fdb
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -321,10 +322,12 @@ const maxVlanConcurrency = 8
 // longer, a warning is logged and the remaining VLANs are skipped.
 // Per-VLAN walks run in parallel, bounded by maxVlanConcurrency.
 func walkVlanCommunityFdbs(ctx context.Context, p snmputil.Params, client *gsnmp.GoSNMP, entries map[string]*fdbEntry, maxVlans int) {
-	if p.V3 || p.Community == "" {
+	if p.V3 || len(p.Community) == 0 {
 		return
 	}
-	if strings.Contains(p.Community, "@") {
+	// p.Community is []byte (see snmp.Params); use bytes-search to avoid an
+	// unnecessary string allocation that would create an unreachable copy.
+	if bytes.IndexByte(p.Community, '@') >= 0 {
 		slog.WarnContext(ctx, "fdb: community string contains '@'; skipping per-VLAN community walk to avoid ambiguity", "device", p.IP)
 		return
 	}
@@ -357,7 +360,11 @@ func walkVlanCommunityFdbs(ctx context.Context, p snmputil.Params, client *gsnmp
 			defer func() { <-sem }()
 
 			vp := p
-			vp.Community = fmt.Sprintf("%s@%d", p.Community, vlan)
+			// Build a fresh []byte for the per-VLAN community string so we
+			// don't alias p.Community (the caller owns that slice and will
+			// zeroize it). The new slice is short-lived and will be GC'd after
+			// this goroutine returns.
+			vp.Community = []byte(fmt.Sprintf("%s@%d", p.Community, vlan))
 			vlanClient, err := snmputil.Open(vp)
 			if err != nil {
 				slog.Debug("fdb: VLAN community open failed", "device", vp.IP, "vlan", vlan, "err", err)
@@ -516,12 +523,12 @@ func buildEdges(localDevice string, entries map[string]*fdbEntry, bridgePorts ma
 			SrcDevice:      localDevice,
 			SrcPort:        localPort,
 			DstDevice:      rawMAC,
-			DiscoveryProto: "fdb",
+			DiscoveryProto: discovery.DiscoveryProtocolFDB,
 			Direction:      discovery.DirectionUnidirectional,
 			Confidence:     discovery.ConfidenceMedium,
 			Adjacency:      discovery.AdjacencyDirect,
 			PrecedenceRank: precedenceRank,
-			LinkKind:       "ethernet",
+			LinkKind:       discovery.LinkKindEthernet,
 			ObservedAt:     now,
 		})
 	}

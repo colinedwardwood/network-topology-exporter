@@ -235,7 +235,7 @@ func Reconcile(edges []discovery.Edge) ([]discovery.Edge, []Conflict) {
 		if allSame {
 			continue
 		}
-		seenProto := make(map[string]bool)
+		seenProto := make(map[discovery.DiscoveryProtocol]bool)
 		var sources []string
 		var conflictEdges []discovery.Edge
 		seenKey := make(map[EdgeKey]bool)
@@ -249,7 +249,7 @@ func Reconcile(edges []discovery.Edge) ([]discovery.Edge, []Conflict) {
 			for _, c := range g.byRank[g.minRank] {
 				if !seenProto[c.DiscoveryProto] {
 					seenProto[c.DiscoveryProto] = true
-					sources = append(sources, c.DiscoveryProto)
+					sources = append(sources, string(c.DiscoveryProto))
 				}
 			}
 			if e, ok := resultByNormKey[k]; ok {
