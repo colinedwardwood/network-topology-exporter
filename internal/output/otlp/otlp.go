@@ -11,8 +11,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -25,6 +27,7 @@ import (
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
+	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
 	"github.com/colinedwardwood/network-topology-exporter/internal/version"
 )
 
@@ -341,6 +344,70 @@ const (
 	postMaxRetryAfter = 10 * time.Second
 )
 
+// httpStatusError carries the receiver's HTTP status code so the caller's
+// metric classifier can partition 4xx vs 5xx without parsing error text.
+// Issue #20: network_topology_otlp_push_total{reason=...}.
+type httpStatusError struct {
+	statusCode int
+	path       string
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("otlp: post %s: server returned %d", e.path, e.statusCode)
+}
+
+// StatusCode returns the HTTP status code that produced this error. Used
+// by ClassifyPushError; exported for callers that build their own
+// classifier.
+func (e *httpStatusError) StatusCode() int { return e.statusCode }
+
+// ClassifyPushError maps a non-nil error returned by PushGraph or
+// PushChanges to a metrics.PushReason for use as the `reason` label on
+// network_topology_otlp_push_total{status="error"}. err must be non-nil;
+// passing nil panics — call sites should use metrics.ReasonNA for the
+// status="ok" path. The returned value is guaranteed to satisfy
+// metrics.PushReason.Valid().
+//
+// Categorisation:
+//   - context.DeadlineExceeded                     → PushReasonTimeout
+//   - *tls.CertificateVerificationError or wrapped → PushReasonTLSError
+//     "tls:" prefix from net/http
+//   - *httpStatusError, 4xx                        → PushReasonHTTP4xx
+//   - *httpStatusError, 5xx                        → PushReasonHTTP5xx
+//   - everything else                              → PushReasonNetwork
+//
+// The catch-all PushReasonNetwork covers DNS failures, connection
+// refused, EOF, and other transport-layer faults. Operators alerting on
+// "collector is down" should match on PushReasonNetwork.
+func ClassifyPushError(err error) metrics.PushReason {
+	if err == nil {
+		panic("otlp: ClassifyPushError called with nil error")
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return metrics.PushReasonTimeout
+	}
+	// TLS verification errors surface as *tls.CertificateVerificationError
+	// from crypto/tls; older Go versions and some wrap paths surface them
+	// as a plain error containing "tls:". Match both shapes.
+	var certErr *tls.CertificateVerificationError
+	if errors.As(err, &certErr) {
+		return metrics.PushReasonTLSError
+	}
+	if msg := err.Error(); strings.Contains(msg, "tls:") || strings.Contains(msg, "x509:") {
+		return metrics.PushReasonTLSError
+	}
+	var httpErr *httpStatusError
+	if errors.As(err, &httpErr) {
+		switch {
+		case httpErr.statusCode >= 400 && httpErr.statusCode < 500:
+			return metrics.PushReasonHTTP4xx
+		case httpErr.statusCode >= 500 && httpErr.statusCode < 600:
+			return metrics.PushReasonHTTP5xx
+		}
+	}
+	return metrics.PushReasonNetwork
+}
+
 // cryptoJitter returns a random duration in [0, max) using crypto/rand so the
 // retry jitter is not flagged as a weak-random-number-generator lint issue.
 func cryptoJitter(max time.Duration) time.Duration {
@@ -395,7 +462,10 @@ func (e *Exporter) post(ctx context.Context, path string, payload any) error {
 			return nil
 		}
 
-		lastErr = fmt.Errorf("otlp: post %s: server returned %d", path, resp.StatusCode)
+		// Wrap status-code failures in *httpStatusError so the metric
+		// classifier (ClassifyPushError) can partition 4xx vs 5xx without
+		// parsing the error text. Issue #20.
+		lastErr = &httpStatusError{statusCode: resp.StatusCode, path: path}
 
 		// Only retry on transient errors: 429, 502, 503, 504.
 		switch resp.StatusCode {

@@ -40,6 +40,24 @@ type WalkerMetrics interface {
 	RecordWalkerOutcome(walker, outcome string)
 }
 
+// WarnLimiter is the per-key Warn rate-limiter sink used by discovery
+// modules to suppress chronic same-key Warn emissions (issue #16). The
+// concrete implementation lives in internal/loglimit; defining the
+// interface here keeps the discovery dependency edge pointing the same
+// direction as WalkerMetrics — modules call up to the limiter through an
+// interface, never the other way around.
+//
+// key is the suppression identity (typically site-identifier + device +
+// failure-dimension). Within a Limiter-configured cooldown, repeats of
+// the same key are suppressed; the first occurrence and the post-cooldown
+// re-emit pass through to the wrapped slog.Logger.
+//
+// Walkers MUST tolerate a nil Params.WarnLimiter — pass nil through to
+// the inner logger's WarnContext rather than panicking.
+type WarnLimiter interface {
+	Warn(ctx context.Context, key, msg string, attrs ...any) bool
+}
+
 // Params holds the resolved connection parameters for one SNMP walk.
 // The caller (discovery loop) resolves credentials to concrete values via
 // os.Getenv before building a Params; this package never reads env vars.
@@ -96,6 +114,11 @@ type Params struct {
 	// panic. Replaces the prior package-global counter pointer that lived in
 	// internal/discovery/bgp/. See WalkerMetrics interface above.
 	WalkerMetrics WalkerMetrics
+
+	// WarnLimiter rate-limits chronic per-cycle Warn emissions (issue #16).
+	// May be nil — walkers must fall back to a direct slog.Warn in that
+	// case. See WarnLimiter interface above.
+	WarnLimiter WarnLimiter
 }
 
 // System group OIDs fetched as scalars via SNMP GET (RFC 3418).

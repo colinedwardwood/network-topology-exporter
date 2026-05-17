@@ -206,7 +206,7 @@ func TestHubSpokeEndToEnd(t *testing.T) {
 			TLSKey:    pki.clientKeyFile,
 		},
 	}
-	spoke, err := federation.NewSpoke(spokeCfg, slog.Default(), nil)
+	spoke, err := federation.NewSpoke(spokeCfg, slog.Default(), nil, nil)
 	if err != nil {
 		t.Fatalf("NewSpoke: %v", err)
 	}

@@ -13,10 +13,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
+	"github.com/colinedwardwood/network-topology-exporter/internal/loglimit"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
 )
 
@@ -35,13 +37,16 @@ type Spoke struct {
 	cfg     config.FederationConfig
 	client  *http.Client
 	logger  *slog.Logger
+	limiter *loglimit.Limiter
 	m       *metrics.Metrics
 	pushURL string
 }
 
 // NewSpoke constructs a Spoke with an mTLS-capable HTTP client. Returns an
-// error if any of the TLS files cannot be read or parsed.
-func NewSpoke(cfg config.FederationConfig, logger *slog.Logger, m *metrics.Metrics) (*Spoke, error) {
+// error if any of the TLS files cannot be read or parsed. limiter may be
+// nil; when nil, retry-attempt Warns fall through to the wrapped logger
+// directly (no suppression).
+func NewSpoke(cfg config.FederationConfig, logger *slog.Logger, limiter *loglimit.Limiter, m *metrics.Metrics) (*Spoke, error) {
 	caCert, err := os.ReadFile(cfg.Spoke.TLSCACert)
 	if err != nil {
 		return nil, fmt.Errorf("spoke: read CA cert: %w", err)
@@ -70,6 +75,7 @@ func NewSpoke(cfg config.FederationConfig, logger *slog.Logger, m *metrics.Metri
 			Timeout:   30 * time.Second,
 		},
 		logger:  logger,
+		limiter: limiter,
 		m:       m,
 		pushURL: pushURL,
 	}, nil
@@ -104,11 +110,20 @@ func (s *Spoke) Push(ctx context.Context, payload SpokePayload) error {
 			}
 			return err
 		}
-		s.logger.Warn("spoke: push attempt failed",
-			"attempt", attempt,
-			"max", maxAttempts,
-			"error", err,
-		)
+		// Rate-limit per (hub URL, attempt-index) so a chronically
+		// unreachable hub does not flood the log every cycle (issue
+		// #16). attempt is part of the key so a healthy spoke that
+		// occasionally retries still emits at each attempt level; only
+		// a *chronic* failure on the same attempt repeats and gets
+		// suppressed.
+		key := "spoke_push_attempt|" + s.pushURL + "|" + strconv.Itoa(attempt)
+		msg := "spoke: push attempt failed"
+		attrs := []any{"attempt", attempt, "max", maxAttempts, "error", err}
+		if s.limiter != nil {
+			s.limiter.Warn(ctx, key, msg, attrs...)
+		} else {
+			s.logger.WarnContext(ctx, msg, attrs...)
+		}
 		if attempt < maxAttempts {
 			select {
 			case <-ctx.Done():
