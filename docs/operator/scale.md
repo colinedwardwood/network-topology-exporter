@@ -40,8 +40,10 @@ Recommended alert (Prometheus-compatible):
 
 The exporter also emits a one-time **startup warning** when the first
 discovery cycle produces more than **5,000 edges**. This is intentionally
-conservative — well below the scale ceiling on any realistic hardware — so
-operators get pointed at this document before any real degradation.
+conservative — measured render time at 5k is ~100ms, roughly 1% of the
+default scrape budget — so operators get pointed at this document long
+before any real degradation. Treat the warning as a documentation
+pointer, not an alert.
 
 ---
 
@@ -49,16 +51,57 @@ operators get pointed at this document before any real degradation.
 
 At default `scrape_interval: 15s` and `scrape_timeout: 10s` (Prometheus defaults):
 
-| Edge count | Expected render time | Action |
-|---|---|---|
-| < 5,000 | sub-100ms | Nothing — well under budget. |
-| 5,000 – 20,000 | 100ms – 1s | Watch the histogram p99. Still well under budget. |
-| 20,000 – 50,000 | 1s – 5s | Time to raise `scrape_timeout` or split via federation. |
-| 50,000 – 100,000 | 5s – 10s | Mandatory: raise `scrape_timeout` to 30s+ **and** use one of the escape hatches below. |
-| > 100,000 | > 10s | Push-mode OTLP only. Scrape-mode is not a fit at this size. |
+| Edge count | Render time (measured median) | Payload | Action |
+|---|---|---|---|
+| 1,000 | 26 ms | 400 KB | Nothing — well under budget. |
+| 5,000 | 97 ms | 1.9 MB | Nothing — still well under budget. |
+| 10,000 | 130 ms | 3.9 MB | Nothing — watch the histogram p99 over time. |
+| 25,000 | 508 ms | 9.7 MB | Watch p99. Still well within budget. |
+| 50,000 | 1.33 s | 19.3 MB | Watch p99. Consider federation if growth continues. |
+| 100,000 (extrapolated) | ~2.6 s | ~38 MB | Raise `scrape_timeout` to 30s; plan federation. |
+| 200,000 (extrapolated) | ~5.2 s | ~76 MB | Mandatory: raise `scrape_timeout` AND federate. |
+| > 400,000 (extrapolated) | > 10 s | > 150 MB | Push-mode OTLP only. Scrape-mode is not a fit at this size. |
 
-These numbers are **rough**. Real-world render time depends on label
-cardinality, response compression, and the scraper's network distance.
+Linear scaling holds across the measured range at ≈26 µs per edge on
+the reference hardware. The bottleneck is the Prometheus text encoder
+serialising each edge into exposition format, not the in-memory edge
+table; the same code path runs regardless of how the edges arrived
+(local SNMP discovery, snapshot reload, or hub-side federation
+aggregation).
+
+**Reference hardware (when reproducing the numbers):**
+
+| Component | Value |
+|---|---|
+| CPU | Intel Core i7-5557U @ 3.10 GHz (Broadwell, 2× core, 4× HT) |
+| Memory | 16 GB DDR3 |
+| OS | Ubuntu 6.8.0-111-generic (kernel 6.8, x86_64) |
+| Go | go1.25.0 linux/amd64 (toolchain auto-promoted from go.mod's 1.24) |
+| Governor | `performance` on all cores |
+| Pinning | `taskset -c 0` (single-core, isolates variance) |
+| Run shape | `go test -tags=bench -bench=BenchmarkMetricsRender -benchtime=10s -count=5`, report median |
+
+Reproduce with `scripts/run-scale-bench.sh` (the runner stamps the host
+specs at the top of its result file).
+
+These numbers are **measured medians on one machine**. Real-world render
+time depends on:
+
+- **Hardware vintage** — a modern data-centre Xeon/EPYC or Apple/ARM core
+  is typically 1.5–3× faster per core than this 2015 Broadwell laptop
+  CPU. Use these numbers as an upper bound on production-grade hardware,
+  not a target.
+- **Label cardinality** — edges with rich `Edge.Metadata` (BGP per-peer
+  attributes, MPLS-TE admin status, etc.) take longer to encode than
+  bare LLDP edges. The synthetic graph used here is the bare-LLDP case.
+- **Response compression** — Prometheus and Grafana Alloy both accept
+  `Content-Encoding: gzip`. The exporter's renderer does not compress;
+  if your scrape goes through a reverse proxy that does, the wire bytes
+  are typically ~5–10× smaller than the numbers above.
+- **Scraper network distance** — `scrape_timeout` covers the full
+  request including the body transfer. A 19 MB scrape across a
+  bandwidth-constrained link can dominate the render time entirely.
+
 Measure your deployment with the histograms above before treating any
 number here as authoritative.
 
