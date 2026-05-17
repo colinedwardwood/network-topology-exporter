@@ -105,7 +105,7 @@ type Metrics struct {
 
 	// BGPWalkerOutcomeTotal counts the outcome of each BGP walker pass.
 	// Labels:
-	//   walker  ∈ {v2_draft, vendor_cisco, vendor_juniper, vendor_nokia, rfc4273}
+	//   walker  ∈ {vendor_cisco, vendor_arista, vendor_juniper, vendor_nokia, rfc4273}
 	//   outcome ∈ {edges, no_peers, mib_unimplemented, error, malformed_index}
 	// One counter per (walker, outcome) is incremented per device per cycle.
 	// Semantics:
