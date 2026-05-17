@@ -8,6 +8,9 @@ coverage.html
 *.test
 *.out
 
+# Benchmark result files (scripts/run-scale-bench.sh)
+scripts/bench-results/
+
 # Editor / OS junk
 .DS_Store
 *.swp
