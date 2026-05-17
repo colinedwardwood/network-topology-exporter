@@ -7,9 +7,10 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
 	g "github.com/gosnmp/gosnmp"
+
+	"github.com/colinedwardwood/network-topology-exporter/internal/sanitize"
 )
 
 const (
@@ -384,19 +385,10 @@ func NormaliseName(s string) string {
 	}, s)
 	s = strings.ToLower(strings.TrimSpace(s))
 	// RFC 1213 defines sysName as SIZE(0..255); cap here before the string
-	// becomes a map key, graph ID, or federation payload field.
-	// Retreat to a rune boundary so we never produce invalid UTF-8.
-	// utf8.RuneStart returns true for any byte that is not a UTF-8
-	// continuation byte (10xxxxxx), so the loop retreats at most 3 bytes
-	// for a 4-byte rune — O(1) per call.
-	if len(s) > 255 {
-		n := 255
-		for n > 0 && !utf8.RuneStart(s[n]) {
-			n--
-		}
-		s = s[:n]
-	}
-	return s
+	// becomes a map key, graph ID, or federation payload field. The helper
+	// retreats to a UTF-8 rune boundary (RFC 3629) so we never produce
+	// invalid UTF-8.
+	return sanitize.TruncateAtRuneBoundary(s, 255)
 }
 
 // SanitisePortName caps a port-name string at 255 bytes on a rune boundary
@@ -428,14 +420,7 @@ func SanitisePortName(s string) string {
 		}
 		return r
 	}, s)
-	if len(s) > 255 {
-		n := 255
-		for n > 0 && !utf8.RuneStart(s[n]) {
-			n--
-		}
-		s = s[:n]
-	}
-	return s
+	return sanitize.TruncateAtRuneBoundary(s, 255)
 }
 
 // ParseCIDRs parses a slice of CIDR strings and returns only the valid IPNet
