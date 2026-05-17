@@ -2471,6 +2471,217 @@ func TestHubHandlePushRejectsLabelInjection(t *testing.T) {
 	}
 }
 
+// TestHubHandlePushRejectsStructuralInvalid verifies that paths previously
+// returning plain fmt.Errorf — empty device_id, self-edge, empty edge
+// endpoints, oversize port name, invalid UTF-8 device_id — now reach the
+// wire as a structured pushRejection JSON body with
+// `reason: "structural_invalid"` and a 400 status, and that the
+// GraphUpdatesRejectedTotal counter increments under the correct label.
+//
+// Before issue #19 these requests received a plain text/plain 400 and
+// (incorrectly) incremented the invalid_label_value counter via the
+// defensive fallthrough in handlePush. The fallthrough is now a panic
+// guarding the *validationError invariant; this test is the wire-level
+// proof that every converted path carries its new typed reason.
+func TestHubHandlePushRejectsStructuralInvalid(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload SpokePayload
+	}{
+		{
+			name: "empty device_id",
+			payload: SpokePayload{
+				SpokeID: "dc-a",
+				CycleAt: time.Now(),
+				Devices: []discovery.Device{{ID: ""}},
+			},
+		},
+		{
+			name: "duplicate device_id",
+			payload: SpokePayload{
+				SpokeID: "dc-a",
+				CycleAt: time.Now(),
+				Devices: []discovery.Device{{ID: "sw-1"}, {ID: "sw-1"}},
+			},
+		},
+		{
+			name: "self-edge",
+			payload: SpokePayload{
+				SpokeID: "dc-a",
+				CycleAt: time.Now(),
+				Devices: []discovery.Device{{ID: "sw-1"}},
+				Edges: []discovery.Edge{{
+					SrcDevice: "sw-1", SrcPort: "Gi0/1",
+					DstDevice: "sw-1", DstPort: "Gi0/2",
+				}},
+			},
+		},
+		{
+			name: "empty edge src_device",
+			payload: SpokePayload{
+				SpokeID: "dc-a",
+				CycleAt: time.Now(),
+				Devices: []discovery.Device{{ID: "sw-1"}, {ID: "sw-2"}},
+				Edges: []discovery.Edge{{
+					SrcDevice: "", SrcPort: "Gi0/1",
+					DstDevice: "sw-2", DstPort: "Gi0/2",
+				}},
+			},
+		},
+		{
+			name: "oversize src_port",
+			payload: SpokePayload{
+				SpokeID: "dc-a",
+				CycleAt: time.Now(),
+				Devices: []discovery.Device{{ID: "sw-1"}, {ID: "sw-2"}},
+				Edges: []discovery.Edge{{
+					SrcDevice: "sw-1", SrcPort: strings.Repeat("p", maxPortNameBytes+1),
+					DstDevice: "sw-2", DstPort: "Gi0/2",
+				}},
+			},
+		},
+		// Note: invalid-UTF-8 device_id cannot be exercised via json.Marshal
+		// here because encoding/json replaces invalid UTF-8 bytes with U+FFFD
+		// during marshal. That path is covered at the function level in
+		// TestValidateSpokePayload ("invalid UTF-8 device ID") and at the
+		// typed-reason level in TestValidateSpokePayloadStructuralTypedReason
+		// below.
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := metrics.New(false)
+			h := NewHub(config.FederationConfig{SpokeTimeout: time.Minute}, m, nil, "")
+
+			before := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(rejectReasonStructuralInvalid))
+			body, err := json.Marshal(tc.payload)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			h.handlePush(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+				t.Errorf("Content-Type = %q, want application/json", ct)
+			}
+			var resp pushRejection
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode rejection body: %v; raw=%s", err, rec.Body.String())
+			}
+			if resp.Status != "rejected" {
+				t.Errorf("status field = %q, want \"rejected\"", resp.Status)
+			}
+			if resp.Reason != rejectReasonStructuralInvalid {
+				t.Errorf("reason = %q, want %q", resp.Reason, rejectReasonStructuralInvalid)
+			}
+			if after := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(rejectReasonStructuralInvalid)); after != before+1 {
+				t.Errorf("GraphUpdatesRejectedTotal{reason=%s} delta = %v, want 1", rejectReasonStructuralInvalid, after-before)
+			}
+		})
+	}
+}
+
+// TestValidateSpokePayloadStructuralTypedReason verifies that each shape-
+// validation path in validateSpokePayload returns a *validationError tagged
+// with rejectReasonStructuralInvalid. These paths used to return plain
+// fmt.Errorf and were silently mislabeled as invalid_label_value by the
+// handlePush defensive fallthrough (issue #19). Function-level coverage
+// complements the wire-level TestHubHandlePushRejectsStructuralInvalid and
+// includes the invalid-UTF-8 device_id case which cannot be exercised
+// through json.Marshal (encoding/json scrubs invalid UTF-8 to U+FFFD).
+func TestValidateSpokePayloadStructuralTypedReason(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload SpokePayload
+	}{
+		{
+			name:    "empty device_id",
+			payload: SpokePayload{Devices: []discovery.Device{{ID: ""}}},
+		},
+		{
+			name:    "oversize device_id",
+			payload: SpokePayload{Devices: []discovery.Device{{ID: strings.Repeat("a", maxDeviceIDBytes+1)}}},
+		},
+		{
+			name:    "invalid utf-8 device_id",
+			payload: SpokePayload{Devices: []discovery.Device{{ID: "\xff\xfe"}}},
+		},
+		{
+			name:    "duplicate device_id",
+			payload: SpokePayload{Devices: []discovery.Device{{ID: "sw-1"}, {ID: "sw-1"}}},
+		},
+		{
+			name: "self-edge",
+			payload: SpokePayload{
+				Devices: []discovery.Device{{ID: "sw-1"}},
+				Edges: []discovery.Edge{{
+					SrcDevice: "sw-1", SrcPort: "Gi0/1",
+					DstDevice: "sw-1", DstPort: "Gi0/2",
+				}},
+			},
+		},
+		{
+			name: "empty edge src_device",
+			payload: SpokePayload{
+				Devices: []discovery.Device{{ID: "sw-1"}, {ID: "sw-2"}},
+				Edges: []discovery.Edge{{
+					SrcDevice: "", SrcPort: "Gi0/1",
+					DstDevice: "sw-2", DstPort: "Gi0/2",
+				}},
+			},
+		},
+		{
+			name: "oversize edge src_port",
+			payload: SpokePayload{
+				Devices: []discovery.Device{{ID: "sw-1"}, {ID: "sw-2"}},
+				Edges: []discovery.Edge{{
+					SrcDevice: "sw-1", SrcPort: strings.Repeat("p", maxPortNameBytes+1),
+					DstDevice: "sw-2", DstPort: "Gi0/2",
+				}},
+			},
+		},
+		{
+			name: "invalid utf-8 edge src_port",
+			payload: SpokePayload{
+				Devices: []discovery.Device{{ID: "sw-1"}, {ID: "sw-2"}},
+				Edges: []discovery.Edge{{
+					SrcDevice: "sw-1", SrcPort: "\xff\xfe",
+					DstDevice: "sw-2", DstPort: "Gi0/2",
+				}},
+			},
+		},
+		{
+			name: "oversize OOS reporting_device",
+			payload: SpokePayload{
+				OutOfScope: []discovery.OutOfScopeNeighbour{{
+					ReportingDevice: strings.Repeat("d", maxPortNameBytes+1),
+				}},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateSpokePayload(tc.payload)
+			if err == nil {
+				t.Fatal("validateSpokePayload() = nil, want *validationError")
+			}
+			var verr *validationError
+			if !errors.As(err, &verr) {
+				t.Fatalf("error type = %T, want *validationError", err)
+			}
+			if verr.reason != rejectReasonStructuralInvalid {
+				t.Errorf("reason = %q, want %q", verr.reason, rejectReasonStructuralInvalid)
+			}
+		})
+	}
+}
+
 // TestValidateSpokePayloadRejectsEmptyLabelKeyTypedReason confirms that the
 // pre-existing empty-key case (covered by TestValidateSpokePayloadRejectsEmptyLabelKey
 // for the err != nil surface) now carries the structured invalid_label_key

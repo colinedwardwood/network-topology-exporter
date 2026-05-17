@@ -124,14 +124,14 @@ The hub's `POST /spoke/push` returns one of the following status codes. Tools an
 | Status | Meaning | Spoke retry behavior |
 |---|---|---|
 | `204 No Content` | Payload accepted; the spoke's graph is part of active hub state and was published to Prometheus + snapshot. | None — success. |
-| `400 Bad Request` | Malformed payload: JSON parse error, missing required field, invalid `spoke_id` characters/length, `cycle_at` missing or set more than 5 minutes in the future, semantic validation failure (empty device ID, non-UTF-8, duplicate IDs, oversize port name, self-edge). Label-injection rejects (`invalid_label_key`, `invalid_label_value`) also return 400 with a JSON body matching the schema below. | Fatal — spoke aborts retries; same payload cannot succeed. |
+| `400 Bad Request` | Malformed payload: JSON parse error, missing required field, invalid `spoke_id` characters/length, `cycle_at` missing or set more than 5 minutes in the future. Semantic validation failures (empty device ID, non-UTF-8, duplicate IDs, oversize port name, self-edge) return 400 with a JSON body and `reason: "structural_invalid"`. Label-injection rejects (`invalid_label_key`, `invalid_label_value`) also return 400 with a JSON body matching the schema below. | Fatal — spoke aborts retries; same payload cannot succeed. |
 | `403 Forbidden` | `spoke_id` does not match the presenting mTLS client certificate's `CN`. | Fatal — operator must reconcile `spoke_id` with the cert subject. |
 | `409 Conflict` | Push processed by the transport but **not applied**: a concurrent newer push from any spoke advanced the publish generation past this one. The newer push's data already supersedes this payload. JSON body present (see below); `reason` is `stale_generation`. | Fatal-for-this-cycle — the next discovery cycle produces a newer payload that will not collide. |
 | `413 Payload Too Large` | Either the raw request body exceeded 16 MiB, OR the combined hub graph would exceed `federation.hub.max_graph_edges` / `max_graph_devices`. When rejected for size budget, JSON body present; `reason` is `size_budget_exceeded`. | Fatal-for-this-cycle — retrying the same payload will fail identically. Operator must increase the hub's `max_graph_*` budgets or shrink the spoke's footprint. |
 | `429 Too Many Requests` | Push arrived sooner than `federation.hub.min_push_interval` after this spoke's last accepted push. `Retry-After` header set to seconds. | Retried with the spoke's own exponential backoff (3 attempts, base 1s). |
 | `503 Service Unavailable` | Reserved for transient internal failures the spoke can resolve by retrying (e.g. snapshot back-pressure). No current code path emits this; documented so spokes implement the retry semantics defensively. | Retried with the spoke's own exponential backoff. |
 
-For `400` (label-injection rejects only), `409`, and `413`, the response is `Content-Type: application/json` with this schema:
+For `400` (label-injection and structural validation rejects), `409`, and `413`, the response is `Content-Type: application/json` with this schema:
 
 ```json
 {
@@ -152,6 +152,7 @@ For `400` (label-injection rejects only), `409`, and `413`, the response is `Con
 - `stale_generation` — a newer concurrent push already superseded this one (HTTP 409).
 - `invalid_label_key` — a Device label key violated the Prometheus label-name grammar (`^[a-zA-Z_][a-zA-Z0-9_]*$`) or used the reserved `__` prefix (HTTP 400). The hub rejects these to prevent /metrics line-protocol corruption from a spoke (legitimate or compromised) — mTLS authenticates *who* can push, not *what*.
 - `invalid_label_value` — a spoke-supplied string that flows into a Prometheus metric label value contained NUL, newline, carriage return, or another C0/DEL control character (HTTP 400). Applies to Device labels, Device inventory fields (vendor/model/os_version/site), Edge port/device/discovery_proto/link_kind, and OutOfScopeNeighbour reporting_device/reporting_port/neighbour_hint/proto.
+- `structural_invalid` — payload violated a shape invariant that does not involve Prometheus label safety (HTTP 400). Covered cases: empty `device_id`, oversize `device_id`/port/OOS field beyond the per-field byte cap, invalid UTF-8 in `device_id`, duplicate `device_id` within a single push, empty edge `src_device`/`src_port`/`dst_device`, and self-edges where `src_device == dst_device`. Almost always indicates a buggy spoke build rather than a compromised one; dashboards can branch on this reason to distinguish structural shape errors from label-injection attempts (`invalid_label_key` / `invalid_label_value`).
 
 New values will only be added in a release that ships corresponding emission code and tests; deprecated values are removed in a major version after a deprecation window.
 
