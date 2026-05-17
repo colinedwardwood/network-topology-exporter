@@ -55,9 +55,52 @@ This document covers in-memory credential exposure. The following are intentiona
 - **Network-side SNMP credential exposure.** SNMPv2c sends the community in plaintext on the wire. Use SNMPv3 (`v3` profile type) with `authPriv` security level for any device that handles credentials you care about over an untrusted network segment. The exporter validates that the requested `auth_protocol` and `priv_protocol` are non-empty for `authPriv` profiles; it does not, by design, support `noAuthNoPriv` v3 sessions for production use.
 - **TLS-handshake-time secrets.** This document is about SNMP credentials. Federation mTLS keys, OTLP exporter credentials, and HTTP server TLS keys are handled by their respective standard-library packages and live in their own memory regions; the threat model is the same but the mitigation surface is different.
 
+## Securing the `/metrics` endpoint
+
+The exporter publishes its full topology graph — device IDs, vendor, OS version, port names, edge list — through `/metrics`. That is reconnaissance data: anyone who can scrape `/metrics` learns the shape of your network and can pivot to CVE matching on the vendor/OS-version labels.
+
+By default the listener binds plain HTTP on `:9100`. This is the canonical Prometheus convention ("scrape from a private network"), and the upstream Prometheus security model treats the exporter's HTTP surface as not-internet-exposed. If your deployment matches that assumption — for example, a control-plane subnet with no ingress from user-facing networks, or a Kubernetes namespace with `NetworkPolicy` restricting ingress to the Prometheus pod — no further configuration is required.
+
+If `/metrics` reaches a network where the trusted-network assumption does not hold, configure `listen.web_config_file` to point at a Prometheus [exporter-toolkit web-config](https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md) YAML. The toolkit is the same code path snmp_exporter, node_exporter, and blackbox_exporter use, and the YAML schema is shared across the ecosystem — operators already know it.
+
+Three deployment patterns, ordered by industry adoption:
+
+**1. Push outbound (recommended for Grafana Cloud).** Run [Grafana Alloy](https://grafana.com/docs/alloy/) or `prometheus-agent` inside the private network alongside the exporter; configure Alloy's `prometheus.scrape` to talk to the exporter on a private address and `prometheus.remote_write` to push outbound to Grafana Cloud Mimir using a Cloud-issued token. No inbound auth required on the exporter — its `/metrics` surface stays on the private network.
+
+**2. Basic auth + server TLS.** For internal Prometheus servers that need to reach a `/metrics` endpoint across a network boundary you do not fully control:
+
+```yaml
+# listen.web_config_file → web-config.yml
+tls_server_config:
+  cert_file: /etc/topology-exporter/cert.pem
+  key_file: /etc/topology-exporter/key.pem
+basic_auth_users:
+  scraper: $2y$10$...bcrypt-hash...
+```
+
+Generate the hash with `htpasswd -bnBC 10 "" your-password | tr -d ':\n'`. Configure the Prometheus / Alloy side with `basic_auth.username: scraper` and `basic_auth.password_file: /path/to/secret`.
+
+**3. mTLS (strongest, lowest user-friction once PKI is in place).** If you already operate a federation hub-and-spoke deployment, you have a CA — reuse it:
+
+```yaml
+# listen.web_config_file → web-config.yml
+tls_server_config:
+  cert_file: /etc/topology-exporter/cert.pem
+  key_file: /etc/topology-exporter/key.pem
+  client_auth_type: RequireAndVerifyClientCert
+  client_ca_file: /etc/topology-exporter/ca.pem
+  client_allowed_sans: ["prometheus.monitoring.internal"]
+```
+
+`client_allowed_sans` pins which scraper identities are accepted — a leaked cert with an unexpected SAN is rejected at the TLS layer before the request body is parsed. The Prometheus exporter-toolkit handles cert reload-on-change automatically, so SAN rotation does not require an exporter restart.
+
+The legacy `listen.tls_cert_file` and `listen.tls_key_file` fields remain accepted but emit a startup deprecation warning. They configure server-side TLS only — no client authentication — and will be removed in v1.5.0. Migrate to `listen.web_config_file` (set `tls_server_config.cert_file` / `key_file` to the same paths) and the deprecation warning goes away.
+
 ## References
 
-- Issue #5 — the GitHub issue that motivated this work.
+- Issue #5 — the GitHub issue that motivated the SNMP zeroization work.
+- Issue #3 — the GitHub issue that motivated the `/metrics` authentication work.
 - `internal/discovery/snmp/zeroize.go` — the `Zeroize()` implementation and `zeroBytes` helper.
 - `internal/discovery/snmp/snmp.go` — the `Params` struct that holds credentials.
-- `cmd/topology-exporter/main.go` — `walkSystemWithCredentials` (candidate-trial zeroization) and `runCycle` (per-device defer).
+- `cmd/topology-exporter/main.go` — `walkSystemWithCredentials` (candidate-trial zeroization), `runCycle` (per-device defer), and the `web.ListenAndServe` integration.
+- [Prometheus exporter-toolkit web-configuration.md](https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md) — full schema reference for `web_config_file`.

@@ -29,6 +29,7 @@ import (
 	gsnmp "github.com/gosnmp/gosnmp"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
@@ -2529,6 +2530,126 @@ listen:
 		t.Errorf("GET /metrics over TLS: status = %d, want 200", resp.StatusCode)
 	}
 
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Errorf("run() exit code = %d, want 0", code)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run() did not return within 10s after cancel")
+	}
+}
+
+// TestRunWebConfigBasicAuth verifies that when listen.web_config_file points
+// at a Prometheus exporter-toolkit web-config with basic_auth_users defined,
+// unauthenticated GET /metrics returns 401 and an authenticated request
+// returns 200. Closes the original gap from #3 — /metrics now supports
+// authentication out of the box.
+func TestRunWebConfigBasicAuth(t *testing.T) {
+	dir := t.TempDir()
+	certFile, keyFile := generateSelfSignedCert(t, dir)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	listenAddr := ln.Addr().String()
+	_ = ln.Close()
+
+	// bcrypt cost 4 is the lowest valid cost — fine for a unit test, and avoids
+	// the multi-hundred-millisecond hashing cost the toolkit default (10)
+	// incurs on every test run.
+	const password = "topology-test-pass"
+	hashBytes, err := bcrypt.GenerateFromPassword([]byte(password), 4)
+	if err != nil {
+		t.Fatalf("bcrypt.GenerateFromPassword: %v", err)
+	}
+	bcryptHash := string(hashBytes)
+
+	webCfgPath := filepath.Join(dir, "web-config.yml")
+	webCfg := fmt.Sprintf(`
+tls_server_config:
+  cert_file: %s
+  key_file: %s
+basic_auth_users:
+  scraper: %q
+`, certFile, keyFile, bcryptHash)
+	if err := os.WriteFile(webCfgPath, []byte(webCfg), 0o600); err != nil {
+		t.Fatalf("write web-config: %v", err)
+	}
+
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgContent := fmt.Sprintf(`
+discovery:
+  interval: 60s
+  timeout_per_device: 1s
+  parallelism: 1
+modules:
+  snmp:
+    enabled: false
+snapshot:
+  path: %s/snapshot.json
+listen:
+  addr: %s
+  web_config_file: %s
+`, dir, listenAddr, webCfgPath)
+	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() {
+		done <- run(ctx, []string{"--config.file=" + cfgPath})
+	}()
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+		},
+		Timeout: 5 * time.Second,
+	}
+	url := "https://" + listenAddr + "/metrics"
+
+	// Wait for the listener to come up, then assert 401 without credentials.
+	deadline := time.Now().Add(10 * time.Second)
+	var resp *http.Response
+	for time.Now().Before(deadline) {
+		resp, err = client.Get(url) //nolint:noctx
+		if err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err != nil {
+		cancel()
+		t.Fatalf("web-config /metrics not reachable within deadline: %v", err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		_ = resp.Body.Close()
+		cancel()
+		t.Fatalf("unauthenticated GET /metrics: status = %d, want 401", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+
+	// Authenticated request should return 200.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		cancel()
+		t.Fatalf("build request: %v", err)
+	}
+	req.SetBasicAuth("scraper", password)
+	authResp, err := client.Do(req)
+	if err != nil {
+		cancel()
+		t.Fatalf("authenticated GET /metrics: %v", err)
+	}
+	defer func() { _ = authResp.Body.Close() }()
+	if authResp.StatusCode != http.StatusOK {
+		t.Errorf("authenticated GET /metrics: status = %d, want 200", authResp.StatusCode)
+	}
+
+	cancel()
 	select {
 	case code := <-done:
 		if code != 0 {
