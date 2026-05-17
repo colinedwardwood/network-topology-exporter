@@ -29,6 +29,7 @@ import (
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+	"github.com/colinedwardwood/network-topology-exporter/internal/limits"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
 	"github.com/colinedwardwood/network-topology-exporter/internal/snapshot"
 )
@@ -1645,7 +1646,7 @@ func TestTryPublishMetricsRejectsOversizedGraphEdges(t *testing.T) {
 
 	h.tryPublishMetrics(1, g, false, 0)
 
-	if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(rejectReasonSizeBudgetExceeded)); got != 1 {
+	if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(string(rejectReasonSizeBudgetExceeded))); got != 1 {
 		t.Errorf("GraphUpdatesRejectedTotal{reason=size_budget_exceeded} = %v, want 1", got)
 	}
 
@@ -1685,7 +1686,7 @@ func TestTryPublishMetricsRejectsOversizedGraphDevices(t *testing.T) {
 
 	h.tryPublishMetrics(1, g, false, 0)
 
-	if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(rejectReasonSizeBudgetExceeded)); got != 1 {
+	if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(string(rejectReasonSizeBudgetExceeded))); got != 1 {
 		t.Errorf("GraphUpdatesRejectedTotal{reason=size_budget_exceeded} = %v, want 1", got)
 	}
 
@@ -1789,7 +1790,7 @@ func TestHubHandlePushRejectedGraphDoesNotMarkSpokeUp(t *testing.T) {
 	}
 
 	// GraphUpdatesRejectedTotal must have been incremented.
-	if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(rejectReasonSizeBudgetExceeded)); got != 1 {
+	if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(string(rejectReasonSizeBudgetExceeded))); got != 1 {
 		t.Errorf("GraphUpdatesRejectedTotal{reason=size_budget_exceeded} = %v, want 1", got)
 	}
 }
@@ -2037,7 +2038,7 @@ func TestValidateSpokePayloadRejectsLabelInjection(t *testing.T) {
 	cases := []struct {
 		name       string
 		payload    SpokePayload
-		wantReason string
+		wantReason metrics.RejectReason
 	}{
 		{
 			name:       "device label key with newline",
@@ -2218,7 +2219,7 @@ func TestValidateSpokePayloadRejectsEdgeMetadataInjection(t *testing.T) {
 	cases := []struct {
 		name       string
 		payload    SpokePayload
-		wantReason string
+		wantReason metrics.RejectReason
 	}{
 		{
 			name:       "metadata key with newline",
@@ -2380,7 +2381,7 @@ func TestHubHandlePushRejectsLabelInjection(t *testing.T) {
 	cases := []struct {
 		name       string
 		payload    SpokePayload
-		wantReason string
+		wantReason metrics.RejectReason
 	}{
 		{
 			name: "label key with newline returns invalid_label_key",
@@ -2438,7 +2439,7 @@ func TestHubHandlePushRejectsLabelInjection(t *testing.T) {
 			m := metrics.New(false)
 			h := NewHub(config.FederationConfig{SpokeTimeout: time.Minute}, m, nil, "")
 
-			before := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(tc.wantReason))
+			before := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(string(tc.wantReason)))
 			body, err := json.Marshal(tc.payload)
 			if err != nil {
 				t.Fatalf("marshal: %v", err)
@@ -2464,7 +2465,7 @@ func TestHubHandlePushRejectsLabelInjection(t *testing.T) {
 			if resp.Reason != tc.wantReason {
 				t.Errorf("reason = %q, want %q", resp.Reason, tc.wantReason)
 			}
-			if after := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(tc.wantReason)); after != before+1 {
+			if after := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(string(tc.wantReason))); after != before+1 {
 				t.Errorf("GraphUpdatesRejectedTotal{reason=%s} delta = %v, want 1", tc.wantReason, after-before)
 			}
 		})
@@ -2535,7 +2536,7 @@ func TestHubHandlePushRejectsStructuralInvalid(t *testing.T) {
 				CycleAt: time.Now(),
 				Devices: []discovery.Device{{ID: "sw-1"}, {ID: "sw-2"}},
 				Edges: []discovery.Edge{{
-					SrcDevice: "sw-1", SrcPort: strings.Repeat("p", maxPortNameBytes+1),
+					SrcDevice: "sw-1", SrcPort: strings.Repeat("p", limits.MaxPortNameBytes+1),
 					DstDevice: "sw-2", DstPort: "Gi0/2",
 				}},
 			},
@@ -2553,7 +2554,7 @@ func TestHubHandlePushRejectsStructuralInvalid(t *testing.T) {
 			m := metrics.New(false)
 			h := NewHub(config.FederationConfig{SpokeTimeout: time.Minute}, m, nil, "")
 
-			before := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(rejectReasonStructuralInvalid))
+			before := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(string(rejectReasonStructuralInvalid)))
 			body, err := json.Marshal(tc.payload)
 			if err != nil {
 				t.Fatalf("marshal: %v", err)
@@ -2579,7 +2580,7 @@ func TestHubHandlePushRejectsStructuralInvalid(t *testing.T) {
 			if resp.Reason != rejectReasonStructuralInvalid {
 				t.Errorf("reason = %q, want %q", resp.Reason, rejectReasonStructuralInvalid)
 			}
-			if after := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(rejectReasonStructuralInvalid)); after != before+1 {
+			if after := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(string(rejectReasonStructuralInvalid))); after != before+1 {
 				t.Errorf("GraphUpdatesRejectedTotal{reason=%s} delta = %v, want 1", rejectReasonStructuralInvalid, after-before)
 			}
 		})
@@ -2605,7 +2606,7 @@ func TestValidateSpokePayloadStructuralTypedReason(t *testing.T) {
 		},
 		{
 			name:    "oversize device_id",
-			payload: SpokePayload{Devices: []discovery.Device{{ID: strings.Repeat("a", maxDeviceIDBytes+1)}}},
+			payload: SpokePayload{Devices: []discovery.Device{{ID: strings.Repeat("a", limits.MaxDeviceIDBytes+1)}}},
 		},
 		{
 			name:    "invalid utf-8 device_id",
@@ -2640,7 +2641,7 @@ func TestValidateSpokePayloadStructuralTypedReason(t *testing.T) {
 			payload: SpokePayload{
 				Devices: []discovery.Device{{ID: "sw-1"}, {ID: "sw-2"}},
 				Edges: []discovery.Edge{{
-					SrcDevice: "sw-1", SrcPort: strings.Repeat("p", maxPortNameBytes+1),
+					SrcDevice: "sw-1", SrcPort: strings.Repeat("p", limits.MaxPortNameBytes+1),
 					DstDevice: "sw-2", DstPort: "Gi0/2",
 				}},
 			},
@@ -2659,7 +2660,7 @@ func TestValidateSpokePayloadStructuralTypedReason(t *testing.T) {
 			name: "oversize OOS reporting_device",
 			payload: SpokePayload{
 				OutOfScope: []discovery.OutOfScopeNeighbour{{
-					ReportingDevice: strings.Repeat("d", maxPortNameBytes+1),
+					ReportingDevice: strings.Repeat("d", limits.MaxPortNameBytes+1),
 				}},
 			},
 		},
@@ -2710,12 +2711,12 @@ func TestValidateSpokePayloadRejectsEmptyLabelKeyTypedReason(t *testing.T) {
 
 // TestValidateLabelKeyRejectsOversized verifies the size cap added to
 // validateLabelKey short-circuits before the regex / reserved-prefix checks
-// when a key exceeds maxLabelKeyBytes. The cap is exclusive: a 256-byte key
+// when a key exceeds limits.MaxLabelKeyBytes. The cap is exclusive: a 256-byte key
 // is the largest accepted value; 257 bytes rejects with invalid_label_key.
 // Mitigates CPU-DoS via a 16 MiB label key on an mTLS-authenticated spoke
 // push (issue #14).
 func TestValidateLabelKeyRejectsOversized(t *testing.T) {
-	oversized := strings.Repeat("a", maxLabelKeyBytes+1)
+	oversized := strings.Repeat("a", limits.MaxLabelKeyBytes+1)
 	err := validateLabelKey(oversized)
 	if err == nil {
 		t.Fatalf("validateLabelKey(%d bytes) = nil, want validationError", len(oversized))
@@ -2730,11 +2731,11 @@ func TestValidateLabelKeyRejectsOversized(t *testing.T) {
 }
 
 // TestValidateLabelKeyAcceptsBoundary verifies the cap is exclusive (>),
-// not inclusive (>=): a key of exactly maxLabelKeyBytes is accepted. Uses
+// not inclusive (>=): a key of exactly limits.MaxLabelKeyBytes is accepted. Uses
 // only valid label-key runes so the only possible reject path is the size
 // cap itself.
 func TestValidateLabelKeyAcceptsBoundary(t *testing.T) {
-	boundary := strings.Repeat("a", maxLabelKeyBytes)
+	boundary := strings.Repeat("a", limits.MaxLabelKeyBytes)
 	if err := validateLabelKey(boundary); err != nil {
 		t.Errorf("validateLabelKey(%d bytes) = %v, want nil", len(boundary), err)
 	}
@@ -2742,11 +2743,11 @@ func TestValidateLabelKeyAcceptsBoundary(t *testing.T) {
 
 // TestValidateLabelValueRejectsOversized verifies the size cap added to
 // validateLabelValue short-circuits before the per-rune control-char loop
-// when a value exceeds maxLabelValueBytes. A 4097-byte value rejects with
+// when a value exceeds limits.MaxLabelValueBytes. A 4097-byte value rejects with
 // invalid_label_value; mitigates the ~4M-rune-iteration vector described in
 // issue #14.
 func TestValidateLabelValueRejectsOversized(t *testing.T) {
-	oversized := strings.Repeat("a", maxLabelValueBytes+1)
+	oversized := strings.Repeat("a", limits.MaxLabelValueBytes+1)
 	err := validateLabelValue(oversized)
 	if err == nil {
 		t.Fatalf("validateLabelValue(%d bytes) = nil, want validationError", len(oversized))
@@ -2761,11 +2762,11 @@ func TestValidateLabelValueRejectsOversized(t *testing.T) {
 }
 
 // TestValidateLabelValueAcceptsBoundary verifies the cap is exclusive (>),
-// not inclusive (>=): a value of exactly maxLabelValueBytes is accepted.
+// not inclusive (>=): a value of exactly limits.MaxLabelValueBytes is accepted.
 // Uses only printable ASCII so the only possible reject path is the size
 // cap itself.
 func TestValidateLabelValueAcceptsBoundary(t *testing.T) {
-	boundary := strings.Repeat("a", maxLabelValueBytes)
+	boundary := strings.Repeat("a", limits.MaxLabelValueBytes)
 	if err := validateLabelValue(boundary); err != nil {
 		t.Errorf("validateLabelValue(%d bytes) = %v, want nil", len(boundary), err)
 	}

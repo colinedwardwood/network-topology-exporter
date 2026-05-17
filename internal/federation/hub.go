@@ -23,28 +23,19 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
+	"github.com/colinedwardwood/network-topology-exporter/internal/limits"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
 	"github.com/colinedwardwood/network-topology-exporter/internal/snapshot"
 )
 
+// Per-push payload caps. These bound the size of a single spoke push and are
+// federation-specific (not per-field). The per-field byte caps live in
+// internal/limits because they are shared with the snapshot loader; raising
+// them in one place without the other would silently desynchronise wire-format
+// acceptance and on-disk validation. See limits.MaxDeviceIDBytes etc.
 const (
 	maxDevicesPerPush = 10_000
 	maxEdgesPerPush   = 50_000
-
-	maxDeviceIDBytes = 256
-	maxPortNameBytes = 256
-
-	// maxLabelKeyBytes and maxLabelValueBytes cap individual spoke-supplied
-	// label inputs before per-rune validation iterates the string. The
-	// http.MaxBytesReader on the push body bounds total payload size at 16 MiB,
-	// but a single 16 MiB label value would still force ~4M rune iterations in
-	// validateLabelValue — a CPU-DoS vector even against an mTLS-authenticated
-	// spoke. Prometheus / OpenMetrics impose no formal max on label values
-	// (REMEDIATION.md §3), but client_golang defaults and Grafana Cloud Mimir
-	// limits operate well under 4 KiB per value, so values exceeding 4096
-	// bytes are far outside any legitimate topology label and safe to reject.
-	maxLabelKeyBytes   = 256
-	maxLabelValueBytes = 4096
 )
 
 type spokeEntry struct {
@@ -175,13 +166,13 @@ var labelKeyPattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 // on reason rather than parsing free-form message text. msg is the
 // human-readable detail logged and included in the rejection detail map.
 type validationError struct {
-	reason string
+	reason metrics.RejectReason
 	msg    string
 }
 
 func (e *validationError) Error() string { return e.msg }
 
-func newValidationError(reason, format string, args ...any) *validationError {
+func newValidationError(reason metrics.RejectReason, format string, args ...any) *validationError {
 	return &validationError{reason: reason, msg: fmt.Sprintf(format, args...)}
 }
 
@@ -195,9 +186,9 @@ func validateLabelKey(k string) error {
 	}
 	// Size cap runs before the regex match so a 16 MiB key cannot force the
 	// regex engine (or any future per-rune check) to walk the whole string.
-	if len(k) > maxLabelKeyBytes {
+	if len(k) > limits.MaxLabelKeyBytes {
 		return newValidationError(rejectReasonInvalidLabelKey,
-			"label key exceeds %d bytes", maxLabelKeyBytes)
+			"label key exceeds %d bytes", limits.MaxLabelKeyBytes)
 	}
 	if strings.HasPrefix(k, "__") {
 		return newValidationError(rejectReasonInvalidLabelKey,
@@ -223,9 +214,9 @@ func validateLabelValue(v string) error {
 	// impose no formal max on label value length (REMEDIATION.md §3), but
 	// client_golang defaults and Grafana Cloud Mimir limits operate well
 	// under 4 KiB per value, so 4096 bytes is a safe upper bound.
-	if len(v) > maxLabelValueBytes {
+	if len(v) > limits.MaxLabelValueBytes {
 		return newValidationError(rejectReasonInvalidLabelValue,
-			"label value exceeds %d bytes", maxLabelValueBytes)
+			"label value exceeds %d bytes", limits.MaxLabelValueBytes)
 	}
 	for _, r := range v {
 		if r == 0x00 || r == '\n' || r == '\r' {
@@ -246,11 +237,12 @@ func validateLabelValue(v string) error {
 // validateMetricLabelString validates a string that becomes a Prometheus
 // label *value* (not key) on a metric with a static label name. Currently
 // applies to spoke-supplied edge port/device names and OOS-neighbour fields.
-// Same rules as validateLabelValue, which now enforces the maxLabelValueBytes
-// size cap before per-rune iteration — callers inherit that cap transitively.
-// Upstream callers also apply field-specific caps (maxPortNameBytes,
-// maxDeviceIDBytes) which are tighter; the cap inside validateLabelValue is
-// the universal floor that prevents CPU DoS on any path that reaches here.
+// Same rules as validateLabelValue, which now enforces the
+// limits.MaxLabelValueBytes size cap before per-rune iteration — callers
+// inherit that cap transitively. Upstream callers also apply field-specific
+// caps (limits.MaxPortNameBytes, limits.MaxDeviceIDBytes) which are tighter;
+// the cap inside validateLabelValue is the universal floor that prevents CPU
+// DoS on any path that reaches here.
 func validateMetricLabelString(s string) error {
 	return validateLabelValue(s)
 }
@@ -279,9 +271,9 @@ func validateSpokePayload(p SpokePayload) error {
 			return newValidationError(rejectReasonStructuralInvalid,
 				"device[%d]: device_id is empty", i)
 		}
-		if len(d.ID) > maxDeviceIDBytes {
+		if len(d.ID) > limits.MaxDeviceIDBytes {
 			return newValidationError(rejectReasonStructuralInvalid,
-				"device[%d]: device_id exceeds %d bytes", i, maxDeviceIDBytes)
+				"device[%d]: device_id exceeds %d bytes", i, limits.MaxDeviceIDBytes)
 		}
 		if !utf8.ValidString(d.ID) {
 			return newValidationError(rejectReasonStructuralInvalid,
@@ -341,9 +333,9 @@ func validateSpokePayload(p SpokePayload) error {
 			{"dst_device", e.DstDevice}, {"dst_port", e.DstPort},
 			{"discovery_proto", e.DiscoveryProto}, {"link_kind", e.LinkKind},
 		} {
-			if len(f.val) > maxPortNameBytes {
+			if len(f.val) > limits.MaxPortNameBytes {
 				return newValidationError(rejectReasonStructuralInvalid,
-					"edge[%d]: %s exceeds %d bytes", i, f.name, maxPortNameBytes)
+					"edge[%d]: %s exceeds %d bytes", i, f.name, limits.MaxPortNameBytes)
 			}
 			if !utf8.ValidString(f.val) {
 				return newValidationError(rejectReasonStructuralInvalid,
@@ -375,9 +367,9 @@ func validateSpokePayload(p SpokePayload) error {
 				return newValidationError(rejectReasonInvalidLabelKey,
 					"edge[%d]: metadata key must not be empty", i)
 			}
-			if len(k) > maxLabelKeyBytes {
+			if len(k) > limits.MaxLabelKeyBytes {
 				return newValidationError(rejectReasonInvalidLabelKey,
-					"edge[%d]: metadata key exceeds %d bytes", i, maxLabelKeyBytes)
+					"edge[%d]: metadata key exceeds %d bytes", i, limits.MaxLabelKeyBytes)
 			}
 			if !utf8.ValidString(k) {
 				return newValidationError(rejectReasonInvalidLabelKey,
@@ -406,9 +398,9 @@ func validateSpokePayload(p SpokePayload) error {
 			{"neighbour_hint", n.NeighbourHint},
 			{"proto", n.Proto},
 		} {
-			if len(f.val) > maxPortNameBytes {
+			if len(f.val) > limits.MaxPortNameBytes {
 				return newValidationError(rejectReasonStructuralInvalid,
-					"out_of_scope[%d]: %s exceeds %d bytes", i, f.name, maxPortNameBytes)
+					"out_of_scope[%d]: %s exceeds %d bytes", i, f.name, limits.MaxPortNameBytes)
 			}
 			if !utf8.ValidString(f.val) {
 				return newValidationError(rejectReasonInvalidLabelValue,
@@ -462,7 +454,7 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 			// handler panics, so this affects only the offending request.
 			panic(fmt.Sprintf("federation: validateSpokePayload returned non-*validationError: %T %v", err, err))
 		}
-		h.m.GraphUpdatesRejectedTotal.WithLabelValues(verr.reason).Inc()
+		h.m.GraphUpdatesRejectedTotal.WithLabelValues(string(verr.reason)).Inc()
 		// Structured reject: spokes branch on the reason enum, not text.
 		writePushRejection(w, http.StatusBadRequest, verr.reason, map[string]any{
 			"message": verr.msg,
@@ -619,10 +611,15 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 // transport but the resulting graph is not applied to active hub state. reason
 // is a stable machine-parseable code; detail is a free-form map for operator
 // context. Schema: {"status":"rejected","reason":"<code>","detail":{...}}.
+//
+// Reason is typed metrics.RejectReason rather than bare string so the
+// encoder cannot accept untyped-string smuggling at the call site; the
+// JSON encoding of `type RejectReason string` is byte-identical to a bare
+// string (pinned by TestRejectReasonWireValuesPinned in internal/metrics).
 type pushRejection struct {
-	Status string         `json:"status"` // always "rejected"
-	Reason string         `json:"reason"` // one of the rejectReason* constants
-	Detail map[string]any `json:"detail,omitempty"`
+	Status string               `json:"status"` // always "rejected"
+	Reason metrics.RejectReason `json:"reason"` // one of the metrics.RejectReason* constants
+	Detail map[string]any       `json:"detail,omitempty"`
 }
 
 // statusForRejectReason maps a reject reason to its HTTP status code.
@@ -632,7 +629,7 @@ type pushRejection struct {
 // path currently emits it, but future reject reasons representing "we
 // couldn't apply this right now, try later" (e.g. snapshot back-pressure,
 // downstream sink stall) should map to the default arm here.
-func statusForRejectReason(reason string) int {
+func statusForRejectReason(reason metrics.RejectReason) int {
 	switch reason {
 	case rejectReasonSizeBudgetExceeded:
 		return http.StatusRequestEntityTooLarge // 413
@@ -645,7 +642,7 @@ func statusForRejectReason(reason string) int {
 	}
 }
 
-func writePushRejection(w http.ResponseWriter, code int, reason string, detail map[string]any) {
+func writePushRejection(w http.ResponseWriter, code int, reason metrics.RejectReason, detail map[string]any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(pushRejection{
@@ -928,35 +925,27 @@ func (h *Hub) publishMetrics(g discovery.Graph, clearStale bool) {
 	h.m.Topology.Update(g)
 }
 
-// Reject reason enum. Two flavours share this namespace:
+// Package-local aliases for the typed metrics.RejectReason constants. The
+// authoritative declarations — including the doc comments on each constant,
+// the underlying wire strings, and the Valid() defense-in-depth check —
+// live in internal/metrics/reject_reason.go. They are re-exported here so
+// existing call sites in this file read naturally and a future reader can
+// still find every reject-emitting path with
+// `grep rejectReason internal/federation`.
 //
-//   - Post-transport-accept rejects emitted by tryPublishMetrics
-//     (stale_generation, size_budget_exceeded) — the payload was syntactically
-//     valid but the resulting combined graph could not be applied.
-//   - Pre-publish validation rejects emitted by validateSpokePayload
-//     (invalid_label_key, invalid_label_value) — the payload contained data
-//     that would corrupt /metrics line protocol if accepted. These are the
-//     hub's defense against a spoke (legitimate or compromised) injecting
-//     newlines/quotes/reserved names that mTLS cannot prevent.
+// These are typed metrics.RejectReason values, not bare strings: callers
+// that need the wire string (Prometheus WithLabelValues, JSON body) convert
+// explicitly at the boundary via string(...), which surfaces any future
+// untyped-string smuggling at compile time.
 //
 // New values are added only in a release that ships emission code + tests;
 // see docs/operator/federation.md "Spoke push response contract".
 const (
-	rejectReasonStaleGeneration    = "stale_generation"
-	rejectReasonSizeBudgetExceeded = "size_budget_exceeded"
-	rejectReasonInvalidLabelKey    = "invalid_label_key"
-	rejectReasonInvalidLabelValue  = "invalid_label_value"
-	// rejectReasonStructuralInvalid covers semantic-validation failures that
-	// are not specifically about Prometheus label key/value safety: empty
-	// required identifiers (device_id, edge endpoints), duplicate device IDs,
-	// self-edges, oversize fields beyond the per-field byte cap, and invalid
-	// UTF-8 in fields that are not themselves label values. Before issue #19
-	// these paths returned plain fmt.Errorf and were mislabeled as
-	// invalid_label_value by the handlePush fallthrough; the dedicated reason
-	// gives operators accurate signals and lets dashboards distinguish
-	// structural shape errors (almost always a buggy spoke build) from
-	// label-injection attempts (potentially a compromised spoke).
-	rejectReasonStructuralInvalid = "structural_invalid"
+	rejectReasonStaleGeneration    = metrics.RejectReasonStaleGeneration
+	rejectReasonSizeBudgetExceeded = metrics.RejectReasonSizeBudgetExceeded
+	rejectReasonInvalidLabelKey    = metrics.RejectReasonInvalidLabelKey
+	rejectReasonInvalidLabelValue  = metrics.RejectReasonInvalidLabelValue
+	rejectReasonStructuralInvalid  = metrics.RejectReasonStructuralInvalid
 )
 
 // tryPublishMetrics publishes g only when gen is strictly greater than the last
@@ -969,7 +958,7 @@ const (
 // (false, reason) when the CAS lost the race or the size-budget guard rejected
 // the graph; the reason is a stable string suitable for response bodies and
 // logs.
-func (h *Hub) tryPublishMetrics(gen uint64, g discovery.Graph, clearStale bool, unmatchedCount int) (bool, string) {
+func (h *Hub) tryPublishMetrics(gen uint64, g discovery.Graph, clearStale bool, unmatchedCount int) (bool, metrics.RejectReason) {
 	for {
 		last := h.lastPublishedGen.Load()
 		if gen <= last {
@@ -982,7 +971,7 @@ func (h *Hub) tryPublishMetrics(gen uint64, g discovery.Graph, clearStale bool, 
 				h.logger.Warn("graph update rejected: exceeds size budget",
 					"edges", len(g.Edges), "max_edges", maxEdges,
 					"devices", len(g.Devices), "max_devices", maxDevices)
-				h.m.GraphUpdatesRejectedTotal.WithLabelValues(rejectReasonSizeBudgetExceeded).Inc()
+				h.m.GraphUpdatesRejectedTotal.WithLabelValues(string(rejectReasonSizeBudgetExceeded)).Inc()
 				return false, rejectReasonSizeBudgetExceeded
 			}
 			h.m.HubOOSUnmatchedTotal.Set(float64(unmatchedCount))
