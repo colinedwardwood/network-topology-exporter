@@ -261,28 +261,39 @@ func validateMetricLabelString(s string) error {
 // line-protocol safety for every spoke-supplied string that flows into a
 // metric label name or value.
 //
-// Returns a *validationError when the failure has a stable reject-reason code
-// (e.g. invalid_label_key, invalid_label_value) so the caller can route it
-// through the structured pushRejection JSON response. Returns a plain error
-// for legacy semantic failures that map to a generic 400.
+// Every returned error is a *validationError carrying a stable reject-reason
+// code so the caller can route it through the structured pushRejection JSON
+// response. Two reason flavours are emitted:
+//   - rejectReasonInvalidLabelKey / rejectReasonInvalidLabelValue for failures
+//     specifically about Prometheus line-protocol safety on a label name/value.
+//   - rejectReasonStructuralInvalid for shape failures (empty required field,
+//     oversize, invalid UTF-8 in non-label fields, duplicate device, self-edge).
+//
+// The handlePush *validationError invariant is load-bearing: handlePush panics
+// on any non-*validationError return from this function (issue #19). Every new
+// validation site MUST return newValidationError(...) — never plain fmt.Errorf.
 func validateSpokePayload(p SpokePayload) error {
 	seen := make(map[string]bool, len(p.Devices))
 	for i, d := range p.Devices {
 		if d.ID == "" {
-			return fmt.Errorf("device[%d]: device_id is empty", i)
+			return newValidationError(rejectReasonStructuralInvalid,
+				"device[%d]: device_id is empty", i)
 		}
 		if len(d.ID) > maxDeviceIDBytes {
-			return fmt.Errorf("device[%d]: device_id exceeds %d bytes", i, maxDeviceIDBytes)
+			return newValidationError(rejectReasonStructuralInvalid,
+				"device[%d]: device_id exceeds %d bytes", i, maxDeviceIDBytes)
 		}
 		if !utf8.ValidString(d.ID) {
-			return fmt.Errorf("device[%d]: device_id is not valid UTF-8", i)
+			return newValidationError(rejectReasonStructuralInvalid,
+				"device[%d]: device_id is not valid UTF-8", i)
 		}
 		if err := validateMetricLabelString(d.ID); err != nil {
 			return newValidationError(rejectReasonInvalidLabelValue,
 				"device[%d]: device_id: %s", i, err.Error())
 		}
 		if seen[d.ID] {
-			return fmt.Errorf("device[%d]: duplicate device_id %q", i, d.ID)
+			return newValidationError(rejectReasonStructuralInvalid,
+				"device[%d]: duplicate device_id %q", i, d.ID)
 		}
 		seen[d.ID] = true
 		// Validate inventory string fields that flow into device_info labels
@@ -318,10 +329,12 @@ func validateSpokePayload(p SpokePayload) error {
 	}
 	for i, e := range p.Edges {
 		if e.SrcDevice == "" || e.SrcPort == "" || e.DstDevice == "" {
-			return fmt.Errorf("edge[%d]: src_device, src_port, and dst_device are required", i)
+			return newValidationError(rejectReasonStructuralInvalid,
+				"edge[%d]: src_device, src_port, and dst_device are required", i)
 		}
 		if e.SrcDevice == e.DstDevice {
-			return fmt.Errorf("edge[%d]: self-edge (src_device == dst_device == %q)", i, e.SrcDevice)
+			return newValidationError(rejectReasonStructuralInvalid,
+				"edge[%d]: self-edge (src_device == dst_device == %q)", i, e.SrcDevice)
 		}
 		for _, f := range []struct{ name, val string }{
 			{"src_device", e.SrcDevice}, {"src_port", e.SrcPort},
@@ -329,10 +342,12 @@ func validateSpokePayload(p SpokePayload) error {
 			{"discovery_proto", e.DiscoveryProto}, {"link_kind", e.LinkKind},
 		} {
 			if len(f.val) > maxPortNameBytes {
-				return fmt.Errorf("edge[%d]: %s exceeds %d bytes", i, f.name, maxPortNameBytes)
+				return newValidationError(rejectReasonStructuralInvalid,
+					"edge[%d]: %s exceeds %d bytes", i, f.name, maxPortNameBytes)
 			}
 			if !utf8.ValidString(f.val) {
-				return fmt.Errorf("edge[%d]: %s is not valid UTF-8", i, f.name)
+				return newValidationError(rejectReasonStructuralInvalid,
+					"edge[%d]: %s is not valid UTF-8", i, f.name)
 			}
 			if err := validateMetricLabelString(f.val); err != nil {
 				return newValidationError(rejectReasonInvalidLabelValue,
@@ -392,7 +407,8 @@ func validateSpokePayload(p SpokePayload) error {
 			{"proto", n.Proto},
 		} {
 			if len(f.val) > maxPortNameBytes {
-				return fmt.Errorf("out_of_scope[%d]: %s exceeds %d bytes", i, f.name, maxPortNameBytes)
+				return newValidationError(rejectReasonStructuralInvalid,
+					"out_of_scope[%d]: %s exceeds %d bytes", i, f.name, maxPortNameBytes)
 			}
 			if !utf8.ValidString(f.val) {
 				return newValidationError(rejectReasonInvalidLabelValue,
@@ -434,20 +450,23 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("hub: spoke payload failed semantic validation",
 			"spoke_id", payload.SpokeID, "error", err)
 		var verr *validationError
-		if errors.As(err, &verr) {
-			h.m.GraphUpdatesRejectedTotal.WithLabelValues(verr.reason).Inc()
-			// Structured reject: spokes branch on the reason enum, not text.
-			writePushRejection(w, http.StatusBadRequest, verr.reason, map[string]any{
-				"message": verr.msg,
-			})
-			return
+		if !errors.As(err, &verr) {
+			// Invariant: every validateSpokePayload error path returns
+			// *validationError (enforced by issue #19). If this branch fires,
+			// a new validation site was added that bypassed
+			// newValidationError — a code defect that would silently
+			// mislabel rejects in the GraphUpdatesRejectedTotal counter and
+			// strip the structured pushRejection wire contract. Panic so the
+			// defect surfaces at the first request that hits it, rather than
+			// degrading observability silently. http.Server recovers from
+			// handler panics, so this affects only the offending request.
+			panic(fmt.Sprintf("federation: validateSpokePayload returned non-*validationError: %T %v", err, err))
 		}
-		// Non-validationError fallthrough: every validation site currently
-		// returns *validationError, so this branch is defensive. Attribute to
-		// invalid_label_value as the closest existing enum value rather than
-		// introducing an "unknown" reason that operators would have to learn.
-		h.m.GraphUpdatesRejectedTotal.WithLabelValues(rejectReasonInvalidLabelValue).Inc()
-		http.Error(w, "invalid payload: "+err.Error(), http.StatusBadRequest)
+		h.m.GraphUpdatesRejectedTotal.WithLabelValues(verr.reason).Inc()
+		// Structured reject: spokes branch on the reason enum, not text.
+		writePushRejection(w, http.StatusBadRequest, verr.reason, map[string]any{
+			"message": verr.msg,
+		})
 		return
 	}
 	if payload.SpokeID == "" {
@@ -619,7 +638,7 @@ func statusForRejectReason(reason string) int {
 		return http.StatusRequestEntityTooLarge // 413
 	case rejectReasonStaleGeneration:
 		return http.StatusConflict // 409
-	case rejectReasonInvalidLabelKey, rejectReasonInvalidLabelValue:
+	case rejectReasonInvalidLabelKey, rejectReasonInvalidLabelValue, rejectReasonStructuralInvalid:
 		return http.StatusBadRequest // 400: fatal — same payload will fail identically
 	default:
 		return http.StatusServiceUnavailable // 503: documented for transient internal failures
@@ -927,6 +946,17 @@ const (
 	rejectReasonSizeBudgetExceeded = "size_budget_exceeded"
 	rejectReasonInvalidLabelKey    = "invalid_label_key"
 	rejectReasonInvalidLabelValue  = "invalid_label_value"
+	// rejectReasonStructuralInvalid covers semantic-validation failures that
+	// are not specifically about Prometheus label key/value safety: empty
+	// required identifiers (device_id, edge endpoints), duplicate device IDs,
+	// self-edges, oversize fields beyond the per-field byte cap, and invalid
+	// UTF-8 in fields that are not themselves label values. Before issue #19
+	// these paths returned plain fmt.Errorf and were mislabeled as
+	// invalid_label_value by the handlePush fallthrough; the dedicated reason
+	// gives operators accurate signals and lets dashboards distinguish
+	// structural shape errors (almost always a buggy spoke build) from
+	// label-injection attempts (potentially a compromised spoke).
+	rejectReasonStructuralInvalid = "structural_invalid"
 )
 
 // tryPublishMetrics publishes g only when gen is strictly greater than the last
