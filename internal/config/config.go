@@ -7,6 +7,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"os"
@@ -90,14 +91,17 @@ type FederationHubConfig struct {
 	// MaxGraphDevices, if > 0, rejects combined-graph updates with more devices
 	// than this limit. Protects scrape latency and memory from runaway topologies.
 	MaxGraphDevices int `yaml:"max_graph_devices"`
-	// StrictDeviceNameMatching disables domain-suffix stripping during OOS
-	// neighbour matching. When true (default since v1.3.0), "core-sw.dc1.example.com"
-	// and "core-sw.dc2.example.com" remain distinct. When explicitly set to false,
-	// both normalise to "core-sw" — restoring the pre-v1.3.0 behaviour for
-	// single-site deployments where short and FQDN forms of the same device must
-	// reconcile to one node. Pointer-typed so an omitted key uses the safe default
-	// while an explicit `false` is still honoured.
-	StrictDeviceNameMatching *bool `yaml:"strict_device_name_matching"`
+	// LooseDeviceNameMatching enables domain-suffix stripping during OOS
+	// neighbour matching. The zero value (false) is the safe default since
+	// v1.3.0: "core-sw.dc1.example.com" and "core-sw.dc2.example.com" remain
+	// distinct. Set to true to restore the pre-v1.3.0 behaviour for single-site
+	// deployments where short and FQDN forms of the same device must reconcile
+	// to one node — both forms normalise to "core-sw".
+	//
+	// Replaces the v1.3.0 `strict_device_name_matching` (*bool) field. The old
+	// YAML key is still accepted for one minor release with a deprecation
+	// warning; see UnmarshalYAML below.
+	LooseDeviceNameMatching bool `yaml:"loose_device_name_matching"`
 	// MinPushInterval rejects per-spoke pushes received sooner than this
 	// duration after the previous accepted push from the same spoke_id, with
 	// a 429 Too Many Requests response and a Retry-After header. Defense in
@@ -106,6 +110,41 @@ type FederationHubConfig struct {
 	// check; set to roughly half the spoke's discovery_interval for a sane
 	// floor. Must be strictly less than spoke_timeout.
 	MinPushInterval time.Duration `yaml:"min_push_interval"`
+
+	// strictDeviceNameMatchingDeprecated records whether the operator set the
+	// legacy `strict_device_name_matching` YAML key. Set by UnmarshalYAML, read
+	// by EmitDeprecationWarnings on startup. Remove in v1.5.0 along with the
+	// transitional unmarshal path.
+	strictDeviceNameMatchingDeprecated *bool `yaml:"-"`
+}
+
+// UnmarshalYAML accepts the legacy `strict_device_name_matching` key for one
+// minor release after the v1.4.0 rename to `loose_device_name_matching`.
+// Translation: an explicit `strict_device_name_matching: false` sets
+// `LooseDeviceNameMatching = true`; an explicit `true` (or omission) leaves
+// `LooseDeviceNameMatching` at its zero-value default (false = strict).
+// EmitDeprecationWarnings logs a warning if the deprecated key was used.
+//
+// Remove this UnmarshalYAML, the deprecated alias field, and the
+// strictDeviceNameMatchingDeprecated tracking field in v1.5.0.
+func (c *FederationHubConfig) UnmarshalYAML(value *yaml.Node) error {
+	type alias FederationHubConfig // break recursion
+	aux := struct {
+		*alias           `yaml:",inline"`
+		StrictDeprecated *bool `yaml:"strict_device_name_matching"`
+	}{alias: (*alias)(c)}
+	if err := value.Decode(&aux); err != nil {
+		return err
+	}
+	if aux.StrictDeprecated != nil {
+		// Operator set the old key. Translate: old=false means loose, so flip
+		// LooseDeviceNameMatching on (unless the new key already set it).
+		if !*aux.StrictDeprecated && !c.LooseDeviceNameMatching {
+			c.LooseDeviceNameMatching = true
+		}
+		c.strictDeviceNameMatchingDeprecated = aux.StrictDeprecated
+	}
+	return nil
 }
 
 // FederationSpokeConfig holds the spoke's settings.
@@ -183,14 +222,52 @@ type FDBConfig struct {
 	MaxVlans int  `yaml:"max_vlans"`
 }
 
-// BGPConfig holds BGP-module-specific tuning. UseV2MIB enables the
-// BGP4-V2-MIB / vendor-specific peer-table walkers that surface IPv6 BGP
-// adjacencies; RFC 4273 BGP4-MIB is IPv4-only. Pointer-typed so an omitted
-// key uses the safe default (true since v1.3.0). Set explicitly to false to
-// fall back to RFC 4273-only behaviour if a vendor regression appears.
+// BGPConfig holds BGP-module-specific tuning. DisableV2MIB is the kill-switch
+// for the BGP4-V2-MIB / vendor-specific peer-table walkers that surface IPv6
+// BGP adjacencies; RFC 4273 BGP4-MIB is IPv4-only. The zero value (false) is
+// the safe default since v1.3.0: v2 walkers run. Set to true to fall back to
+// RFC 4273-only behaviour if a vendor regression appears.
+//
+// Replaces the v1.3.0 `UseV2MIB` (*bool) field. The old YAML key
+// `use_v2_mib` is still accepted for one minor release with a deprecation
+// warning; see UnmarshalYAML below.
 type BGPConfig struct {
-	Enabled  bool  `yaml:"enabled"`
-	UseV2MIB *bool `yaml:"use_v2_mib"`
+	Enabled      bool `yaml:"enabled"`
+	DisableV2MIB bool `yaml:"disable_v2_mib"`
+
+	// useV2MIBDeprecated records whether the operator set the legacy
+	// `use_v2_mib` YAML key. Set by UnmarshalYAML, read by
+	// EmitDeprecationWarnings on startup. Remove in v1.5.0.
+	useV2MIBDeprecated *bool `yaml:"-"`
+}
+
+// UnmarshalYAML accepts the legacy `use_v2_mib` key for one minor release
+// after the v1.4.0 rename to `disable_v2_mib`. Translation: an explicit
+// `use_v2_mib: false` sets `DisableV2MIB = true`; an explicit `true` (or
+// omission) leaves `DisableV2MIB` at its zero-value default (false = v2
+// enabled). EmitDeprecationWarnings logs a warning if the deprecated key was
+// used.
+//
+// Remove this UnmarshalYAML, the deprecated alias field, and the
+// useV2MIBDeprecated tracking field in v1.5.0.
+func (c *BGPConfig) UnmarshalYAML(value *yaml.Node) error {
+	type alias BGPConfig // break recursion
+	aux := struct {
+		*alias             `yaml:",inline"`
+		UseV2MIBDeprecated *bool `yaml:"use_v2_mib"`
+	}{alias: (*alias)(c)}
+	if err := value.Decode(&aux); err != nil {
+		return err
+	}
+	if aux.UseV2MIBDeprecated != nil {
+		// Operator set the old key. Translate: old=false means "disable v2",
+		// so flip DisableV2MIB on (unless the new key already set it).
+		if !*aux.UseV2MIBDeprecated && !c.DisableV2MIB {
+			c.DisableV2MIB = true
+		}
+		c.useV2MIBDeprecated = aux.UseV2MIBDeprecated
+	}
+	return nil
 }
 
 // ModulesConfig toggles individual discovery modules. Each module's spec
@@ -341,10 +418,6 @@ func (c *Config) applyDefaults() {
 	if c.Modules.FDB.MaxVlans == 0 {
 		c.Modules.FDB.MaxVlans = 100
 	}
-	if c.Modules.BGP.UseV2MIB == nil {
-		use := true
-		c.Modules.BGP.UseV2MIB = &use
-	}
 	if c.Snapshot.Path == "" {
 		c.Snapshot.Path = "/var/lib/network-topology-exporter/snapshot.json"
 	}
@@ -361,10 +434,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Federation.Hub.ListenAddr == "" {
 		c.Federation.Hub.ListenAddr = ":9101"
-	}
-	if c.Federation.Hub.StrictDeviceNameMatching == nil {
-		strict := true
-		c.Federation.Hub.StrictDeviceNameMatching = &strict
 	}
 	if c.Output.OTLP.HeartbeatCycles == 0 {
 		c.Output.OTLP.HeartbeatCycles = 10
@@ -748,6 +817,50 @@ func (c *Config) validateFDB() error {
 		return errors.New("fdb.max_vlans must be at most 4096")
 	}
 	return nil
+}
+
+// EmitDeprecationWarnings logs a slog.Warn for each legacy YAML key the
+// operator set during Load. Call once at startup after Load. Returns true if
+// any deprecation warning was emitted (handy for tests).
+//
+// Remove this function in v1.5.0 along with the transitional UnmarshalYAML
+// methods on FederationHubConfig and BGPConfig.
+func (c *Config) EmitDeprecationWarnings(logger *slog.Logger) bool {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	emitted := false
+	if c.Federation.Hub.strictDeviceNameMatchingDeprecated != nil {
+		logger.Warn("config: federation.hub.strict_device_name_matching is deprecated and will be removed in v1.5.0; use loose_device_name_matching (default false = strict; set to true to enable domain-suffix stripping)",
+			"deprecated_key", "strict_device_name_matching",
+			"replacement_key", "loose_device_name_matching",
+			"deprecated_value", *c.Federation.Hub.strictDeviceNameMatchingDeprecated,
+			"effective_loose_device_name_matching", c.Federation.Hub.LooseDeviceNameMatching,
+		)
+		emitted = true
+	}
+	if c.Modules.BGP.useV2MIBDeprecated != nil {
+		logger.Warn("config: modules.bgp.use_v2_mib is deprecated and will be removed in v1.5.0; use disable_v2_mib (default false = v2 enabled; set to true to disable v2 walkers)",
+			"deprecated_key", "use_v2_mib",
+			"replacement_key", "disable_v2_mib",
+			"deprecated_value", *c.Modules.BGP.useV2MIBDeprecated,
+			"effective_disable_v2_mib", c.Modules.BGP.DisableV2MIB,
+		)
+		emitted = true
+	}
+	return emitted
+}
+
+// HasDeprecatedFederationHubStrict reports whether the operator set the
+// legacy `strict_device_name_matching` YAML key. Test helper.
+func (c *Config) HasDeprecatedFederationHubStrict() bool {
+	return c.Federation.Hub.strictDeviceNameMatchingDeprecated != nil
+}
+
+// HasDeprecatedBGPUseV2MIB reports whether the operator set the legacy
+// `use_v2_mib` YAML key. Test helper.
+func (c *Config) HasDeprecatedBGPUseV2MIB() bool {
+	return c.Modules.BGP.useV2MIBDeprecated != nil
 }
 
 func cidrContainsAny(nets []*net.IPNet, ip net.IP) bool {

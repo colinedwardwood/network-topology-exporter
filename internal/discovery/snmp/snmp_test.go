@@ -202,7 +202,7 @@ func TestWalkToIntMap(t *testing.T) {
 	}
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
-	client, err := Open(Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+	client, err := Open(Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestWalkToIntMapStrictDecodeFailures(t *testing.T) {
 	}
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
-	client, err := Open(Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+	client, err := Open(Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestWalkIfDescr(t *testing.T) {
 	}
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
-	client, err := Open(Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+	client, err := Open(Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -331,7 +331,7 @@ func TestWalkIfDescrWrongType(t *testing.T) {
 	}
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
-	client, err := Open(Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+	client, err := Open(Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -365,7 +365,7 @@ func TestWalkSystemGroup(t *testing.T) {
 	p := Params{
 		IP:        ip,
 		Port:      port,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   3 * time.Second,
 	}
 
@@ -405,7 +405,7 @@ func TestWalkSystemGroupSysUpTimeWrongType(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	dev, err := Walk(context.Background(), Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+	dev, err := Walk(context.Background(), Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second})
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
 	}
@@ -439,7 +439,7 @@ func TestWalkSystemRejectsNegativeSysUpTime(t *testing.T) {
 		addr := snmptest.Start(t, "public", pdus)
 		ip, port := snmptest.ParseAddr(addr)
 
-		dev, err := Walk(context.Background(), Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+		dev, err := Walk(context.Background(), Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second})
 		if err != nil {
 			t.Fatalf("Walk: %v", err)
 		}
@@ -463,7 +463,7 @@ func TestWalkSystemRejectsNegativeSysUpTime(t *testing.T) {
 		addr := snmptest.Start(t, "public", pdus)
 		ip, port := snmptest.ParseAddr(addr)
 
-		dev, err := Walk(context.Background(), Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+		dev, err := Walk(context.Background(), Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second})
 		if err != nil {
 			t.Fatalf("Walk: %v", err)
 		}
@@ -489,7 +489,7 @@ func TestWalkNormalisesSysName(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	dev, err := Walk(context.Background(), Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+	dev, err := Walk(context.Background(), Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second})
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
 	}
@@ -573,7 +573,7 @@ func TestPduOID(t *testing.T) {
 
 // buildClient: v2c community is set correctly.
 func TestBuildClientV2c(t *testing.T) {
-	p := Params{IP: net.ParseIP("192.0.2.1"), Port: 161, Community: "myCommunity"}
+	p := Params{IP: net.ParseIP("192.0.2.1"), Port: 161, Community: []byte("myCommunity")}
 	c := buildClient(p)
 	if c.Community != "myCommunity" {
 		t.Errorf("Community = %q, want myCommunity", c.Community)
@@ -602,9 +602,9 @@ func TestBuildClientV3AuthPriv(t *testing.T) {
 		V3:        true,
 		Username:  "admin",
 		AuthProto: "SHA",
-		AuthKey:   "authpass",
+		AuthKey:   []byte("authpass"),
 		PrivProto: "AES",
-		PrivKey:   "privpass",
+		PrivKey:   []byte("privpass"),
 	}
 	c := buildClient(p)
 	if c.Version != gsnmp.Version3 {
@@ -668,7 +668,7 @@ func TestOpenConnect(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	client, err := Open(p)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -685,7 +685,7 @@ func TestBulkWalkCancelledCtx(t *testing.T) {
 	addr := snmptest.Start(t, "public", nil)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	client, err := Open(p)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -735,7 +735,7 @@ func TestBulkWalk(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	client, err := Open(p)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -778,7 +778,7 @@ func TestBulkWalkFallbackToWalkAll(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	client, err := Open(p)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -822,7 +822,7 @@ func TestBulkWalkCtxCancelledAfterBulkFail(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	client, err := Open(p)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -871,7 +871,7 @@ func TestWalkCtxCancelled(t *testing.T) {
 	p := Params{
 		IP:        ip,
 		Port:      port,
-		Community: "public", // wrong community — agent drops all packets
+		Community: []byte("public"), // wrong community — agent drops all packets
 		Timeout:   200 * time.Millisecond,
 	}
 
@@ -896,7 +896,7 @@ func TestWalkNoSysName(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	dev, err := Walk(context.Background(), p)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -920,7 +920,7 @@ func TestWalkIfNames(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	client, err := Open(p)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -944,7 +944,7 @@ func TestWalkIfNamesBulkWalkError(t *testing.T) {
 	addr := snmptest.Start(t, "public", nil)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := Params{IP: ip, Port: port, Community: "public", Timeout: time.Millisecond}
+	p := Params{IP: ip, Port: port, Community: []byte("public"), Timeout: time.Millisecond}
 	client, err := Open(p)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -974,7 +974,7 @@ func TestWalkIfNamesNonNumericSuffix(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	client, err := Open(p)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -1007,7 +1007,7 @@ func TestWalkIfNamesWrongType(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	client, err := Open(p)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -1038,7 +1038,7 @@ func TestWalkIfNamesWithFallback(t *testing.T) {
 	}
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
-	client, err := Open(Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+	client, err := Open(Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -1067,7 +1067,7 @@ func TestWalkIfNamesWithFallbackPrefersIfName(t *testing.T) {
 	}
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
-	client, err := Open(Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+	client, err := Open(Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -1252,7 +1252,7 @@ func TestWalkToIntMapStrictTrimFailure(t *testing.T) {
 	}
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
-	client, err := Open(Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+	client, err := Open(Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -1275,7 +1275,7 @@ func TestWalkToIntMapStrictTrimFailure(t *testing.T) {
 func TestWalkToIntMapError(t *testing.T) {
 	addr := snmptest.Start(t, "public", nil)
 	ip, port := snmptest.ParseAddr(addr)
-	client, err := Open(Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+	client, err := Open(Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -1306,7 +1306,7 @@ func TestWalkWrongCommunity(t *testing.T) {
 	p := Params{
 		IP:        ip,
 		Port:      port,
-		Community: "wrong",
+		Community: []byte("wrong"),
 		Timeout:   200 * time.Millisecond,
 	}
 
@@ -1454,7 +1454,7 @@ func TestWalkARPTable(t *testing.T) {
 	}
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
-	client, err := Open(Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second})
+	client, err := Open(Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

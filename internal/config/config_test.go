@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1991,5 +1992,244 @@ func TestFederationHubValidWithExistingTLSFiles(t *testing.T) {
 	}
 	if _, err := Load(cfgPath); err != nil {
 		t.Fatalf("expected valid hub config with existing TLS files, got: %v", err)
+	}
+}
+
+// --- loose_device_name_matching tests (issue #10) ---
+//
+// The v1.3.0 *bool `strict_device_name_matching` field was replaced in v1.4.0
+// by a zero-value-default `loose_device_name_matching bool`. The old YAML key
+// is still accepted for one minor release with a deprecation warning. These
+// tests cover the four semantic outcomes plus the new-key path.
+
+// TestLooseDeviceNameMatchingNewKey: setting the new key to true is honoured.
+func TestLooseDeviceNameMatchingNewKey(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("federation:\n  hub:\n    loose_device_name_matching: true\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !c.Federation.Hub.LooseDeviceNameMatching {
+		t.Errorf("LooseDeviceNameMatching = false, want true")
+	}
+	if c.HasDeprecatedFederationHubStrict() {
+		t.Errorf("HasDeprecatedFederationHubStrict = true, want false (new key was used)")
+	}
+}
+
+// TestLooseDeviceNameMatchingNewKeyDefault: omitting the key yields strict
+// matching (the safe default).
+func TestLooseDeviceNameMatchingNewKeyDefault(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("targets: []\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if c.Federation.Hub.LooseDeviceNameMatching {
+		t.Errorf("LooseDeviceNameMatching = true, want false (default = strict)")
+	}
+	if c.HasDeprecatedFederationHubStrict() {
+		t.Errorf("HasDeprecatedFederationHubStrict = true, want false (no key was set)")
+	}
+}
+
+// TestStrictDeviceNameMatchingDeprecatedOldKeyTrue: the legacy key set to true
+// (i.e. operator asks for strict) leaves LooseDeviceNameMatching=false and
+// flags the deprecation.
+func TestStrictDeviceNameMatchingDeprecatedOldKeyTrue(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("federation:\n  hub:\n    strict_device_name_matching: true\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if c.Federation.Hub.LooseDeviceNameMatching {
+		t.Errorf("LooseDeviceNameMatching = true, want false (old strict=true → new loose=false)")
+	}
+	if !c.HasDeprecatedFederationHubStrict() {
+		t.Errorf("HasDeprecatedFederationHubStrict = false, want true (deprecated key was set)")
+	}
+}
+
+// TestStrictDeviceNameMatchingDeprecatedOldKeyFalse: the legacy key set to
+// false (i.e. operator asks for loose) flips LooseDeviceNameMatching to true
+// and flags the deprecation.
+func TestStrictDeviceNameMatchingDeprecatedOldKeyFalse(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("federation:\n  hub:\n    strict_device_name_matching: false\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !c.Federation.Hub.LooseDeviceNameMatching {
+		t.Errorf("LooseDeviceNameMatching = false, want true (old strict=false → new loose=true)")
+	}
+	if !c.HasDeprecatedFederationHubStrict() {
+		t.Errorf("HasDeprecatedFederationHubStrict = false, want true (deprecated key was set)")
+	}
+}
+
+// --- disable_v2_mib tests (issue #10) ---
+//
+// The v1.3.0 *bool `use_v2_mib` field was replaced in v1.4.0 by a
+// zero-value-default `disable_v2_mib bool`. The old YAML key is still
+// accepted for one minor release with a deprecation warning.
+
+// TestDisableV2MIBNewKey: setting the new key to true is honoured.
+func TestDisableV2MIBNewKey(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("modules:\n  bgp:\n    disable_v2_mib: true\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !c.Modules.BGP.DisableV2MIB {
+		t.Errorf("DisableV2MIB = false, want true")
+	}
+	if c.HasDeprecatedBGPUseV2MIB() {
+		t.Errorf("HasDeprecatedBGPUseV2MIB = true, want false (new key was used)")
+	}
+}
+
+// TestDisableV2MIBNewKeyDefault: omitting the key yields v2 enabled (the safe
+// default).
+func TestDisableV2MIBNewKeyDefault(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("targets: []\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if c.Modules.BGP.DisableV2MIB {
+		t.Errorf("DisableV2MIB = true, want false (default = v2 enabled)")
+	}
+	if c.HasDeprecatedBGPUseV2MIB() {
+		t.Errorf("HasDeprecatedBGPUseV2MIB = true, want false (no key was set)")
+	}
+}
+
+// TestUseV2MIBDeprecatedOldKeyTrue: the legacy key set to true (operator asks
+// for v2 enabled) leaves DisableV2MIB=false and flags the deprecation.
+func TestUseV2MIBDeprecatedOldKeyTrue(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("modules:\n  bgp:\n    use_v2_mib: true\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if c.Modules.BGP.DisableV2MIB {
+		t.Errorf("DisableV2MIB = true, want false (old use_v2_mib=true → new disable_v2_mib=false)")
+	}
+	if !c.HasDeprecatedBGPUseV2MIB() {
+		t.Errorf("HasDeprecatedBGPUseV2MIB = false, want true (deprecated key was set)")
+	}
+}
+
+// TestUseV2MIBDeprecatedOldKeyFalse: the legacy key set to false (operator
+// asks to disable v2) flips DisableV2MIB to true and flags the deprecation.
+func TestUseV2MIBDeprecatedOldKeyFalse(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("modules:\n  bgp:\n    use_v2_mib: false\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !c.Modules.BGP.DisableV2MIB {
+		t.Errorf("DisableV2MIB = false, want true (old use_v2_mib=false → new disable_v2_mib=true)")
+	}
+	if !c.HasDeprecatedBGPUseV2MIB() {
+		t.Errorf("HasDeprecatedBGPUseV2MIB = false, want true (deprecated key was set)")
+	}
+}
+
+// TestEmitDeprecationWarningsFiresForBothKeys verifies that
+// EmitDeprecationWarnings logs a warning for each deprecated key the
+// operator set during Load, and returns true when any warning was emitted.
+func TestEmitDeprecationWarningsFiresForBothKeys(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	body := "" +
+		"federation:\n" +
+		"  hub:\n" +
+		"    strict_device_name_matching: false\n" +
+		"modules:\n" +
+		"  bgp:\n" +
+		"    use_v2_mib: false\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	emitted := c.EmitDeprecationWarnings(logger)
+	if !emitted {
+		t.Fatal("EmitDeprecationWarnings returned false; expected true (two deprecated keys set)")
+	}
+	logged := buf.String()
+	if !strings.Contains(logged, "strict_device_name_matching") {
+		t.Errorf("expected log to mention strict_device_name_matching; got:\n%s", logged)
+	}
+	if !strings.Contains(logged, "loose_device_name_matching") {
+		t.Errorf("expected log to mention loose_device_name_matching; got:\n%s", logged)
+	}
+	if !strings.Contains(logged, "use_v2_mib") {
+		t.Errorf("expected log to mention use_v2_mib; got:\n%s", logged)
+	}
+	if !strings.Contains(logged, "disable_v2_mib") {
+		t.Errorf("expected log to mention disable_v2_mib; got:\n%s", logged)
+	}
+}
+
+// TestEmitDeprecationWarningsNoopWhenNeitherKeySet verifies that
+// EmitDeprecationWarnings is a silent no-op when only the new keys (or no
+// keys at all) are used.
+func TestEmitDeprecationWarningsNoopWhenNeitherKeySet(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("targets: []\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	if c.EmitDeprecationWarnings(logger) {
+		t.Errorf("EmitDeprecationWarnings returned true; expected false (no deprecated keys)")
+	}
+	if buf.Len() > 0 {
+		t.Errorf("expected silent no-op; got log output:\n%s", buf.String())
 	}
 }

@@ -33,7 +33,7 @@ func TestWalkUpAdjacencyInScope(t *testing.T) {
 	p := snmputil.Params{
 		IP:        ip,
 		Port:      port,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   3 * time.Second,
 	}
 
@@ -86,7 +86,7 @@ func TestWalkDownAdjacency(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -108,7 +108,7 @@ func TestWalkInitializingAdjacency(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -131,7 +131,7 @@ func TestWalkUpAdjacencyOutOfScope(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, oos, err := Walk(context.Background(), p, "router-a", []*net.IPNet{allow})
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -159,7 +159,7 @@ func TestWalkMissingStateEntry(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -177,7 +177,7 @@ func TestWalkEmpty(t *testing.T) {
 	addr := snmptest.Start(t, "public", nil)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -234,7 +234,7 @@ func TestWalkAdjIPAddrsAdjKeyExtraction(t *testing.T) {
 			addr := snmptest.Start(t, "public", pdus)
 			ip, port := snmptest.ParseAddr(addr)
 
-			p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+			p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 			edges, _, err := Walk(context.Background(), p, "router-a", nil)
 			if err != nil {
 				t.Fatalf("Walk: %v", err)
@@ -280,7 +280,7 @@ func TestWalkPopulatesSrcPort(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, _, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -302,7 +302,7 @@ func TestWalkSrcPortEmptyWhenCircuitMissing(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, _, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -333,7 +333,7 @@ func TestWalkAdjStateDecodeFailureIsHardFail(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	_, _, err := Walk(context.Background(), p, "router-a", nil)
 	if err == nil {
 		t.Fatal("expected hard-fail error for adjacency decode failure, got nil")
@@ -349,7 +349,7 @@ func TestWalkAdjStatePartialDecodeDegraded(t *testing.T) {
 	}
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 
 	edges, _, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
@@ -376,7 +376,7 @@ func TestWalkAdjStateInvalidRatioExceededHardFail(t *testing.T) {
 	}
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 
 	_, _, err := Walk(context.Background(), p, "router-a", nil)
 	if err == nil {
@@ -389,7 +389,7 @@ func TestWalkAdjStateNoisyCyclesDeterministic(t *testing.T) {
 	run := func(pdus []gsnmp.SnmpPDU) error {
 		addr := snmptest.Start(t, "public", pdus)
 		ip, port := snmptest.ParseAddr(addr)
-		p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+		p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 		_, _, err := Walk(context.Background(), p, "router-a", nil)
 		return err
 	}
@@ -443,7 +443,7 @@ func TestWalkCircuitIfNamesCircuitDecodeFailureDegrades(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, _, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -473,7 +473,7 @@ func TestWalkCircuitIfNamesNoIfDescrOverlap(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, _, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -499,7 +499,7 @@ func TestWalkCircuitIfNamesIfDescrFails(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	client, err := snmputil.Open(p)
 	if err != nil {
 		t.Fatalf("snmputil.Open: %v", err)
@@ -554,7 +554,7 @@ func TestWalkMalformedAdjKeyDegradedReason(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -582,7 +582,7 @@ func TestWalkOpenFails(t *testing.T) {
 	p := snmputil.Params{
 		IP:        net.ParseIP("127.0.0.1"),
 		Port:      161,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   time.Nanosecond,
 	}
 	_, _, err := Walk(context.Background(), p, "router-a", nil)
@@ -600,7 +600,7 @@ func TestWalkFiltersUnspecifiedAdjIP(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -622,7 +622,7 @@ func TestWalkFiltersLinkLocalAdjIP(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -654,7 +654,7 @@ func TestWalkIPv6AdjacencySkipped(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -689,7 +689,7 @@ func TestWalkIPv6OnlyAdjacencies(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -710,7 +710,7 @@ func TestWalkCancelledContext(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 

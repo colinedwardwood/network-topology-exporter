@@ -22,6 +22,24 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 )
 
+// WalkerMetrics is the observability sink for per-protocol walker outcomes.
+// Discovery modules call RecordWalkerOutcome from their walk paths; the
+// implementation (typically wired in cmd/topology-exporter/main.go) bridges
+// the call to whatever counter/registry the process is using.
+//
+// The interface deliberately lives in this package — next to Params — so that
+// discovery modules do NOT need to import the prometheus client library. This
+// keeps the dependency edge pointing into discovery from main, not the other
+// way around, and makes test injection a single struct literal.
+//
+// Walkers MUST tolerate a nil Params.WalkerMetrics by dropping the increment
+// (no panic). The bgp module's recordWalkerOutcome helper encapsulates that
+// nil-check; other modules wanting the same observability should mirror the
+// pattern rather than calling Inc directly on a possibly-nil handle.
+type WalkerMetrics interface {
+	RecordWalkerOutcome(walker, outcome string)
+}
+
 // Params holds the resolved connection parameters for one SNMP walk.
 // The caller (discovery loop) resolves credentials to concrete values via
 // os.Getenv before building a Params; this package never reads env vars.
@@ -33,15 +51,24 @@ type Params struct {
 	Timeout time.Duration
 
 	// SNMPv2c fields.
-	Community string
+	//
+	// Community is held as []byte so callers can overwrite it with zeros via
+	// Zeroize once the discovery cycle has finished with this Params. See
+	// docs/operator/security.md for the threat model and limitations.
+	Community []byte
 
 	// SNMPv3 fields.
+	//
+	// AuthKey and PrivKey are held as []byte for the same reason as Community
+	// above. They are converted to string at the gosnmp boundary in
+	// buildClient; that conversion makes an immutable copy that Zeroize
+	// cannot reach.
 	V3          bool
 	Username    string
 	AuthProto   string // "SHA" | "SHA-256" | "SHA-384" | "SHA-512" | "MD5" | ""
-	AuthKey     string
+	AuthKey     []byte
 	PrivProto   string // "AES" | "AES-192" | "AES-256" | "DES" | ""
-	PrivKey     string
+	PrivKey     []byte
 	ContextName string
 
 	// Retries is the number of SNMP retries per request. 0 means no retries.
@@ -62,6 +89,13 @@ type Params struct {
 	// that surface IPv6 sessions. When false the BGP module uses only the
 	// RFC 4273 IPv4-only path. Defaults to true via config.applyDefaults.
 	UseBGPV2MIB bool
+
+	// WalkerMetrics is the observability sink that protocol modules use to
+	// record walker outcomes (e.g. edges, mib_unimplemented, walker_drift).
+	// May be nil — walkers must drop the increment in that case rather than
+	// panic. Replaces the prior package-global counter pointer that lived in
+	// internal/discovery/bgp/. See WalkerMetrics interface above.
+	WalkerMetrics WalkerMetrics
 }
 
 // System group OIDs fetched as scalars via SNMP GET (RFC 3418).
@@ -274,19 +308,25 @@ func buildClient(p Params) *g.GoSNMP {
 		client.Version = g.Version3
 		client.SecurityModel = g.UserSecurityModel
 		client.MsgFlags = authPrivMsgFlags(authProto, privProto)
+		// Conversion to string here makes an immutable copy of the credential
+		// bytes that gosnmp keeps for the lifetime of the session. Params.Zeroize
+		// cannot reach into gosnmp's internal copy; the docs/operator/security.md
+		// threat model documents this gap.
 		client.SecurityParameters = &g.UsmSecurityParameters{
 			UserName:                 p.Username,
 			AuthenticationProtocol:   authProto,
-			AuthenticationPassphrase: p.AuthKey,
+			AuthenticationPassphrase: string(p.AuthKey),
 			PrivacyProtocol:          privProto,
-			PrivacyPassphrase:        p.PrivKey,
+			PrivacyPassphrase:        string(p.PrivKey),
 		}
 		if p.ContextName != "" {
 			client.ContextName = p.ContextName
 		}
 	} else {
 		client.Version = g.Version2c
-		client.Community = p.Community
+		// See comment on the V3 branch: string() copies the bytes into
+		// gosnmp's internal state, outside the reach of Zeroize.
+		client.Community = string(p.Community)
 	}
 
 	return client

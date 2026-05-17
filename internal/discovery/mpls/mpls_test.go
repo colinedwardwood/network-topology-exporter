@@ -36,7 +36,7 @@ func TestWalkUpTunnelInScope(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -92,7 +92,7 @@ func TestWalkDownTunnel(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -115,7 +115,7 @@ func TestWalkMalformedOID(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -138,7 +138,7 @@ func TestWalkUpTunnelOutOfScope(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, oos, err := Walk(context.Background(), p, "router-a", []*net.IPNet{allow})
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -168,7 +168,7 @@ func TestWalkMultipleTunnelsSameEgress(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -199,7 +199,7 @@ func TestWalkEmpty(t *testing.T) {
 	addr := snmptest.Start(t, "public", nil)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -217,7 +217,7 @@ func TestWalkOpenFails(t *testing.T) {
 	p := snmputil.Params{
 		IP:        net.ParseIP("127.0.0.1"),
 		Port:      161,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   time.Nanosecond,
 	}
 	_, _, err := Walk(context.Background(), p, "router-a", nil)
@@ -235,7 +235,7 @@ func TestWalkTunnelIdxFormatting(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, _, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -296,7 +296,7 @@ func TestWalkPopulatesAdminStatus(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, _, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -323,7 +323,7 @@ func TestWalkAdminStatusMissingIsUnknown(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, _, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -352,7 +352,7 @@ func TestWalkAdminStatusDecodeFailureIsDegraded(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, _, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -381,7 +381,7 @@ func TestWalkOperStatusDecodeFailureIsHardFail(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	_, _, err := Walk(context.Background(), p, "router-a", nil)
 	if err == nil {
 		t.Fatal("expected hard-fail error for oper status decode failure, got nil")
@@ -398,7 +398,7 @@ func TestWalkOperStatusPartialDecodeDegraded(t *testing.T) {
 	}
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 
 	edges, _, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
@@ -424,7 +424,7 @@ func TestWalkOperStatusInvalidRatioExceededHardFail(t *testing.T) {
 	}
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 
 	_, _, err := Walk(context.Background(), p, "router-a", nil)
 	if err == nil {
@@ -441,7 +441,7 @@ func TestWalkFiltersUnspecifiedEgressIP(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -463,7 +463,7 @@ func TestWalkFiltersLinkLocalEgressIP(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, oos, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -575,7 +575,7 @@ func TestWalkAdminStatusEmptyWalkNoMissingWalkReason(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, _, err := Walk(context.Background(), p, "router-a", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -641,7 +641,7 @@ func TestWalkAdminStatusWalkFailSetsUnknownAndDegraded(t *testing.T) {
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
-	p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 	edges, _, err := Walk(context.Background(), p, "router-b", nil)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -668,7 +668,7 @@ func TestWalkOperStatusNoisyCyclesDeterministic(t *testing.T) {
 	run := func(pdus []gsnmp.SnmpPDU) error {
 		addr := snmptest.Start(t, "public", pdus)
 		ip, port := snmptest.ParseAddr(addr)
-		p := snmputil.Params{IP: ip, Port: port, Community: "public", Timeout: 3 * time.Second}
+		p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
 		_, _, err := Walk(context.Background(), p, "router-a", nil)
 		return err
 	}

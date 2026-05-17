@@ -331,7 +331,7 @@ func validateSpokePayload(p SpokePayload) error {
 		for _, f := range []struct{ name, val string }{
 			{"src_device", e.SrcDevice}, {"src_port", e.SrcPort},
 			{"dst_device", e.DstDevice}, {"dst_port", e.DstPort},
-			{"discovery_proto", e.DiscoveryProto}, {"link_kind", e.LinkKind},
+			{"discovery_proto", string(e.DiscoveryProto)}, {"link_kind", string(e.LinkKind)},
 		} {
 			if len(f.val) > limits.MaxPortNameBytes {
 				return newValidationError(rejectReasonStructuralInvalid,
@@ -816,10 +816,13 @@ func (h *Hub) buildCombinedGraph(spokes map[string]spokeEntry) (discovery.Graph,
 					proto = remote.proto
 				}
 				// Inject both sides so Reconcile sees len(sides) >= 2 → bidirectional.
+				// proto here is a raw string from OutOfScopeNeighbour.Proto (spoke wire
+				// format); cast to DiscoveryProtocol — Edge validation accepts any
+				// non-empty string at this layer.
 				allEdges = appendEdgePair(allEdges,
 					k.device, local.reportingPort,
 					k.hint, remote.reportingPort,
-					proto, "ethernet",
+					discovery.DiscoveryProtocol(proto), discovery.LinkKindEthernet,
 					discovery.ConfidenceMedium, 2,
 				)
 			}
@@ -837,14 +840,14 @@ func (h *Hub) buildCombinedGraph(spokes map[string]spokeEntry) (discovery.Graph,
 			)
 			continue
 		}
-		linkKind := link.LinkKind
+		linkKind := discovery.LinkKind(link.LinkKind)
 		if linkKind == "" {
-			linkKind = "ethernet"
+			linkKind = discovery.LinkKindEthernet
 		}
 		allEdges = appendEdgePair(allEdges,
 			link.LocalDevice, link.LocalPort,
 			link.RemoteDevice, link.RemotePort,
-			"configured", linkKind,
+			discovery.DiscoveryProtocolConfigured, linkKind,
 			discovery.ConfidenceHigh, 0,
 		)
 	}
@@ -1082,28 +1085,23 @@ func normalizeDeviceName(s string) string {
 }
 
 // canonicalizeDeviceName returns the canonical form of a device name for OOS
-// neighbour matching. When StrictDeviceNameMatching is enabled (default since
-// v1.3.0), only case-folding is applied (preserving domain suffixes so
-// "core-sw.dc1" and "core-sw.dc2" remain distinct). When explicitly disabled,
-// it delegates to normalizeDeviceName which strips domain suffixes — the
+// neighbour matching. The default since v1.3.0 is strict matching: only
+// case-folding is applied (preserving domain suffixes so "core-sw.dc1" and
+// "core-sw.dc2" remain distinct). When LooseDeviceNameMatching is true, it
+// delegates to normalizeDeviceName which strips domain suffixes — the
 // pre-v1.3.0 behaviour for single-site reconciliation of FQDN/short pairs.
-//
-// A nil pointer is treated as the safe default (strict). applyDefaults
-// populates the pointer on config load; this defensive check protects test
-// fixtures that build Hub structs directly.
 func (h *Hub) canonicalizeDeviceName(s string) string {
-	strict := h.cfg.Hub.StrictDeviceNameMatching
-	if strict == nil || *strict {
-		return strings.ToLower(s)
+	if h.cfg.Hub.LooseDeviceNameMatching {
+		return normalizeDeviceName(s)
 	}
-	return normalizeDeviceName(s)
+	return strings.ToLower(s)
 }
 
 // appendEdgePair appends a forward and reverse discovery.Edge to edges and
 // returns the extended slice. Both edges share the same protocol, link kind,
 // confidence, and precedence rank; direction is always unidirectional because
 // the hub's Reconcile pass promotes to bidirectional when both sides are seen.
-func appendEdgePair(edges []discovery.Edge, src, srcPort, dst, dstPort, proto, linkKind string, confidence discovery.Confidence, rank int) []discovery.Edge {
+func appendEdgePair(edges []discovery.Edge, src, srcPort, dst, dstPort string, proto discovery.DiscoveryProtocol, linkKind discovery.LinkKind, confidence discovery.Confidence, rank int) []discovery.Edge {
 	base := discovery.Edge{
 		DiscoveryProto: proto,
 		Direction:      discovery.DirectionUnidirectional,

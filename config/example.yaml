@@ -53,14 +53,17 @@ modules:
     enabled: true              # CISCO-CDP-MIB
   bgp:
     enabled: false             # RFC 4273 BGP4-MIB (IPv4) + BGP4-V2 / vendor tables (IPv6)
-    # use_v2_mib: true         # default true since v1.3.0. When true, the walker
-    #                          # tries bgp4V2PeerTable (IETF draft form, covers
-    #                          # Arista) and then vendor tables (cbgpPeer2Table on
-    #                          # Cisco, jnxBgpM2PeerTable on Juniper, tBgpPeerTable
-    #                          # on Nokia) before falling back to RFC 4273. This
+    # disable_v2_mib: false    # default false since v1.4.0 (v2 walkers enabled).
+    #                          # When v2 walkers are on, the BGP walker tries
+    #                          # bgp4V2PeerTable (IETF draft form, covers Arista)
+    #                          # and then vendor tables (cbgpPeer2Table on Cisco,
+    #                          # jnxBgpM2PeerTable on Juniper, tBgpPeerTable on
+    #                          # Nokia) before falling back to RFC 4273. This
     #                          # surfaces IPv6 BGP sessions that RFC 4273 cannot
-    #                          # represent. Set to false to revert to RFC 4273-only
-    #                          # if a vendor regression appears.
+    #                          # represent. Set to true to revert to RFC 4273-only
+    #                          # if a vendor regression appears. Replaces the
+    #                          # v1.3.0 `use_v2_mib` key (still accepted with a
+    #                          # deprecation warning; removed in v1.5.0).
   ospf:
     enabled: false             # RFC 4750 OSPF-MIB
   fdb:
@@ -136,13 +139,15 @@ snapshot:
 #     tls_cert:    /etc/topology-exporter/pki/hub.crt
 #     tls_key:     /etc/topology-exporter/pki/hub.key
 #
-#     # Cross-site device name handling. When true (default since v1.3.0), device
-#     # names are only lowercased for matching — FQDN suffixes are preserved so
-#     # "core-sw.dc1" and "core-sw.dc2" remain distinct. Set to false ONLY for
-#     # single-site deployments where mixed short/FQDN forms of the same device
-#     # must reconcile (e.g. one spoke reports "core-01" while another reports
-#     # "core-01.internal.corp" for the same physical device).
-#     # strict_device_name_matching: true
+#     # Cross-site device name handling. Default false (strict) since v1.3.0:
+#     # device names are only lowercased for matching — FQDN suffixes are
+#     # preserved so "core-sw.dc1" and "core-sw.dc2" remain distinct. Set to
+#     # true ONLY for single-site deployments where mixed short/FQDN forms of
+#     # the same device must reconcile (e.g. one spoke reports "core-01" while
+#     # another reports "core-01.internal.corp" for the same physical device).
+#     # Replaces the v1.3.0 `strict_device_name_matching` key (still accepted
+#     # with a deprecation warning; removed in v1.5.0).
+#     # loose_device_name_matching: false
 #
 #     # Graph size admission control for the hub's combined graph.
 #     # max_graph_devices: 10000

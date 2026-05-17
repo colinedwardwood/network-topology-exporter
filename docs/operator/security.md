@@ -1,0 +1,63 @@
+# Security: credential handling
+
+SNMP credentials — SNMPv2c community strings and SNMPv3 auth/priv keys — live in process memory for at least as long as the exporter is running a discovery cycle against a device. This document covers the in-memory credential threat model, the mitigations the exporter implements, what those mitigations cannot do, and the operator-level controls that fill the gaps.
+
+## Threat model: in-memory credential exposure
+
+The exporter resolves credentials from environment variables at the start of every discovery cycle, holds them in memory while talking to each device, and discards them at the end of the cycle. While they are in memory, a process-memory disclosure event leaks every credential the exporter has touched. The realistic ways that happens:
+
+1. **Core dump.** A panic or `SIGQUIT` that hits a kernel with `kernel.core_pattern` configured to write a dump file leaves the full address space on disk. Anyone with read access to that file recovers every credential the exporter held at the moment of the dump.
+2. **Container memory snapshot.** Most container runtimes can snapshot a running container's memory (CRIU, `docker checkpoint`, Kubernetes `kubectl debug --copy-to`). The snapshot contains the same data a core dump would, and is usually written to a location with looser permissions than the container itself.
+3. **`/proc/<pid>/mem` read.** A privileged process or a sibling container with `CAP_SYS_PTRACE` can read the exporter's memory directly without leaving a forensic trace.
+4. **Memory-image forensics on host compromise.** If the host is compromised, the attacker can dump physical memory from the hypervisor or kernel and grep for credentials in the exporter's pages.
+
+None of these require the attacker to break SNMP, the network, or the exporter's TLS configuration. They require only enough access to read the exporter's memory.
+
+## Mitigation: zeroization
+
+The exporter stores SNMP credential fields as `[]byte` in `internal/discovery/snmp.Params` rather than as Go `string`. Go strings are immutable and the runtime cannot guarantee a string's backing memory will be released or overwritten before the next GC cycle. A `[]byte` is mutable: the code can call `Zeroize()` to overwrite the backing memory with zeros and drop the reference.
+
+`Zeroize()` runs at two points:
+
+1. **End of every per-device walk.** The per-device goroutine in `runCycle` (cmd/topology-exporter/main.go) wraps the resolved `Params` in a `defer params.Zeroize()` immediately after the SNMP system-group walk succeeds. When the goroutine returns — successful walk, failed walk, panic recovery, context cancellation — the credentials are overwritten before the goroutine exits.
+2. **Discovery-cycle failures.** `walkSystemWithCredentials` tries each candidate credential in turn and zeroizes the bytes of every candidate as soon as that candidate is either confirmed not the winner or the calling context is cancelled. The winning candidate's bytes survive only until the per-device defer runs.
+
+On `SIGTERM`/`SIGINT`, `signal.NotifyContext` cancels the discovery loop's context. The in-flight cycle's per-device goroutines see `cycleCtx.Done()`, unwind, and their `defer params.Zeroize()` fires before `runCycle` returns. The discovery loop logs `snmp credentials zeroized; shutting down discovery loop` so the zeroization is visible in shutdown logs.
+
+The credential resolver (`internal/credentials.Resolver`) does not hold credential bytes between cycles. Its per-device cache stores only the *profile name* that previously authenticated for a given IP. Actual credential bytes are pulled fresh from `os.Getenv` at the start of every cycle, which means there is nothing to zeroize at the resolver level on shutdown.
+
+## What zeroization does not do
+
+Zeroization is best-effort. Several gaps are inherent to running on a managed-memory runtime:
+
+1. **Go GC may have copied the bytes elsewhere.** When a `[]byte` is appended to, passed across a goroutine boundary, or its containing struct escapes to the heap, the runtime may copy the underlying bytes. `Zeroize()` overwrites the slice the code holds a reference to, not any copy the GC has already made. The original copy gets collected eventually, but the timing is not under the exporter's control.
+2. **Conversion to `string` makes an immutable copy.** The upstream `github.com/gosnmp/gosnmp` library exposes `Community`, `AuthenticationPassphrase`, and `PrivacyPassphrase` as Go `string` fields. The exporter passes credentials in via `string(p.Community)` at the gosnmp boundary in `buildClient`. That conversion allocates a fresh string whose bytes Zeroize cannot reach. The string survives for the lifetime of the gosnmp session (one device walk). It then becomes unreachable, and is reclaimable, when the gosnmp client is garbage-collected. The exporter does not retain the gosnmp session after a walk.
+3. **Environment variables are out of scope.** The credentials originate from `os.Getenv`. The Go standard library backs `os.Getenv` with a process-wide environment map that the exporter cannot reach into and overwrite. Anyone with `/proc/<pid>/environ` access reads credentials directly from there, bypassing the exporter's in-memory copies entirely.
+4. **Not constant-time.** `Zeroize()` uses a simple `for i := range b { b[i] = 0 }` loop. Timing side channels on the zeroization operation are not in this threat model. (Constant-time matters when an attacker can observe the timing of credential *comparison*; this code only overwrites.)
+
+## Operator guidance
+
+Software mitigations only go so far. The following operator-level controls cover the gaps above:
+
+- **Restrict who can read process memory.** On the container runtime, drop `CAP_SYS_PTRACE` from the exporter's container and from any sibling container that runs in the same pod. On a bare-metal host, configure `kernel.yama.ptrace_scope=1` (or stricter) so non-privileged users cannot attach to the exporter.
+- **Restrict `/proc` visibility.** Mount `/proc` with `hidepid=2` so only the exporter's own UID can see its `/proc/<pid>` entries. In Kubernetes, set `securityContext.procMount: Unmasked` only when absolutely necessary; the default `DefaultProcMount` hides most of `/proc` from sibling containers.
+- **Disable or encrypt core dumps.** Set `ulimit -c 0` for the exporter process, or — if you need crash dumps — encrypt them at the file-system layer. Disable `kernel.core_pattern` redirects that pipe cores to network destinations.
+- **Restrict environment variable visibility.** `/proc/<pid>/environ` is readable by the exporter's own UID by default. If you use a process-spawning supervisor (systemd, container runtime), arrange for the supervisor to clear the env after passing it to the exporter, or use a credential-file mechanism the supervisor pipes in over a socket.
+- **Rotate SNMP credentials on a schedule.** The exporter has no rotation mechanism yet; rotation is a separate workstream beyond this issue. Until that lands, plan periodic credential rotation as part of your normal SNMP credential lifecycle — once per quarter is a reasonable baseline for read-only credentials. Restart the exporter after rotating so it picks up the new values from the environment.
+- **Audit who has access to memory snapshots and core-dump locations.** If your platform writes them to S3, NFS, or a sidecar volume, treat that storage as if it contained the credentials in plaintext — because it does.
+
+## Out of scope
+
+This document covers in-memory credential exposure. The following are intentionally out of scope:
+
+- **Credential rotation.** Tracked as a follow-up workstream. The current implementation re-reads `os.Getenv` at every cycle, so an operator can already approximate rotation by updating the environment and restarting the exporter, but the exporter does not detect or coordinate the rotation itself.
+- **Cryptographic key wrapping or HSM integration.** Storing credentials in a hardware security module or wrapping them with an in-process key would protect against the runtime-memory exposure vector, but the cost (operational complexity, dependency footprint, deployment surface) is not justified for the threat profile of an internal-network monitoring exporter. Operators who need HSM-backed credentials should use a sidecar to fetch credentials and pass them in via environment or file.
+- **Network-side SNMP credential exposure.** SNMPv2c sends the community in plaintext on the wire. Use SNMPv3 (`v3` profile type) with `authPriv` security level for any device that handles credentials you care about over an untrusted network segment. The exporter validates that the requested `auth_protocol` and `priv_protocol` are non-empty for `authPriv` profiles; it does not, by design, support `noAuthNoPriv` v3 sessions for production use.
+- **TLS-handshake-time secrets.** This document is about SNMP credentials. Federation mTLS keys, OTLP exporter credentials, and HTTP server TLS keys are handled by their respective standard-library packages and live in their own memory regions; the threat model is the same but the mitigation surface is different.
+
+## References
+
+- Issue #5 — the GitHub issue that motivated this work.
+- `internal/discovery/snmp/zeroize.go` — the `Zeroize()` implementation and `zeroBytes` helper.
+- `internal/discovery/snmp/snmp.go` — the `Params` struct that holds credentials.
+- `cmd/topology-exporter/main.go` — `walkSystemWithCredentials` (candidate-trial zeroization) and `runCycle` (per-device defer).
