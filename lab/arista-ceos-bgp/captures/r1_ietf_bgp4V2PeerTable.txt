@@ -1,0 +1,8 @@
+# captured 2026-05-16T23:59:23Z
+# device: Arista cEOS 4.36.0F-47083774.4360F (engineering build, cEOSLab)
+# image:  ceos:4.36.0F (sysObjectID .1.3.6.1.4.1.30065.1.2600)
+# node:   r1
+# host:   172.20.20.13
+# oid root: 1.3.6.1.3.5.1.1.2
+
+.1.3.6.1.3.5.1.1.2 = No Such Object available on this agent at this OID
