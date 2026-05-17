@@ -36,14 +36,14 @@ declare -a OIDS=(
   # RFC 4273 bgpPeerTable — IPv4-only baseline. Walker: rfc4273 (fallback).
   "1.3.6.1.2.1.15.3"
 
-  # CISCO-BGP4-MIB cbgpPeer2Table — the IPv6-capable Cisco vendor table.
-  # Walker: vendor_cisco. THIS is the high-value capture: the column
-  # numbers in internal/discovery/bgp/bgp_vendor.go (state=3, remoteAddr=11,
-  # remoteAs=13) were transcribed from MIB documentation, not verified.
+  # CISCO-BGP4-MIB cbgpPeer2Table — Cisco vendor table.
+  # Walker: vendor_cisco. Column numbers verified 2026-05-16 against
+  # this lab (state=3, remoteAs=11; peer IP encoded in the index).
   "1.3.6.1.4.1.9.9.187.1.2.5"
 
-  # IETF draft bgp4V2PeerTable. Walker: v2_draft. Likely empty on Cisco
-  # (this draft is primarily Arista-native) but worth probing.
+  # IETF draft bgp4V2PeerTable. Captured for evidence — the v2_draft
+  # walker was removed in issue #31 after this probe showed no vendor
+  # implements the experimental-tree OID.
   "1.3.6.1.3.5.1.1.2"
 )
 

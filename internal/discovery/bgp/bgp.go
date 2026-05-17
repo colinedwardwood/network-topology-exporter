@@ -92,10 +92,16 @@ func recordWalkerOutcome(walker, outcome string) {
 }
 
 // Walker label constants. Keep these in sync with the metric's documented
-// label set in internal/metrics/metrics.go.
+// label set in internal/metrics/metrics.go and docs/metrics.md.
+//
+// The "v2_draft" label that previously identified the (now removed)
+// IETF-draft-OID walker was retired in issue #31. Operators alerting on
+// network_topology_bgp_walker_outcome_total{walker="v2_draft"} must
+// migrate to one of the remaining labels (typically vendor_arista or
+// rfc4273 depending on the device fleet).
 const (
-	walkerV2Draft       = "v2_draft"
 	walkerVendorCisco   = "vendor_cisco"
+	walkerVendorArista  = "vendor_arista"
 	walkerVendorJuniper = "vendor_juniper"
 	walkerVendorNokia   = "vendor_nokia"
 	walkerRFC4273       = "rfc4273"
@@ -107,6 +113,8 @@ func vendorWalkerLabel(specName string) string {
 	switch specName {
 	case ciscoCbgpPeer2Spec.name:
 		return walkerVendorCisco
+	case aristaBgp4v2Spec.name:
+		return walkerVendorArista
 	case juniperJnxBgpM2PeerSpec.name:
 		return walkerVendorJuniper
 	case nokiaTBgpPeerSpec.name:
@@ -149,14 +157,20 @@ type bgpPeer struct {
 //  1. bgp4V2PeerTable (IETF draft form) — covers Arista natively and any
 //     other vendor that implements the draft. If non-empty, used exclusively.
 //  2. Vendor-specific peer table (Cisco cbgpPeer2Table, Juniper
-//     jnxBgpM2PeerTable, Nokia tBgpPeerTable) selected by p.Vendor. If
-//     non-empty, used exclusively. Surfaces IPv6 sessions that RFC 4273
-//     cannot represent.
-//  3. RFC 4273 bgpPeerTable — final fallback, IPv4-only.
+//     jnxBgpM2PeerTable, Nokia tBgpPeerTable, Arista enterprise BGP4V2)
+//     selected by p.Vendor. If non-empty, used exclusively. Surfaces IPv6
+//     sessions that RFC 4273 cannot represent.
+//  2. RFC 4273 bgpPeerTable — final fallback, IPv4-only.
 //
-// When p.UseBGPV2MIB is false, only step 3 runs. This kill-switch exists so
-// operators who hit a vendor regression in the v2 walker can revert to the
-// pre-v1.3.0 IPv4-only behaviour with one config flag.
+// When p.UseBGPV2MIB is false, only step 2 runs. This kill-switch exists so
+// operators who hit a vendor regression in the vendor walker can revert
+// to the pre-v1.3.0 IPv4-only behaviour with one config flag.
+//
+// History: a "v2_draft" walker that probed the IETF draft form OID
+// 1.3.6.1.3.5.1.1.2 was previously Step 1 of this chain. Issue #31
+// removed it after real-device captures showed no vendor implements the
+// draft at that OID; each vendor publishes under its enterprise OID
+// instead. See plans/bgp4v2-ipv6.md for the design history.
 func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
 	client, err := snmputil.Open(p)
 	if err != nil {
@@ -164,51 +178,34 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	}
 	defer func() { _ = client.Conn.Close() }()
 
-	// v2Err holds a v2 draft walk error so we can promote it to Warn iff a
-	// later walker succeeds. Per issue #8: a silently-discarded v2 error
-	// while RFC 4273 limps along masks the real failure (vendor MIB column
-	// drift) — log at Warn when the fallback chain papered over a v2 error.
-	var v2Err error
-	// vendorErr / vendorSpec capture the vendor-walk error for the same
-	// promotion rationale.
+	// vendorErr / vendorSpec capture a vendor-walk error so we can promote
+	// it to Warn iff RFC 4273 succeeds afterwards. Per issue #8: a silently
+	// discarded vendor error while RFC 4273 limps along masks the real
+	// failure (vendor MIB column drift); the Warn surfaces it once we know
+	// the device at least responds to BGP-related SNMP.
 	var vendorErr error
 	var vendorSpec *vendorTableSpec
 
 	if p.UseBGPV2MIB {
-		// Step 1: try the IETF draft form first.
-		edges, oos, ok, err := walkAndBuildV2Edges(ctx, client, localDevice, allowedNets)
-		if err != nil {
-			// A walk error here doesn't fail the module — the device may simply
-			// not implement the draft. Stash the error and fall through; if a
-			// later walker succeeds we promote this to Warn (see end of fn).
-			v2Err = err
-		} else if ok {
-			return edges, oos, nil
-		}
-
-		// Step 2: try the vendor-specific table.
+		// Step 1: try the vendor-specific table.
 		if spec := vendorSpecFor(resolveVendor(ctx, p, client)); spec != nil {
 			vendorSpec = spec
 			edges, oos, ok, err := walkAndBuildVendorEdges(ctx, client, *spec, localDevice, allowedNets)
 			if err != nil {
 				vendorErr = err
 			} else if ok {
-				if v2Err != nil {
-					slog.Warn("bgp v2: draft walk error, vendor table succeeded", "target", p.IP, "error", v2Err, "vendor_table", spec.name)
-				}
 				return edges, oos, nil
 			}
 		}
 	}
 
-	// Step 3 (always-on fallback): RFC 4273 bgpPeerTable.
+	// Step 2 (always-on fallback): RFC 4273 bgpPeerTable.
 	//
-	// Outcome accounting (issue #15): the RFC 4273 path now distinguishes
+	// Outcome accounting (issue #15): the RFC 4273 path distinguishes
 	// "mib_unimplemented" (BulkWalk produced zero PDUs — device does not
 	// support the RFC 4273 BGP4-MIB at all, expected for non-BGP devices)
 	// from "no_peers" (PDUs arrived but no peer reached established —
-	// device implements the MIB but BGP is down). Operators alerting on
-	// the legacy "empty" outcome should switch to "no_peers".
+	// device implements the MIB but BGP is down).
 	peers, hadPDUs, err := walkBgpPeerTable(ctx, client)
 	if err != nil {
 		recordWalkerOutcome(walkerRFC4273, "error")
@@ -224,13 +221,11 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 		recordWalkerOutcome(walkerRFC4273, "mib_unimplemented")
 	}
 
-	// Promote earlier errors to Warn now that a later walker delivered. If
-	// neither v2 nor the vendor walker errored, this block is a no-op.
-	if v2Err != nil {
-		slog.Warn("bgp v2: draft walk error, RFC 4273 fallback succeeded", "target", p.IP, "error", v2Err)
-	}
+	// Promote a stashed vendor-walker error to Warn now that RFC 4273
+	// delivered. If the vendor path didn't error, this is a no-op.
 	if vendorErr != nil && vendorSpec != nil {
-		slog.Warn("bgp v2: vendor walk error, RFC 4273 fallback succeeded", "target", p.IP, "vendor_table", vendorSpec.name, "error", vendorErr)
+		slog.Warn("bgp vendor: walk error, RFC 4273 fallback succeeded",
+			"target", p.IP, "vendor_table", vendorSpec.name, "error", vendorErr)
 	}
 	return edges, oos, nil
 }

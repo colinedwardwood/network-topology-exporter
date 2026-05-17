@@ -1,16 +1,16 @@
 # Lab — arista-ceos-bgp
 
 2-node Arista cEOS iBGP topology for capturing real-device SNMP
-fixtures for the **v2_draft walker** at
-`internal/discovery/bgp/bgp_v2.go`.
+fixtures for the **`vendor_arista`** walker.
 
-Arista EOS implements the IETF draft `bgp4V2PeerTable` natively at OID
-`1.3.6.1.3.5.1.1.2`. That's the **primary** target of our v2_draft
-walker — the one the project's BGP4-V2 work was designed around. Cisco
-and Juniper require separate vendor walkers; Arista is the canonical
-IETF-form vendor. This lab's snmpwalks become the real-device fixture
-the synthetic test cases in `bgp_v2_test.go` should be cross-checked
-against.
+**2026-05-16 finding**: Arista cEOS 4.36 does **NOT** implement the
+IETF draft `bgp4V2PeerTable` at OID `1.3.6.1.3.5.1.1.2` (the OID we
+originally designed around). Arista publishes the same MIB shape under
+its enterprise OID at `1.3.6.1.4.1.30065.4.1.1.2`. Issue #31 removed
+the original `v2_draft` walker and added `vendor_arista` walker targeting
+the enterprise OID; column numbers (state=13, RemoteAs=10) and index
+format (`<peerInst>.<addrType>.<addrLen>.<addr...>`) come from the
+captures landed here.
 
 Related issues: [#1](https://github.com/colinedwardwood/network-topology-exporter/issues/1) (BGP4-V2 vendor fixtures), [#31](https://github.com/colinedwardwood/network-topology-exporter/issues/31) (vendor_cisco walker bugs surfaced from the cisco-iol-bgp captures).
 
@@ -64,12 +64,13 @@ the primary target of the v2_draft walker.
 
 ## OIDs probed
 
-| Root | Walker | Purpose |
+| Root | Walker (post-#31) | Purpose |
 |---|---|---|
 | `1.3.6.1.2.1.1` | (sys group) | sysObjectID for vendor detection (Arista enterprise prefix 30065) |
 | `1.3.6.1.2.1.15.3` | `rfc4273` (fallback) | Confirms Arista responds to RFC 4273 baseline |
-| `1.3.6.1.3.5.1.1.2` | **`v2_draft`** | The capture |
+| `1.3.6.1.3.5.1.1.2` | (removed) | Captured to prove the IETF draft OID is empty on Arista — directly informed the #31 walker rewrite |
 | `1.3.6.1.4.1.9.9.187.1.2.5` | `vendor_cisco` | Expected empty — Arista doesn't implement Cisco's MIB |
+| `1.3.6.1.4.1.30065.4.1.1.2` | **`vendor_arista`** | The canonical capture for the new walker |
 
 ## Destroy
 
