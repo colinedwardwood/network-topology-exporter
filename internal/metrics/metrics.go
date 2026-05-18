@@ -271,7 +271,7 @@ func New(emitBoundaryObs bool) *Metrics {
 		}),
 		BGPWalkerOutcomeTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "network_topology_bgp_walker_outcome_total",
-			Help: "BGP walker pass outcomes. walker ∈ {v2_draft, vendor_cisco, vendor_juniper, vendor_nokia, rfc4273}; outcome ∈ {edges, empty, error, malformed_index}.",
+			Help: "BGP walker pass outcomes. walker ∈ {vendor_cisco, vendor_arista, vendor_juniper, vendor_nokia, rfc4273}; outcome ∈ {edges, mib_unimplemented, no_peers, walker_drift, malformed_index, error}.",
 		}, []string{"walker", "outcome"}),
 		MetricsPayloadBytes: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name: "network_topology_metrics_payload_bytes",

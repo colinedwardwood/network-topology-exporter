@@ -53,7 +53,7 @@ modules:
     enabled: true              # CISCO-CDP-MIB
   bgp:
     enabled: false             # RFC 4273 BGP4-MIB (IPv4) + BGP4-V2 / vendor tables (IPv6)
-    # disable_v2_mib: false    # default false since v1.4.0 (v2 walkers enabled).
+    # disable_v2_mib: false    # default false since v1.3.0 (v2 walkers enabled).
     #                          # When v2 walkers are on, the BGP walker tries
     #                          # bgp4V2PeerTable (IETF draft form, covers Arista)
     #                          # and then vendor tables (cbgpPeer2Table on Cisco,

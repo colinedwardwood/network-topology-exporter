@@ -39,12 +39,15 @@ Four operational commitments:
 │   │   └── spoke.go                  # pushes graph to hub after each cycle
 │   └── discovery/
 │       ├── discovery.go              # shared Device / Edge / OutOfScopeNeighbour types + interfaces
-│       ├── snmp/                     # SYSTEM group walk (RFC 1907)
-│       ├── lldp/                     # IEEE 802.1AB / RFC 4957
+│       ├── snmp/                     # SYSTEM group walk (RFC 3418)
+│       ├── lldp/                     # IEEE 802.1AB LLDP-MIB
 │       ├── cdp/                      # CISCO-CDP-MIB
-│       ├── bgp/                      # RFC 1657 BGP4-MIB (v0.2+)
-│       ├── ospf/                     # RFC 4750 OSPF-MIB (v0.2+)
-│       └── fdb/                      # RFC 4188 BRIDGE-MIB dot1dTpFdbTable
+│       ├── bgp/                      # RFC 4273 BGP4-MIB + BGP4-V2 vendor tables (Cisco/Arista/Juniper/Nokia)
+│       ├── ospf/                     # RFC 4750 OSPF-MIB
+│       ├── isis/                     # IS-IS adjacency walk (ISIS-MIB draft)
+│       ├── mpls/                     # MPLS-TE-STD-MIB tunnel discovery
+│       ├── arp/                      # IP-MIB ipNetToPhysicalTable (FDB enrichment only — not an edge source)
+│       └── fdb/                      # RFC 4188 BRIDGE-MIB dot1dTpFdbTable, RFC 4363 dot1qTpFdbTable
 ├── config/example.yaml               # documented configuration schema
 └── docs/operator/                    # runbooks
 ```
@@ -62,7 +65,7 @@ for each IP in cidr_allow_list, in parallel up to parallelism:
   credentials.AcquireTrial(ctx)        ── token-bucket (LD-12)
   device = snmp.Walk(ip, profile)      ── populates DeviceInfo
   credentials.RecordSuccess(device.ID, profile)
-  for each enabled module (lldp, cdp, bgp, ospf, fdb):
+  for each enabled module (lldp, cdp, bgp, ospf, isis, mpls_te, fdb; arp enriches fdb):
     result = module.Probe(ip)
     for each out-of-scope neighbour: log line + counter (LD-11)
 
@@ -105,7 +108,7 @@ preserving best-effort behavior for non-critical enrichments.
 
 ## Concurrency
 
-The discovery scheduler runs one cycle at a time. Inside a cycle, a bounded worker pool of `discovery.parallelism` goroutines (default 20) probes devices concurrently, each bounded by `discovery.timeout_per_device`. If a cycle overruns `discovery.interval`, the next cycle starts immediately — no queuing. `network_topology_discovery_cycle_duration_seconds` is the operator's signal that the interval needs to grow.
+The discovery scheduler runs one cycle at a time. Inside a cycle, a bounded worker pool of `discovery.parallelism` goroutines (default 32; `config/example.yaml` ships with the override 20) probes devices concurrently, each bounded by `discovery.timeout_per_device`. If a cycle overruns `discovery.interval`, the next cycle starts immediately — no queuing. `network_topology_discovery_cycle_duration_seconds` is the operator's signal that the interval needs to grow.
 
 The credential trial limiter is shared across the worker pool so the global trial rate stays at `credentials.trial_rate_per_second` regardless of pool size. `TopologyCollector` holds the current graph in an `atomic.Pointer[discovery.Graph]`: `Update()` stores a new immutable snapshot atomically and `Collect()` loads it, so concurrent scrapes read the same snapshot with no lock contention and no empty-window gap. The credential cache uses a `sync.RWMutex`: success recorders hold the write lock briefly; scrapes take an RLock.
 
@@ -137,4 +140,4 @@ Automatic cross-boundary stitching — in both uncoordinated and hub/spoke modes
 
 **LD-20: Hub/spoke channel requires mutual TLS.**
 
-The hub's `/spoke/push` HTTP endpoint accepts a `SpokePayload` that passes through `graph.Reconcile` and is then emitted directly as Prometheus metrics. Without transport-layer authentication, any host that can reach the hub's listen port can POST fabricated device and edge data — topology poisoning with no detection path, since the hub has no way to distinguish a legitimate spoke payload from a crafted one after the fact. A large fabricated payload also triggers unbounded growth in the Prometheus registry (one GaugeVec label tuple per fabricated edge), producing an out-of-memory kill vector. Spoke impersonation — a rogue spoke using a legitimate spoke's identifier — silently replaces correct topology data. The minimum viable protection is mutual TLS: each spoke presents a client certificate signed by an operator-controlled CA; the hub verifies the full certificate chain before processing the payload and rejects the connection at the TLS handshake if verification fails. Bearer token authentication in the `Authorization` header is operationally simpler but is vulnerable to credential theft on compromised management networks; for a component that directly governs what appears in network topology metrics and therefore what alerts fire, mTLS is the appropriate minimum. `federation.hub.tls_ca`, `federation.hub.tls_cert`, and `federation.hub.tls_key` control hub-side TLS; `federation.spoke.tls_ca`, `federation.spoke.tls_cert`, and `federation.spoke.tls_key` control the spoke client certificate. Both sides must be configured; the hub rejects plaintext connections.
+The hub's `/spoke/push` HTTP endpoint accepts a `SpokePayload` that passes through `graph.Reconcile` and is then emitted directly as Prometheus metrics. Without transport-layer authentication, any host that can reach the hub's listen port can POST fabricated device and edge data — topology poisoning with no detection path, since the hub has no way to distinguish a legitimate spoke payload from a crafted one after the fact. A large fabricated payload also triggers unbounded growth in the Prometheus registry (one GaugeVec label tuple per fabricated edge), producing an out-of-memory kill vector. Spoke impersonation — a rogue spoke using a legitimate spoke's identifier — silently replaces correct topology data. The minimum viable protection is mutual TLS: each spoke presents a client certificate signed by an operator-controlled CA; the hub verifies the full certificate chain before processing the payload and rejects the connection at the TLS handshake if verification fails. Bearer token authentication in the `Authorization` header is operationally simpler but is vulnerable to credential theft on compromised management networks; for a component that directly governs what appears in network topology metrics and therefore what alerts fire, mTLS is the appropriate minimum. `federation.hub.tls_ca_cert`, `federation.hub.tls_cert`, and `federation.hub.tls_key` control hub-side TLS; `federation.spoke.tls_ca_cert`, `federation.spoke.tls_cert`, and `federation.spoke.tls_key` control the spoke client certificate. Both sides must be configured; the hub rejects plaintext connections.

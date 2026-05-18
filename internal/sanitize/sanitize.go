@@ -28,12 +28,6 @@ import "unicode/utf8"
 // A maxBytes value <= 0 yields the empty string. The helper does not
 // modify s beyond slicing it; the returned string shares the input's
 // backing array.
-//
-// This helper consolidates three previously-duplicated truncation loops
-// in NormaliseName and SanitisePortName (internal/discovery/snmp/pdu.go)
-// and sanitizeLabel (internal/metrics/topology_collector.go). Each call
-// site retains its own auxiliary logic (lower-casing, control-character
-// filtering, etc.); this helper covers only the rune-boundary step.
 func TruncateAtRuneBoundary(s string, maxBytes int) string {
 	if maxBytes <= 0 {
 		return ""

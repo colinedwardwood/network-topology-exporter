@@ -9,8 +9,8 @@
 | **Cisco CDP (proprietary)** | `cdpCacheTable` walk; device ID, port ID, address decode | Implemented as a higher-precedence fallback for Cisco infrastructure that pre-dates LLDP deployment. |
 | **IEEE 802.1D-2004 (STP)** | `dot1dStpPortState` walk; forwarding(5) filter in FDB module | STP state used to suppress stale FDB entries on non-forwarding ports. |
 | **IEEE 802.1Q-2014 (VLANs)** | Q-BRIDGE-MIB `dot1qTpFdbTable`; VLAN-community string walk | FDB per-VLAN disambiguation for switches that partition FDB tables per VLAN. |
-| **IETF RFC 4363 (Bridge MIB)** | `dot1dTpFdbTable`, `dot1dBasePortTable` | Base FDB table walk for switches implementing B-MIB only. |
-| **IETF RFC 1493 (Bridge MIB, obsolete)** | Same as above | RFC 4363 supersedes 1493; we support both since deployed devices vary. |
+| **IETF RFC 4188 (Bridge MIB)** | `dot1dTpFdbTable`, `dot1dBasePortTable` | Base FDB table walk for switches implementing B-MIB only. RFC 4188 obsoletes RFC 1493. |
+| **IETF RFC 4363 (Q-Bridge MIB)** | `dot1qTpFdbTable` extensions | VLAN-aware forwarding-table extensions to the Bridge MIB. |
 | **IETF RFC 4273 (BGP4-MIB)** | `bgpPeerTable` walk; peer state, remote address, and remote AS decode | BGP peer adjacency edges at precedence rank 7. Remote AS is attached as edge metadata (`bgp.remote_as`). |
 | **IETF RFC 3414 (SNMP v3 USM)** | SNMPv3 USM with SHA-family auth (SHA / SHA-256 / SHA-384 / SHA-512) and AES-family priv (AES / AES-192 / AES-256). Per-profile credentials configured via `credentials.profiles[].type: snmp_v3`. | MD5 auth and DES priv are rejected at startup as cryptographically broken. |
 | **IETF RFC 4750 (OSPF-MIB)** | `ospfNbrTable` walk; neighbour state decode | OSPF adjacency edges at precedence rank 6. Supersedes the obsoleted RFC 1850. |
