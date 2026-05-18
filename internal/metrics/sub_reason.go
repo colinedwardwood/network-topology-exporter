@@ -48,19 +48,12 @@ func (r PushReason) Valid() bool {
 // String implements fmt.Stringer so values format identically in logs.
 func (r PushReason) String() string { return string(r) }
 
-// PushReason values. PushReasonNetwork covers the residual class of
-// transport errors that are not TLS-handshake failures and not
-// context-deadline timeouts — endpoint unreachable, DNS, connection
-// reset, EOF mid-response. Use it as the catch-all when nothing more
-// specific matches; sustained PushReasonNetwork without other signals
-// is the "collector probably down" case from the issue body.
-//
-// PushReasonPayloadRejected is reserved for 4xx responses that indicate
-// the receiver parsed our request but rejected its contents (schema
-// violations, mTLS allow-list miss, etc.); today's classifier folds all
-// 4xx into PushReasonHTTP4xx, but the constant is declared so a future
-// receiver-specific classifier can split it without another breaking
-// label change.
+// PushReason values. PushReasonNetwork is the catch-all for transport
+// errors not classified above (endpoint unreachable, DNS, connection
+// reset, EOF mid-response); sustained PushReasonNetwork without other
+// signals is the "collector probably down" case. PushReasonPayloadRejected
+// is reserved for a future receiver-specific classifier — today's
+// ClassifyPushError folds all 4xx into PushReasonHTTP4xx.
 const (
 	PushReasonTimeout         PushReason = "timeout"
 	PushReasonTLSError        PushReason = "tls_error"
@@ -73,24 +66,7 @@ const (
 // DiscoveryFailReason classifies a per-device discovery-cycle outcome
 // sub-reason. Combined with the existing status label (success | failed)
 // it forms the two dimensions of network_topology_discovery_devices_total.
-//
 // status="success" rows carry reason="n/a".
-//
-// DiscoveryReasonNoCredentials covers the case where no usable
-// credential profile matched the target before any SNMP packet was
-// sent; this is operationally distinct from auth_failed (a profile
-// was tried and rejected by the device) and from unreachable
-// (no network connectivity).
-//
-// DiscoveryReasonDNSFailed and DiscoveryReasonOutsideAllowList cover the
-// two pre-walk gates in cmd/topology-exporter/main.go: DNS resolution and
-// the CIDR allow-list. The previous status-only counter conflated these
-// with post-walk failures.
-//
-// DiscoveryReasonBudgetExpired covers the cycle-budget skip path. It is
-// distinct from timeout (a per-device deadline) because the discovery
-// loop never got the chance to start the probe — the cycle ran out of
-// wall time first.
 type DiscoveryFailReason string
 
 // Valid reports whether r is one of the declared DiscoveryFailReason

@@ -63,7 +63,7 @@ By default the listener binds plain HTTP on `:9100`. This is the canonical Prome
 
 If `/metrics` reaches a network where the trusted-network assumption does not hold, configure `listen.web_config_file` to point at a Prometheus [exporter-toolkit web-config](https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md) YAML. The toolkit is the same code path snmp_exporter, node_exporter, and blackbox_exporter use, and the YAML schema is shared across the ecosystem — operators already know it.
 
-Three deployment patterns, ordered by industry adoption:
+Three deployment patterns:
 
 **1. Push outbound (recommended for Grafana Cloud).** Run [Grafana Alloy](https://grafana.com/docs/alloy/) or `prometheus-agent` inside the private network alongside the exporter; configure Alloy's `prometheus.scrape` to talk to the exporter on a private address and `prometheus.remote_write` to push outbound to Grafana Cloud Mimir using a Cloud-issued token. No inbound auth required on the exporter — its `/metrics` surface stays on the private network.
 

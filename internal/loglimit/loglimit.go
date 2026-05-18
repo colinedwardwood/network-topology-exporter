@@ -64,9 +64,7 @@ const DefaultCooldown = time.Hour
 // failure dimensions per device.
 const DefaultMaxKeys = 4096
 
-// entry tracks the last-emit time per key. lastEmit is the wall-clock instant
-// at which the most recent passthrough Warn for this key was emitted; the
-// next emit is allowed when now() - lastEmit >= cooldown.
+// entry tracks the last-emit time per key.
 type entry struct {
 	lastEmit time.Time
 }
@@ -116,10 +114,7 @@ func NewWithClock(inner *slog.Logger, cooldown time.Duration, now func() time.Ti
 	}
 }
 
-// Inner returns the wrapped *slog.Logger so callers can emit Info/Error/Debug
-// without going through the rate limiter. The returned logger is the same
-// instance passed at construction time; mutating it affects all Warn calls
-// that fall through suppression.
+// Inner returns the wrapped logger for non-Warn emissions.
 func (l *Limiter) Inner() *slog.Logger {
 	if l == nil {
 		return slog.Default()

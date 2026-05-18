@@ -84,7 +84,7 @@ aggregation).
 Reproduce with `scripts/run-scale-bench.sh` (the runner stamps the host
 specs at the top of its result file).
 
-These numbers are **measured medians on one machine**. Real-world render
+These numbers are measured medians on one machine. Real-world render
 time depends on:
 
 - **Hardware vintage** — a modern data-centre Xeon/EPYC or Apple/ARM core

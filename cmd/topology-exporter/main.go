@@ -469,12 +469,9 @@ type loopConfig struct {
 	otlpWg        *sync.WaitGroup // tracks in-flight OTLP push goroutines for clean shutdown
 }
 
-// warnSnapshot emits a chronic-shape snapshot Warn through the per-cycle
-// rate limiter. The key combines the named site with the configured
-// snapshot path so two operators running on the same host but writing to
-// different snapshot files do not share a suppression slot. Falls back to
-// a direct slog.Warn when no limiter is configured (e.g. in tests that
-// construct loopConfig inline). See issue #16.
+// warnSnapshot rate-limits chronic snapshot Warns via lc.warnLimiter,
+// keyed on site+snapshot-path. Falls back to a direct slog.Warn when no
+// limiter is configured.
 func (lc loopConfig) warnSnapshot(ctx context.Context, site, msg string, attrs ...any) {
 	if lc.warnLimiter != nil {
 		key := "snapshot|" + site + "|" + lc.cfg.Snapshot.Path

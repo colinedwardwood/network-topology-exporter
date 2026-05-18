@@ -136,7 +136,7 @@ type FederationHubConfig struct {
 }
 
 // UnmarshalYAML accepts the legacy `strict_device_name_matching` key for one
-// minor release after the v1.4.0 rename to `loose_device_name_matching`.
+// minor release after the v1.3.0 rename to `loose_device_name_matching`.
 // Translation: an explicit `strict_device_name_matching: false` sets
 // `LooseDeviceNameMatching = true`; an explicit `true` (or omission) leaves
 // `LooseDeviceNameMatching` at its zero-value default (false = strict).
@@ -259,7 +259,7 @@ type BGPConfig struct {
 }
 
 // UnmarshalYAML accepts the legacy `use_v2_mib` key for one minor release
-// after the v1.4.0 rename to `disable_v2_mib`. Translation: an explicit
+// after the v1.3.0 rename to `disable_v2_mib`. Translation: an explicit
 // `use_v2_mib: false` sets `DisableV2MIB = true`; an explicit `true` (or
 // omission) leaves `DisableV2MIB` at its zero-value default (false = v2
 // enabled). EmitDeprecationWarnings logs a warning if the deprecated key was

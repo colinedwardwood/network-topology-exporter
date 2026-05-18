@@ -16,17 +16,8 @@
 package snmp
 
 // Zeroize overwrites the credential byte slices inside p with zeros and
-// drops the references so the underlying storage becomes garbage-collectable.
-// Safe to call on a zero-value Params or one that has already been zeroized.
-//
-// Best-effort only:
-//   - The Go GC may have copied these bytes elsewhere (stack growth, escape
-//     analysis, slice resizing). Zeroize cannot reach those copies.
-//   - Any conversion to string at the gosnmp boundary (see buildClient) makes
-//     an immutable copy that Zeroize cannot reach. The gosnmp library retains
-//     that copy for the lifetime of the *gosnmp.GoSNMP session.
-//
-// See docs/operator/security.md.
+// drops the references. Safe on a zero-value Params or one already zeroized.
+// See docs/operator/security.md for the threat model and limitations.
 func (p *Params) Zeroize() {
 	if p == nil {
 		return
