@@ -1,13 +1,21 @@
 # Changelog
 
-## Unreleased — planned as v1.3.0
+## Unreleased — planned as v1.3.1
 
-The next release is committed to ship as **v1.3.0**. Inline references to
-"v1.3.0" in this changelog and in code comments (e.g. `internal/federation/hub.go`,
-`internal/config/config.go`, `docs/operator/scale.md`) refer to the same release.
-This commitment can be revised only by renaming the milestone
-[v1.3.0 — Post-Audit Hardening](https://github.com/colinedwardwood/network-topology-exporter/milestones)
-and doing a project-wide string update at that time.
+The next release is the v1.3.1 lab-fixture-capture milestone — see
+[v1.3.1 — Lab Fixture Capture](https://github.com/colinedwardwood/network-topology-exporter/milestones).
+Entries below will be added as the milestone work lands.
+
+## v1.3.0 — 2026-05-17
+
+Post-audit hardening. 25 changes (D22–D46) closing 18 issues filed by the
+May 2026 adversarial review and the adjacent-failure audits that followed.
+Themes: SNMP credential zeroization, `/metrics` authentication via the
+Prometheus exporter-toolkit, BGP walker structural rewrite informed by
+real-device captures, partitioned status counters, typed reject reasons
+and Edge enums, rate-limited chronic Warn logs, and measured-not-estimated
+scale benchmarks. Several breaking changes — operators upgrading from
+v1.2.0 should read the breaking-change entries below before deploying.
 
 ### Configuration (breaking)
 
