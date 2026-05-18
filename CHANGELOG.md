@@ -8,8 +8,9 @@ Entries below will be added as the milestone work lands.
 
 ## v1.3.0 — 2026-05-17
 
-Post-audit hardening. 25 changes (D22–D46) closing 18 issues filed by the
-May 2026 adversarial review. Themes: SNMP credential zeroization, `/metrics`
+Post-audit hardening. 25 numbered changes (D22–D46) covering 28 closed
+issues — the May 2026 adversarial review's findings plus the
+adjacent-failure issues uncovered during remediation. Themes: SNMP credential zeroization, `/metrics`
 authentication via the Prometheus exporter-toolkit, BGP walker structural
 rewrite informed by real-device captures, partitioned status counters,
 typed reject reasons and Edge enums, rate-limited chronic Warn logs, and
