@@ -26,6 +26,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/colinedwardwood/network-topology-exporter/internal/app"
 	"github.com/colinedwardwood/network-topology-exporter/internal/app/httpx"
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
@@ -94,7 +95,7 @@ func TestRunCycleTwoDevices(t *testing.T) {
 
 	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
 
-	g, _, _, _ := runCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil)
+	g, _, _, _ := app.RunCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil)
 
 	if len(g.Devices) != 2 {
 		t.Fatalf("expected 2 devices, got %d", len(g.Devices))
@@ -161,7 +162,7 @@ func TestRunCycleTriesFallbackCredentialProfiles(t *testing.T) {
 	}
 
 	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
-	g, _, _, _ := runCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil)
+	g, _, _, _ := app.RunCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil)
 
 	if len(g.Devices) != 1 {
 		t.Fatalf("expected fallback credential to discover 1 device, got %d", len(g.Devices))
@@ -179,7 +180,7 @@ func TestProfileToParams(t *testing.T) {
 	t.Run("v2c_ok", func(t *testing.T) {
 		t.Setenv("TEST_COMM", "secret")
 		p := config.CredentialProfile{Type: config.ProfileTypeSNMPv2c, CommunityEnv: "TEST_COMM"}
-		params, err := profileToParams(ip, port, timeout, p)
+		params, err := app.ProfileToParams(ip, port, timeout, p)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -191,7 +192,7 @@ func TestProfileToParams(t *testing.T) {
 	t.Run("v2c_empty_env", func(t *testing.T) {
 		t.Setenv("TEST_COMM_EMPTY", "")
 		p := config.CredentialProfile{Type: config.ProfileTypeSNMPv2c, CommunityEnv: "TEST_COMM_EMPTY"}
-		_, err := profileToParams(ip, port, timeout, p)
+		_, err := app.ProfileToParams(ip, port, timeout, p)
 		if err == nil {
 			t.Fatal("expected error for empty community env, got nil")
 		}
@@ -203,7 +204,7 @@ func TestProfileToParams(t *testing.T) {
 			Type:        config.ProfileTypeSNMPv3,
 			UsernameEnv: "TEST_USER",
 		}
-		params, err := profileToParams(ip, port, timeout, p)
+		params, err := app.ProfileToParams(ip, port, timeout, p)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -221,7 +222,7 @@ func TestProfileToParams(t *testing.T) {
 			Type:        config.ProfileTypeSNMPv3,
 			UsernameEnv: "TEST_USER_EMPTY",
 		}
-		_, err := profileToParams(ip, port, timeout, p)
+		_, err := app.ProfileToParams(ip, port, timeout, p)
 		if err == nil {
 			t.Fatal("expected error for empty username env, got nil")
 		}
@@ -235,7 +236,7 @@ func TestProfileToParams(t *testing.T) {
 			UsernameEnv: "TEST_V3_USER_AUTHTEST",
 			AuthKeyEnv:  "TEST_V3_AUTH_KEY_UNSET",
 		}
-		_, err := profileToParams(ip, port, timeout, p)
+		_, err := app.ProfileToParams(ip, port, timeout, p)
 		if err == nil {
 			t.Fatal("expected error for unset auth_key_env, got nil")
 		}
@@ -254,7 +255,7 @@ func TestProfileToParams(t *testing.T) {
 			AuthKeyEnv:  "TEST_V3_AUTH_KEY_PRIVTEST",
 			PrivKeyEnv:  "TEST_V3_PRIV_KEY_UNSET",
 		}
-		_, err := profileToParams(ip, port, timeout, p)
+		_, err := app.ProfileToParams(ip, port, timeout, p)
 		if err == nil {
 			t.Fatal("expected error for unset priv_key_env, got nil")
 		}
@@ -265,7 +266,7 @@ func TestProfileToParams(t *testing.T) {
 
 	t.Run("unknown_type", func(t *testing.T) {
 		p := config.CredentialProfile{Type: "snmp_v1"}
-		_, err := profileToParams(ip, port, timeout, p)
+		_, err := app.ProfileToParams(ip, port, timeout, p)
 		if err == nil {
 			t.Fatal("expected error for unknown profile type, got nil")
 		}
@@ -347,7 +348,7 @@ func TestRunCycleLLDPEdge(t *testing.T) {
 
 	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
 
-	g, _, _, _ := runCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil)
+	g, _, _, _ := app.RunCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil)
 
 	if len(g.Devices) != 2 {
 		t.Fatalf("expected 2 devices, got %d", len(g.Devices))
@@ -418,12 +419,12 @@ func TestEmitBoundaryObservations(t *testing.T) {
 // threshold to strictly above (issue #9). Flat-above and downward
 // transitions must not re-emit.
 func TestMaybeWarnLargeTopologyEmitsOnlyOnUpwardCrossing(t *testing.T) {
-	const above = largeTopologyEdgeThreshold + 100
-	const below = largeTopologyEdgeThreshold - 100
+	const above = app.LargeTopologyEdgeThreshold + 100
+	const below = app.LargeTopologyEdgeThreshold - 100
 
 	// Cycle apart from each other by more than the cooldown so the
 	// cooldown does not suppress legitimate re-crossings.
-	step := largeTopologyWarnCooldownCycles + 1
+	step := app.LargeTopologyWarnCooldownCycles + 1
 
 	type tc struct {
 		name      string
@@ -445,7 +446,7 @@ func TestMaybeWarnLargeTopologyEmitsOnlyOnUpwardCrossing(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	prevAbove := false
-	lastWarnCycle := -largeTopologyWarnCooldownCycles
+	lastWarnCycle := -app.LargeTopologyWarnCooldownCycles
 	cycleNum := 0
 	for _, s := range steps {
 		cycleNum += step
@@ -454,7 +455,7 @@ func TestMaybeWarnLargeTopologyEmitsOnlyOnUpwardCrossing(t *testing.T) {
 		}
 		before := buf.Len()
 		var newLastWarn int
-		prevAbove, newLastWarn = maybeWarnLargeTopology(logger, s.edges, s.edges/10, prevAbove, cycleNum, lastWarnCycle)
+		prevAbove, newLastWarn = app.MaybeWarnLargeTopology(logger, s.edges, s.edges/10, prevAbove, cycleNum, lastWarnCycle)
 		emitted := buf.Len() > before
 		if emitted != s.wantWarn {
 			t.Errorf("%s: warn emitted = %v, want %v (cycle %d, edges %d)", s.name, emitted, s.wantWarn, cycleNum, s.edges)
@@ -474,17 +475,17 @@ func TestMaybeWarnLargeTopologyEmitsOnlyOnUpwardCrossing(t *testing.T) {
 // another upward crossing within the cooldown window does NOT re-emit
 // the warning (issue #9 rate-limit clause).
 func TestMaybeWarnLargeTopologyCooldownSuppressesOscillation(t *testing.T) {
-	const above = largeTopologyEdgeThreshold + 100
-	const below = largeTopologyEdgeThreshold - 100
+	const above = app.LargeTopologyEdgeThreshold + 100
+	const below = app.LargeTopologyEdgeThreshold - 100
 
 	var buf bytesBuffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	prevAbove := false
-	lastWarnCycle := -largeTopologyWarnCooldownCycles
+	lastWarnCycle := -app.LargeTopologyWarnCooldownCycles
 
 	// Cycle 1: cross upward — should emit.
-	prevAbove, lastWarnCycle = maybeWarnLargeTopology(logger, above, 10, prevAbove, 1, lastWarnCycle)
+	prevAbove, lastWarnCycle = app.MaybeWarnLargeTopology(logger, above, 10, prevAbove, 1, lastWarnCycle)
 	if buf.Len() == 0 {
 		t.Fatal("first upward crossing did not emit")
 	}
@@ -494,14 +495,14 @@ func TestMaybeWarnLargeTopologyCooldownSuppressesOscillation(t *testing.T) {
 	first := buf.Len()
 
 	// Cycle 2: drop below.
-	prevAbove, lastWarnCycle = maybeWarnLargeTopology(logger, below, 10, prevAbove, 2, lastWarnCycle)
+	prevAbove, lastWarnCycle = app.MaybeWarnLargeTopology(logger, below, 10, prevAbove, 2, lastWarnCycle)
 	if buf.Len() != first {
 		t.Fatal("downward transition emitted unexpectedly")
 	}
 
 	// Cycle 3 (well within cooldown): cross upward again — must be
 	// suppressed by cooldown.
-	prevAbove, lastWarnCycle = maybeWarnLargeTopology(logger, above, 10, prevAbove, 3, lastWarnCycle)
+	prevAbove, lastWarnCycle = app.MaybeWarnLargeTopology(logger, above, 10, prevAbove, 3, lastWarnCycle)
 	if buf.Len() != first {
 		t.Errorf("upward crossing inside cooldown re-emitted; expected suppression")
 	}
@@ -511,13 +512,13 @@ func TestMaybeWarnLargeTopologyCooldownSuppressesOscillation(t *testing.T) {
 
 	// Cycle 1 + cooldown: drop below first, then cross upward again past the
 	// cooldown — must emit.
-	prevAbove, lastWarnCycle = maybeWarnLargeTopology(logger, below, 10, prevAbove, 1+largeTopologyWarnCooldownCycles, lastWarnCycle)
-	prevAbove, lastWarnCycle = maybeWarnLargeTopology(logger, above, 10, prevAbove, 2+largeTopologyWarnCooldownCycles, lastWarnCycle)
+	prevAbove, lastWarnCycle = app.MaybeWarnLargeTopology(logger, below, 10, prevAbove, 1+app.LargeTopologyWarnCooldownCycles, lastWarnCycle)
+	prevAbove, lastWarnCycle = app.MaybeWarnLargeTopology(logger, above, 10, prevAbove, 2+app.LargeTopologyWarnCooldownCycles, lastWarnCycle)
 	if buf.Len() == first {
 		t.Errorf("upward crossing after cooldown did not emit")
 	}
-	if lastWarnCycle != 2+largeTopologyWarnCooldownCycles {
-		t.Errorf("lastWarnCycle = %d, want %d", lastWarnCycle, 2+largeTopologyWarnCooldownCycles)
+	if lastWarnCycle != 2+app.LargeTopologyWarnCooldownCycles {
+		t.Errorf("lastWarnCycle = %d, want %d", lastWarnCycle, 2+app.LargeTopologyWarnCooldownCycles)
 	}
 }
 
@@ -629,13 +630,13 @@ func TestRunDiscoveryLoopClearsGraphStale(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runDiscoveryLoop(ctx, loopConfig{
-			cancel: func() {},
-			logger: slog.Default(),
-			cfg:    cfg,
-			m:      m,
-			status: &status,
-			ready:  &ready,
+		app.RunDiscoveryLoop(ctx, app.LoopConfig{
+			Cancel: func() {},
+			Logger: slog.Default(),
+			Cfg:    cfg,
+			M:      m,
+			Status: &status,
+			Ready:  &ready,
 		})
 	}()
 
@@ -1007,13 +1008,13 @@ func TestRunDiscoveryLoopVersionMismatchSnapshot(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runDiscoveryLoop(ctx, loopConfig{
-			cancel: func() {},
-			logger: slog.Default(),
-			cfg:    cfg,
-			m:      m,
-			status: &status,
-			ready:  &ready,
+		app.RunDiscoveryLoop(ctx, app.LoopConfig{
+			Cancel: func() {},
+			Logger: slog.Default(),
+			Cfg:    cfg,
+			M:      m,
+			Status: &status,
+			Ready:  &ready,
 		})
 	}()
 
@@ -1075,13 +1076,13 @@ func TestRunDiscoveryLoopWithSnapshot(t *testing.T) {
 	done1 := make(chan struct{})
 	go func() {
 		defer close(done1)
-		runDiscoveryLoop(ctx1, loopConfig{
-			cancel: cancel1,
-			logger: slog.Default(),
-			cfg:    cfg,
-			m:      m1,
-			status: &s1,
-			ready:  &r1,
+		app.RunDiscoveryLoop(ctx1, app.LoopConfig{
+			Cancel: cancel1,
+			Logger: slog.Default(),
+			Cfg:    cfg,
+			M:      m1,
+			Status: &s1,
+			Ready:  &r1,
 		})
 	}()
 	// Wait for the snapshot write to complete (SnapshotLastWrittenUnix > 0),
@@ -1113,13 +1114,13 @@ outer:
 	done2 := make(chan struct{})
 	go func() {
 		defer close(done2)
-		runDiscoveryLoop(ctx2, loopConfig{
-			cancel: cancel2,
-			logger: slog.Default(),
-			cfg:    cfg,
-			m:      m2,
-			status: &s2,
-			ready:  &r2,
+		app.RunDiscoveryLoop(ctx2, app.LoopConfig{
+			Cancel: cancel2,
+			Logger: slog.Default(),
+			Cfg:    cfg,
+			M:      m2,
+			Status: &s2,
+			Ready:  &r2,
 		})
 	}()
 
@@ -1183,13 +1184,13 @@ func TestRunDiscoveryLoopSecondTick(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runDiscoveryLoop(ctx, loopConfig{
-			cancel: func() {},
-			logger: slog.Default(),
-			cfg:    cfg,
-			m:      m,
-			status: &status,
-			ready:  &ready,
+		app.RunDiscoveryLoop(ctx, app.LoopConfig{
+			Cancel: func() {},
+			Logger: slog.Default(),
+			Cfg:    cfg,
+			M:      m,
+			Status: &status,
+			Ready:  &ready,
 		})
 	}()
 
@@ -1257,13 +1258,13 @@ func TestRunDiscoveryLoopContextCancelledDuringCycle(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runDiscoveryLoop(ctx, loopConfig{
-			cancel: func() {},
-			logger: slog.Default(),
-			cfg:    cfg,
-			m:      m,
-			status: &status,
-			ready:  &ready,
+		app.RunDiscoveryLoop(ctx, app.LoopConfig{
+			Cancel: func() {},
+			Logger: slog.Default(),
+			Cfg:    cfg,
+			M:      m,
+			Status: &status,
+			Ready:  &ready,
 		})
 	}()
 
@@ -1311,13 +1312,13 @@ func TestRunDiscoveryLoopCredResolverError(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runDiscoveryLoop(ctx, loopConfig{
-			cancel: cancelFn,
-			logger: slog.Default(),
-			cfg:    cfg,
-			m:      m,
-			status: &status,
-			ready:  &ready,
+		app.RunDiscoveryLoop(ctx, app.LoopConfig{
+			Cancel: cancelFn,
+			Logger: slog.Default(),
+			Cfg:    cfg,
+			M:      m,
+			Status: &status,
+			Ready:  &ready,
 		})
 	}()
 
@@ -1373,7 +1374,7 @@ func TestRunCycleAllCredentialsFail(t *testing.T) {
 	}
 
 	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
-	g, _, _, fails := runCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil)
+	g, _, _, fails := app.RunCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil)
 
 	if len(g.Devices) != 0 {
 		t.Errorf("expected 0 devices when all credentials fail, got %d", len(g.Devices))
@@ -1425,7 +1426,7 @@ func TestRunCycleDeviceLabels(t *testing.T) {
 	}
 
 	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
-	g, _, _, _ := runCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil)
+	g, _, _, _ := app.RunCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil)
 
 	if len(g.Devices) != 1 {
 		t.Fatalf("expected 1 device, got %d", len(g.Devices))
@@ -1498,7 +1499,7 @@ func TestRunCycleExpiredUnconfirmedEdge(t *testing.T) {
 	// First cycle: get the unidirectional edge and its EdgeKey.
 	// Pass a non-nil empty map so AgeUnconfirmed actually populates the ages.
 	initialAges := make(map[graph.EdgeKey]int)
-	g1, ages1, _, _ := runCycle(context.Background(), slog.Default(), cfg, m, nil, nil, resolver, allowedNets, initialAges)
+	g1, ages1, _, _ := app.RunCycle(context.Background(), slog.Default(), cfg, m, nil, nil, resolver, allowedNets, initialAges)
 	if len(g1.Edges) == 0 {
 		t.Skip("no edges produced; LLDP PDU may not have been parsed")
 	}
@@ -1514,7 +1515,7 @@ func TestRunCycleExpiredUnconfirmedEdge(t *testing.T) {
 	// Second cycle: the unidirectional sw-a→sw-b edge is incremented to TTL
 	// and expires. The bidirectional sw-c↔sw-d edge is kept (covers
 	// `kept = append(kept, e)` in the filter loop).
-	g2, _, _, _ := runCycle(context.Background(), slog.Default(), cfg, m, nil, nil, resolver, allowedNets, ages1)
+	g2, _, _, _ := app.RunCycle(context.Background(), slog.Default(), cfg, m, nil, nil, resolver, allowedNets, ages1)
 
 	// The sw-a→sw-b unidirectional edge must be absent from g2.
 	for _, e := range g2.Edges {
@@ -1577,7 +1578,7 @@ func TestRunCycleHostnameDNSFailure(t *testing.T) {
 	}
 
 	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
-	g, _, _, fails := runCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil)
+	g, _, _, fails := app.RunCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil)
 
 	if len(g.Devices) != 0 {
 		t.Errorf("expected 0 devices for unresolvable hostname, got %d", len(g.Devices))
@@ -1629,7 +1630,7 @@ func TestRunCycleHostnameOutsideAllowList(t *testing.T) {
 	}
 
 	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
-	g, _, _, fails := runCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil)
+	g, _, _, fails := app.RunCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil)
 
 	if len(g.Devices) != 0 {
 		t.Errorf("expected 0 devices (target outside allow-list), got %d", len(g.Devices))
@@ -1666,13 +1667,13 @@ func TestCredentialCandidatesNoProfiles(t *testing.T) {
 
 	ip := net.ParseIP("127.0.0.1")
 	target := config.TargetConfig{Host: "127.0.0.1", Port: 161}
-	candidates := credentialCandidates(cfg, resolver, ip, target, slog.Default())
+	candidates := app.CredentialCandidates(cfg, resolver, ip, target, slog.Default())
 
 	if len(candidates) == 0 {
 		t.Fatal("expected at least one candidate from legacy path, got none")
 	}
-	if string(candidates[0].params.Community) != "public" {
-		t.Errorf("community = %q, want public", candidates[0].params.Community)
+	if string(candidates[0].Params.Community) != "public" {
+		t.Errorf("community = %q, want public", candidates[0].Params.Community)
 	}
 }
 
@@ -1701,13 +1702,13 @@ func TestCredentialCandidatesPortZero(t *testing.T) {
 
 	ip := net.ParseIP("127.0.0.1")
 	target := config.TargetConfig{Host: "127.0.0.1", Port: 0} // Port intentionally 0
-	candidates := credentialCandidates(cfg, resolver, ip, target, slog.Default())
+	candidates := app.CredentialCandidates(cfg, resolver, ip, target, slog.Default())
 
 	if len(candidates) == 0 {
 		t.Fatal("expected candidate with default port, got none")
 	}
-	if candidates[0].params.Port != 161 {
-		t.Errorf("port = %d, want 161 (default for Port=0 target)", candidates[0].params.Port)
+	if candidates[0].Params.Port != 161 {
+		t.Errorf("port = %d, want 161 (default for Port=0 target)", candidates[0].Params.Port)
 	}
 }
 
@@ -1746,7 +1747,7 @@ func TestWalkSystemWithCredentialsEmptyCandidates(t *testing.T) {
 	ip := net.ParseIP("127.0.0.1")
 	target := config.TargetConfig{Host: "127.0.0.1", Port: 161}
 
-	dev, _, _, err := walkSystemWithCredentials(context.Background(), cfg, resolver, ip, target, slog.Default())
+	dev, _, _, err := app.WalkSystemWithCredentials(context.Background(), cfg, resolver, ip, target, slog.Default())
 	if err == nil {
 		t.Fatal("expected error from empty candidates, got nil")
 	}
@@ -1790,7 +1791,7 @@ func TestWalkSystemWithCredentialsAllTimeout(t *testing.T) {
 	ip := net.ParseIP("127.0.0.1")
 	target := config.TargetConfig{Host: "127.0.0.1", Port: port}
 
-	_, _, _, err = walkSystemWithCredentials(context.Background(), cfg, resolver, ip, target, slog.Default())
+	_, _, _, err = app.WalkSystemWithCredentials(context.Background(), cfg, resolver, ip, target, slog.Default())
 	if err == nil {
 		t.Fatal("expected error from all-timeout walk, got nil")
 	}
@@ -1811,20 +1812,20 @@ func TestOtlpPushDropsWhenSemaphoreFull(t *testing.T) {
 	sem <- struct{}{} // occupy the only slot
 
 	dropped := make(chan struct{}, 1)
-	lc := loopConfig{
-		logger:  slog.Default(),
-		m:       metrics.New(false),
-		otlpSem: sem,
+	lc := app.LoopConfig{
+		Logger:  slog.Default(),
+		M:       metrics.New(false),
+		OtlpSem: sem,
 	}
 
 	ctx := context.Background()
-	lc.otlpPush(ctx, func(_ context.Context) error {
+	lc.OtlpPush(ctx, func(_ context.Context) error {
 		return nil
 	}, "should not be called")
 
 	// otlpPush should have incremented the dropped counter and returned
 	// immediately. Issue #20 widened the label set to {status, reason}.
-	if got := testutil.ToFloat64(lc.m.OTLPPushTotal.WithLabelValues("dropped", metrics.ReasonNA)); got != 1 {
+	if got := testutil.ToFloat64(lc.M.OTLPPushTotal.WithLabelValues("dropped", metrics.ReasonNA)); got != 1 {
 		t.Errorf("OTLPPushTotal{dropped,n/a} = %v, want 1", got)
 	}
 	_ = dropped
@@ -1838,14 +1839,14 @@ func TestOtlpPushDrainsOnShutdown(t *testing.T) {
 	started := make(chan struct{})
 	unblock := make(chan struct{})
 
-	lc := loopConfig{
-		logger: slog.Default(),
-		m:      metrics.New(false),
-		otlpWg: &wg,
+	lc := app.LoopConfig{
+		Logger: slog.Default(),
+		M:      metrics.New(false),
+		OtlpWg: &wg,
 	}
 
 	ctx := context.Background()
-	lc.otlpPush(ctx, func(_ context.Context) error {
+	lc.OtlpPush(ctx, func(_ context.Context) error {
 		close(started) // signal that the goroutine has begun
 		<-unblock      // block until the test says go
 		return nil
@@ -1908,7 +1909,7 @@ func TestWalkSystemWithCredentialsNonTimeoutFailure(t *testing.T) {
 	ip := net.ParseIP("127.0.0.1")
 	target := config.TargetConfig{Host: "127.0.0.1", Port: int(port)}
 
-	_, _, _, err = walkSystemWithCredentials(ctx, cfg, resolver, ip, target, slog.Default())
+	_, _, _, err = app.WalkSystemWithCredentials(ctx, cfg, resolver, ip, target, slog.Default())
 	if err == nil {
 		t.Fatal("expected error from cancelled context, got nil")
 	}
@@ -1932,7 +1933,7 @@ func TestResolveEdgeDstDevices(t *testing.T) {
 		{SrcDevice: "core-sw-01", DstDevice: "00:ff:ee:dd:cc:bb", DiscoveryProto: "fdb"}, // MAC not in index → suppressed
 	}
 
-	got := resolveEdgeDstDevices(slog.Default(), edges, ipToID, macToID, nil)
+	got := app.ResolveEdgeDstDevices(slog.Default(), edges, ipToID, macToID, nil)
 
 	// Unresolved MAC edge is suppressed; expect 5 edges back (not 6).
 	want := []string{"core-sw-02", "core-sw-01", "core-sw-03", "10.0.1.99", "spine-01"}
@@ -2015,7 +2016,7 @@ func TestCollectDegradedReasons(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := collectDegradedReasons(tc.edges)
+			got := app.CollectDegradedReasons(tc.edges)
 			gotSet := make(map[string]bool, len(got))
 			for _, r := range got {
 				gotSet[r] = true
@@ -2109,7 +2110,7 @@ func TestSynthesizeEdgesARPResolution(t *testing.T) {
 		}
 	}
 
-	got := resolveEdgeDstDevices(slog.Default(), rawEdges, ipToID, macToID, nil)
+	got := app.ResolveEdgeDstDevices(slog.Default(), rawEdges, ipToID, macToID, nil)
 
 	if len(got) != 1 {
 		t.Fatalf("expected 1 resolved edge, got %d", len(got))
@@ -2146,8 +2147,8 @@ func TestSynthesizeEdgesIdempotent(t *testing.T) {
 	ipToID := map[string]string{"10.0.0.1": "sw-a"}
 	macToID := map[string]string{"00:11:22:33:44:55": "sw-a"}
 
-	first := resolveEdgeDstDevices(slog.Default(), resolved, ipToID, macToID, nil)
-	second := resolveEdgeDstDevices(slog.Default(), first, ipToID, macToID, nil)
+	first := app.ResolveEdgeDstDevices(slog.Default(), resolved, ipToID, macToID, nil)
+	second := app.ResolveEdgeDstDevices(slog.Default(), first, ipToID, macToID, nil)
 
 	if len(first) != len(second) {
 		t.Fatalf("first call returned %d edges, second returned %d", len(first), len(second))
@@ -2214,13 +2215,13 @@ func TestGraphSizeAdmissionControl(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runDiscoveryLoop(ctx, loopConfig{
-			cancel: func() {},
-			logger: slog.Default(),
-			cfg:    cfg,
-			m:      m,
-			status: &status,
-			ready:  &ready,
+		app.RunDiscoveryLoop(ctx, app.LoopConfig{
+			Cancel: func() {},
+			Logger: slog.Default(),
+			Cfg:    cfg,
+			M:      m,
+			Status: &status,
+			Ready:  &ready,
 		})
 	}()
 
@@ -2528,9 +2529,9 @@ func TestDeduplicateOOS(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := deduplicateOOS(tc.in)
+			got := app.DeduplicateOOS(tc.in)
 			if len(got) != len(tc.want) {
-				t.Fatalf("deduplicateOOS() len = %d, want %d\ngot:  %+v\nwant: %+v", len(got), len(tc.want), got, tc.want)
+				t.Fatalf("app.DeduplicateOOS() len = %d, want %d\ngot:  %+v\nwant: %+v", len(got), len(tc.want), got, tc.want)
 			}
 			for i := range tc.want {
 				g, w := got[i], tc.want[i]
@@ -2540,7 +2541,7 @@ func TestDeduplicateOOS(t *testing.T) {
 					g.Proto != w.Proto ||
 					!g.FirstSeen.Equal(w.FirstSeen) ||
 					!g.LastSeen.Equal(w.LastSeen) {
-					t.Errorf("deduplicateOOS()[%d] = %+v, want %+v", i, g, w)
+					t.Errorf("app.DeduplicateOOS()[%d] = %+v, want %+v", i, g, w)
 				}
 			}
 		})
@@ -2555,7 +2556,7 @@ func TestDeduplicateDevicesDuplicateID(t *testing.T) {
 		{ID: "sw-01", Site: "site-a"},
 		{ID: "sw-01", Site: "site-b"},
 	}
-	got := deduplicateDevices(devices)
+	got := app.DeduplicateDevices(devices)
 	if len(got) != 1 {
 		t.Fatalf("expected 1 device after dedup, got %d", len(got))
 	}
@@ -2570,7 +2571,7 @@ func TestDeduplicateDevicesDifferentIDs(t *testing.T) {
 		{ID: "sw-01"},
 		{ID: "sw-02"},
 	}
-	got := deduplicateDevices(devices)
+	got := app.DeduplicateDevices(devices)
 	if len(got) != 2 {
 		t.Fatalf("expected 2 devices, got %d", len(got))
 	}
@@ -2588,7 +2589,7 @@ func TestMergeOOSFirstSeenPreservesExisting(t *testing.T) {
 		{ReportingDevice: "sw-01", ReportingPort: "Gi0/1", NeighbourHint: "10.0.0.99", FirstSeen: now},
 	}
 
-	got := mergeOOSFirstSeen(newOOS, prev)
+	got := app.MergeOOSFirstSeen(newOOS, prev)
 	if len(got) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(got))
 	}
@@ -2608,7 +2609,7 @@ func TestMergeOOSFirstSeenKeepsNewEntry(t *testing.T) {
 		{ReportingDevice: "sw-01", ReportingPort: "Gi0/2", NeighbourHint: "10.0.0.99", FirstSeen: now},
 	}
 
-	got := mergeOOSFirstSeen(newOOS, prev)
+	got := app.MergeOOSFirstSeen(newOOS, prev)
 	if len(got) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(got))
 	}
