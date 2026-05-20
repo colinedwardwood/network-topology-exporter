@@ -238,13 +238,13 @@ func Run(ctx context.Context, args []string) int {
 				WebConfigFile:      &cfg.Listen.WebConfigFile,
 			}
 			serveErr = web.ListenAndServe(srv, webFlags, logger)
-		case cfg.Listen.TLSCertFile != "":
+		case cfg.Listen.TLSCertFile != "": //nolint:staticcheck // intentional: deprecated legacy TLS path supported through v1.5.0 per cfg.EmitDeprecationWarnings
 			// Deprecated path — server-side TLS only, no client auth. Operators
 			// using this path saw a startup deprecation warning from
 			// EmitDeprecationWarnings; the path stays functional until v1.5.0
 			// removes the legacy fields.
 			logger.Info("metrics TLS server listening (deprecated tls_cert_file/tls_key_file)", "addr", effectiveAddr)
-			serveErr = srv.ListenAndServeTLS(cfg.Listen.TLSCertFile, cfg.Listen.TLSKeyFile)
+			serveErr = srv.ListenAndServeTLS(cfg.Listen.TLSCertFile, cfg.Listen.TLSKeyFile) //nolint:staticcheck // intentional: deprecated legacy TLS path supported through v1.5.0 per cfg.EmitDeprecationWarnings
 		default:
 			logger.Info("metrics server listening", "addr", effectiveAddr)
 			serveErr = srv.ListenAndServe()

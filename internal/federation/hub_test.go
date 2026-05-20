@@ -1048,7 +1048,7 @@ func waitForAddr(t *testing.T, addr string) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if conn, err := net.DialTimeout("tcp", addr, 50*time.Millisecond); err == nil {
-			conn.Close()
+			_ = conn.Close()
 			return
 		}
 		time.Sleep(10 * time.Millisecond)

@@ -230,11 +230,12 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	}
 
 	edges, oos := buildEdges(localDevice, peers, allowedNets)
-	if len(edges) > 0 {
+	switch {
+	case len(edges) > 0:
 		recordWalkerOutcome(&p, walkerRFC4273, outcomeEdges)
-	} else if hadPDUs {
+	case hadPDUs:
 		recordWalkerOutcome(&p, walkerRFC4273, outcomeNoPeers)
-	} else {
+	default:
 		recordWalkerOutcome(&p, walkerRFC4273, outcomeMIBUnimplemented)
 	}
 
