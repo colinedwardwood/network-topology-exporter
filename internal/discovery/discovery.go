@@ -46,11 +46,25 @@ const (
 	// advertises a MAC chassis ID and a sysName, enabling FDB MAC→sysName resolution.
 	MetadataKeyPeerChassisMac = "peer_chassis_mac"
 
+	// DegradedReasonRequiredTablePartialDecode means a walker decoded a
+	// required MIB table but flagged the result as partial (some rows
+	// failed decode). DegradedReason* constants appear in the
+	// MetadataKeyDegradedReason field on edges and in the
+	// network_topology_discovery_degraded_total `reason` label; changing
+	// these strings breaks downstream consumers.
 	DegradedReasonRequiredTablePartialDecode = "required_table_partial_decode"
-	DegradedReasonMissingSrcPortMapping      = "missing_srcport_mapping"
-	DegradedReasonMissingAdminStatusWalk     = "missing_admin_status_walk"
-	DegradedReasonInvalidAdminStatusDecode   = "invalid_admin_status_decode"
-	DegradedReasonUnsupportedIPVersion       = "unsupported_ip_version"
+	// DegradedReasonMissingSrcPortMapping means a walker produced an edge
+	// without resolving SrcPort against the host's ifIndex inventory.
+	DegradedReasonMissingSrcPortMapping = "missing_srcport_mapping"
+	// DegradedReasonMissingAdminStatusWalk means the IF-MIB ifAdminStatus
+	// walk did not return any usable rows for the device.
+	DegradedReasonMissingAdminStatusWalk = "missing_admin_status_walk"
+	// DegradedReasonInvalidAdminStatusDecode means at least one
+	// ifAdminStatus row could not be decoded into a known enum value.
+	DegradedReasonInvalidAdminStatusDecode = "invalid_admin_status_decode"
+	// DegradedReasonUnsupportedIPVersion means a walker observed a peer
+	// address family it cannot resolve (e.g. IPv6 on an IPv4-only walker).
+	DegradedReasonUnsupportedIPVersion = "unsupported_ip_version"
 )
 
 // PolicyError marks a module-level policy failure with a machine-readable reason.
@@ -100,7 +114,11 @@ type Device struct {
 // DiscoveryProtocol identifies the discovery source that produced an Edge.
 // The underlying string is the wire-format value emitted in Prometheus labels,
 // OTLP attributes, and snapshot JSON — changing these strings breaks consumers.
-type DiscoveryProtocol string
+// The name intentionally repeats the package (discovery.DiscoveryProtocol):
+// the metric label and OTLP attribute key is "discovery_protocol", and
+// renaming the type to "Protocol" would create discovery.Protocol calls that
+// no longer self-document at the use site.
+type DiscoveryProtocol string //nolint:revive // see doc comment: name is part of the wire contract
 
 // DiscoveryProtocol values: one constant per emitter that constructs an Edge.
 // "configured" is reserved for federation hub-injected LD-19 inter-domain links.

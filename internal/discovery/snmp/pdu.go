@@ -296,7 +296,7 @@ func PDUIntStrict(pdu g.SnmpPDU) (int, bool) {
 	case int64:
 		return int(v), true
 	case uint64:
-		return int(v), true
+		return int(v), true //nolint:gosec // SNMP Gauge64/Counter64 values in practice fit int on 64-bit hosts; this helper is only used to surface MIB-bounded values to internal callers, not untrusted arithmetic
 	}
 	return 0, false
 }
