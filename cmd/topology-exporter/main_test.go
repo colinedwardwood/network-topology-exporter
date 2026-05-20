@@ -8,14 +8,12 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,13 +22,11 @@ import (
 	"testing"
 	"time"
 
-	dto "github.com/prometheus/client_model/go"
-
 	gsnmp "github.com/gosnmp/gosnmp"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/colinedwardwood/network-topology-exporter/internal/app/httpx"
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
@@ -172,50 +168,6 @@ func TestRunCycleTriesFallbackCredentialProfiles(t *testing.T) {
 	}
 	if profile, ok := resolver.CachedProfile("127.0.0.1"); !ok || profile != "good" {
 		t.Fatalf("cached profile = (%q, %v), want (good, true)", profile, ok)
-	}
-}
-
-func TestHealthzHandlerNilStatus(t *testing.T) {
-	var status atomic.Pointer[cycleStatus]
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", newHealthzHandler(&status))
-
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	var m map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("response is not valid JSON: %v", err)
-	}
-	if m["status"] != "ok" {
-		t.Errorf("status field = %q, want ok", m["status"])
-	}
-}
-
-func TestHealthzHandlerPopulatedStatus(t *testing.T) {
-	var status atomic.Pointer[cycleStatus]
-	now := time.Now()
-	status.Store(&cycleStatus{LastCycleAt: now, DeviceErrors: 2})
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", newHealthzHandler(&status))
-
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	var m map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
-		t.Fatalf("response is not valid JSON: %v", err)
-	}
-	if m["device_errors"] != float64(2) {
-		t.Errorf("device_errors = %v, want 2", m["device_errors"])
 	}
 }
 
@@ -460,154 +412,6 @@ func TestEmitBoundaryObservations(t *testing.T) {
 	}
 }
 
-// TestReadyzHandlerNotReady verifies that /readyz returns 503 before the first
-// cycle or spoke push has completed.
-func TestReadyzHandlerNotReady(t *testing.T) {
-	handler := newReadyzHandler(func() bool { return false })
-	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
-	rec := httptest.NewRecorder()
-	handler(rec, req)
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("status = %d, want 503 when not ready", rec.Code)
-	}
-}
-
-// TestInstrumentMetricsHandlerRecordsScrape verifies the wrapper observes
-// both render duration and payload size into the supplied histograms.
-func TestInstrumentMetricsHandlerRecordsScrape(t *testing.T) {
-	duration := prometheus.NewHistogram(prometheus.HistogramOpts{Name: "dur"})
-	payload := prometheus.NewHistogram(prometheus.HistogramOpts{Name: "bytes"})
-
-	innerBody := "# TYPE foo gauge\nfoo 42\n"
-	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(innerBody))
-	})
-
-	wrapped := instrumentMetricsHandler(inner, duration, payload)
-	rec := httptest.NewRecorder()
-	wrapped.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-
-	if rec.Body.String() != innerBody {
-		t.Fatalf("body = %q, want %q (wrapper must not buffer or modify the response)", rec.Body.String(), innerBody)
-	}
-
-	// Histograms implement prometheus.Metric directly.
-	var dm dto.Metric
-	if err := payload.Write(&dm); err != nil {
-		t.Fatalf("payload.Write: %v", err)
-	}
-	if got, want := dm.GetHistogram().GetSampleCount(), uint64(1); got != want {
-		t.Errorf("payload sample count = %d, want %d", got, want)
-	}
-	if got, want := dm.GetHistogram().GetSampleSum(), float64(len(innerBody)); got != want {
-		t.Errorf("payload sum = %v, want %v (bytes of body)", got, want)
-	}
-
-	dm.Reset()
-	if err := duration.Write(&dm); err != nil {
-		t.Fatalf("duration.Write: %v", err)
-	}
-	if got, want := dm.GetHistogram().GetSampleCount(), uint64(1); got != want {
-		t.Errorf("duration sample count = %d, want %d", got, want)
-	}
-}
-
-// TestCountingResponseWriterStreamsLargePayload verifies that
-// countingResponseWriter does NOT buffer the body — it streams every
-// Write through to the underlying writer — and that bytesWritten equals
-// the actual response body length for a non-trivial (>1MB) payload.
-// Regression guard for issue #7: the wrapper's doc comment used to
-// incorrectly claim it buffered the body.
-func TestCountingResponseWriterStreamsLargePayload(t *testing.T) {
-	// 1 MiB + a tail so the total clears 1 MB and exercises a payload
-	// large enough that any silent buffering would be noticeable.
-	const bodySize = (1 << 20) + 4096
-	body := make([]byte, bodySize)
-	for i := range body {
-		body[i] = byte(i % 251) // non-trivial pattern, not all-zero
-	}
-
-	duration := prometheus.NewHistogram(prometheus.HistogramOpts{Name: "dur_large"})
-	payload := prometheus.NewHistogram(prometheus.HistogramOpts{Name: "bytes_large"})
-
-	// Inner handler writes the payload in multiple chunks to exercise
-	// repeated Write() calls through the wrapper.
-	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		const chunk = 64 * 1024
-		for off := 0; off < len(body); off += chunk {
-			end := off + chunk
-			if end > len(body) {
-				end = len(body)
-			}
-			if _, err := w.Write(body[off:end]); err != nil {
-				t.Errorf("inner Write: %v", err)
-				return
-			}
-		}
-	})
-
-	wrapped := instrumentMetricsHandler(inner, duration, payload)
-	rec := httptest.NewRecorder()
-	wrapped.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-
-	// The body must reach the underlying writer byte-for-byte; the wrapper
-	// must not have buffered or altered it.
-	if got := rec.Body.Len(); got != bodySize {
-		t.Fatalf("response body length = %d, want %d (wrapper must stream, not buffer/alter)", got, bodySize)
-	}
-	if !bytesEqual(rec.Body.Bytes(), body) {
-		t.Fatalf("response body bytes diverge from inner handler output")
-	}
-
-	var dm dto.Metric
-	if err := payload.Write(&dm); err != nil {
-		t.Fatalf("payload.Write: %v", err)
-	}
-	if got, want := dm.GetHistogram().GetSampleSum(), float64(bodySize); got != want {
-		t.Errorf("payload sum = %v, want %v (bytesWritten must match actual response body length)", got, want)
-	}
-}
-
-// TestCountingResponseWriterHijackPanics verifies that Hijack panics
-// loudly rather than silently bypassing the byte counter via interface
-// promotion through the embedded http.ResponseWriter (issue #7).
-func TestCountingResponseWriterHijackPanics(t *testing.T) {
-	c := &countingResponseWriter{ResponseWriter: httptest.NewRecorder()}
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("Hijack did not panic; expected loud failure to prevent silent counter divergence")
-		}
-	}()
-	_, _, _ = c.Hijack()
-}
-
-// TestCountingResponseWriterPushPanics verifies that Push panics
-// loudly rather than silently bypassing the byte counter via interface
-// promotion through the embedded http.ResponseWriter (issue #7).
-func TestCountingResponseWriterPushPanics(t *testing.T) {
-	c := &countingResponseWriter{ResponseWriter: httptest.NewRecorder()}
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("Push did not panic; expected loud failure to prevent silent counter divergence")
-		}
-	}()
-	_ = c.Push("/anything", nil)
-}
-
-// bytesEqual is a local helper to avoid pulling bytes into the test file
-// for one comparison.
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // TestMaybeWarnLargeTopologyEmitsOnlyOnUpwardCrossing drives the
 // threshold-crossing helper across a sequence of edge counts and asserts
 // that the warning fires only on a transition from at-or-below the
@@ -731,18 +535,6 @@ func (bb *bytesBuffer) Write(p []byte) (int, error) {
 
 func (bb *bytesBuffer) Len() int { return len(bb.b) }
 
-// TestReadyzHandlerReady verifies that /readyz returns 200 once the readiness
-// function returns true.
-func TestReadyzHandlerReady(t *testing.T) {
-	handler := newReadyzHandler(func() bool { return true })
-	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
-	rec := httptest.NewRecorder()
-	handler(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200 when ready", rec.Code)
-	}
-}
-
 // TestTopologyCollectorPopulatesMetrics verifies that Topology.Update populates
 // device, edge, and OOS-count metrics, and that a second call with an empty
 // graph reflects the new state without stale series.
@@ -828,7 +620,7 @@ func TestRunDiscoveryLoopClearsGraphStale(t *testing.T) {
 	}
 
 	m := metrics.New(false)
-	var status atomic.Pointer[cycleStatus]
+	var status atomic.Pointer[httpx.CycleStatus]
 	var ready atomic.Bool
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -1206,7 +998,7 @@ func TestRunDiscoveryLoopVersionMismatchSnapshot(t *testing.T) {
 	}
 
 	m := metrics.New(false)
-	var status atomic.Pointer[cycleStatus]
+	var status atomic.Pointer[httpx.CycleStatus]
 	var ready atomic.Bool
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -1276,7 +1068,7 @@ func TestRunDiscoveryLoopWithSnapshot(t *testing.T) {
 
 	// Run one full cycle to produce a snapshot on disk.
 	m1 := metrics.New(false)
-	var s1 atomic.Pointer[cycleStatus]
+	var s1 atomic.Pointer[httpx.CycleStatus]
 	var r1 atomic.Bool
 	ctx1, cancel1 := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel1()
@@ -1314,7 +1106,7 @@ outer:
 
 	// Now start a second loop — it should load the snapshot produced above.
 	m2 := metrics.New(false)
-	var s2 atomic.Pointer[cycleStatus]
+	var s2 atomic.Pointer[httpx.CycleStatus]
 	var r2 atomic.Bool
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel2()
@@ -1382,7 +1174,7 @@ func TestRunDiscoveryLoopSecondTick(t *testing.T) {
 	}
 
 	m := metrics.New(false)
-	var status atomic.Pointer[cycleStatus]
+	var status atomic.Pointer[httpx.CycleStatus]
 	var ready atomic.Bool
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -1454,7 +1246,7 @@ func TestRunDiscoveryLoopContextCancelledDuringCycle(t *testing.T) {
 	}
 
 	m := metrics.New(false)
-	var status atomic.Pointer[cycleStatus]
+	var status atomic.Pointer[httpx.CycleStatus]
 	var ready atomic.Bool
 
 	// Cancel the context immediately — runDiscoveryLoop's first cycle will
@@ -1504,7 +1296,7 @@ func TestRunDiscoveryLoopCredResolverError(t *testing.T) {
 	}
 
 	m := metrics.New(false)
-	var status atomic.Pointer[cycleStatus]
+	var status atomic.Pointer[httpx.CycleStatus]
 	var ready atomic.Bool
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2413,7 +2205,7 @@ func TestGraphSizeAdmissionControl(t *testing.T) {
 	}
 
 	m := metrics.New(false)
-	var status atomic.Pointer[cycleStatus]
+	var status atomic.Pointer[httpx.CycleStatus]
 	var ready atomic.Bool
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
