@@ -7,7 +7,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -30,6 +29,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/exporter-toolkit/web"
 
+	"github.com/colinedwardwood/network-topology-exporter/internal/app/httpx"
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
@@ -95,106 +95,6 @@ func maybeWarnLargeTopology(
 	return nowAbove, lastWarnCycle
 }
 
-type cycleStatus struct {
-	LastCycleAt  time.Time
-	DeviceErrors int64
-}
-
-// newReadyzHandler returns an HTTP handler for /readyz. It returns 200 once
-// isReady() is true (first live cycle or first spoke push received) and 503
-// during startup so Kubernetes does not route traffic before the process has
-// meaningful topology data to serve.
-func newReadyzHandler(isReady func() bool) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if isReady() {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"status":"ready"}` + "\n"))
-			return
-		}
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write([]byte(`{"status":"starting"}` + "\n"))
-	}
-}
-
-// instrumentMetricsHandler wraps the Prometheus /metrics handler so that
-// each scrape contributes one observation to the render-duration and payload-
-// size histograms. Operators alert on the p99 of duration against the
-// scraper's scrape_timeout — see docs/operator/scale.md. The wrapper streams
-// the response body through to the underlying writer without buffering and
-// counts the bytes that flow through Write().
-func instrumentMetricsHandler(inner http.Handler, duration, payload prometheus.Histogram) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		rec := &countingResponseWriter{ResponseWriter: w}
-		inner.ServeHTTP(rec, r)
-		duration.Observe(time.Since(start).Seconds())
-		payload.Observe(float64(rec.bytesWritten))
-	})
-}
-
-// countingResponseWriter wraps http.ResponseWriter and counts the bytes
-// passed to Write(). It does NOT buffer the body — each Write call streams
-// straight to the wrapped writer and the counter is incremented by the
-// number of bytes the wrapped writer reports as written. The counter is
-// therefore exact for response bodies emitted via Write().
-//
-// This wrapper deliberately does NOT promote http.Hijacker or http.Pusher.
-// Embedding http.ResponseWriter would otherwise silently promote any
-// interfaces the underlying writer implements; if a future inner handler
-// or middleware invoked Hijack() (RFC 6455 WebSocket upgrade) or Push()
-// (HTTP/2 server push), the connection would be detached or pushed without
-// passing through Write(), and bytesWritten would diverge from reality
-// without any indication. The /metrics path served by this wrapper does
-// not use WebSocket upgrade or HTTP/2 server push, so a loud panic on
-// those code paths is preferable to a silently wrong byte counter.
-type countingResponseWriter struct {
-	http.ResponseWriter
-	bytesWritten int
-}
-
-func (c *countingResponseWriter) Write(b []byte) (int, error) {
-	n, err := c.ResponseWriter.Write(b)
-	c.bytesWritten += n
-	return n, err
-}
-
-func (c *countingResponseWriter) Flush() {
-	if f, ok := c.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
-}
-
-// Hijack panics: the /metrics handler does not use WebSocket upgrade, and
-// allowing Hijack to promote silently through the embedded ResponseWriter
-// would let a future middleware detach the connection without passing
-// through Write(), invalidating bytesWritten without any signal.
-func (c *countingResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	panic("countingResponseWriter: Hijack not supported — wrapper is for the /metrics path only; WebSocket upgrade would bypass the byte counter")
-}
-
-// Push panics: the /metrics handler does not use HTTP/2 server push.
-// Allowing Push to promote silently would let the inner handler emit
-// bytes that never pass through Write(), invalidating bytesWritten.
-func (c *countingResponseWriter) Push(target string, opts *http.PushOptions) error {
-	panic("countingResponseWriter: Push not supported — wrapper is for the /metrics path only; HTTP/2 server push would bypass the byte counter")
-}
-
-func newHealthzHandler(status *atomic.Pointer[cycleStatus]) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		s := status.Load()
-		if s == nil {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"status":"ok","last_cycle_at":null,"device_errors":null}` + "\n"))
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"status":"ok","last_cycle_at":%q,"device_errors":%d}`+"\n",
-			s.LastCycleAt.UTC().Format(time.RFC3339), s.DeviceErrors)
-	}
-}
-
 func main() {
 	os.Exit(run(context.Background(), os.Args[1:]))
 }
@@ -257,7 +157,7 @@ func run(ctx context.Context, args []string) int {
 	// re-alerted hourly thereafter without flooding the log.
 	warnLimiter := loglimit.New(logger, loglimit.DefaultCooldown)
 
-	var status atomic.Pointer[cycleStatus]
+	var status atomic.Pointer[httpx.CycleStatus]
 	var ready atomic.Bool // set to true after the first live cycle or spoke push
 
 	// isReadyFn is the readiness check for /readyz. Default: process-local flag.
@@ -265,12 +165,12 @@ func run(ctx context.Context, args []string) int {
 	isReadyFn := ready.Load
 
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", instrumentMetricsHandler(
+	mux.Handle("/metrics", httpx.InstrumentMetricsHandler(
 		promhttp.HandlerFor(m.Registry(), promhttp.HandlerOpts{Registry: m.Registry()}),
 		m.MetricsRenderDuration,
 		m.MetricsPayloadBytes,
 	))
-	mux.HandleFunc("/healthz", newHealthzHandler(&status))
+	mux.HandleFunc("/healthz", httpx.NewHealthzHandler(&status))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -386,7 +286,7 @@ func run(ctx context.Context, args []string) int {
 		}()
 	}
 
-	mux.HandleFunc("/readyz", newReadyzHandler(isReadyFn))
+	mux.HandleFunc("/readyz", httpx.NewReadyzHandler(isReadyFn))
 
 	go func() {
 		var serveErr error
@@ -461,7 +361,7 @@ type loopConfig struct {
 	// every Params constructed in runCycle. Replaces the old bgp package-global
 	// counter wiring; see internal/metrics/walker_metrics_adapter.go.
 	walkerMetrics snmpwalk.WalkerMetrics
-	status        *atomic.Pointer[cycleStatus]
+	status        *atomic.Pointer[httpx.CycleStatus]
 	ready         *atomic.Bool
 	spoke         *federation.Spoke
 	otlpExp       *otlp.Exporter
@@ -642,7 +542,7 @@ func runDiscoveryLoop(ctx context.Context, lc loopConfig) {
 			return
 		}
 		newGraph.OutOfScope = mergeOOSFirstSeen(newGraph.OutOfScope, prevGraph.OutOfScope)
-		lc.status.Store(&cycleStatus{
+		lc.status.Store(&httpx.CycleStatus{
 			LastCycleAt:  time.Now(),
 			DeviceErrors: int64(deviceErrors),
 		})
