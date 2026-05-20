@@ -695,7 +695,7 @@ func TestBoundaryObservationsCanonicalOrder(t *testing.T) {
 
 // TestRunVersionFlag exercises the --version short-circuit in run().
 func TestRunVersionFlag(t *testing.T) {
-	code := run(context.Background(), []string{"--version"})
+	code := app.Run(context.Background(), []string{"--version"})
 	if code != 0 {
 		t.Errorf("--version: exit code = %d, want 0", code)
 	}
@@ -703,7 +703,7 @@ func TestRunVersionFlag(t *testing.T) {
 
 // TestRunUnknownFlag verifies that an unrecognised flag causes run() to return 1.
 func TestRunUnknownFlag(t *testing.T) {
-	code := run(context.Background(), []string{"--no-such-flag"})
+	code := app.Run(context.Background(), []string{"--no-such-flag"})
 	if code != 1 {
 		t.Errorf("unknown flag: exit code = %d, want 1", code)
 	}
@@ -712,7 +712,7 @@ func TestRunUnknownFlag(t *testing.T) {
 // TestRunMissingConfigFile verifies that run() returns 1 when the config file
 // does not exist.
 func TestRunMissingConfigFile(t *testing.T) {
-	code := run(context.Background(), []string{"--config.file=/nonexistent/path.yaml"})
+	code := app.Run(context.Background(), []string{"--config.file=/nonexistent/path.yaml"})
 	if code != 1 {
 		t.Errorf("missing config: exit code = %d, want 1", code)
 	}
@@ -728,7 +728,7 @@ func TestRunInvalidYAMLConfig(t *testing.T) {
 	_, _ = fmt.Fprint(f, "discovery:\n  interval: [this is not a duration\n")
 	_ = f.Close()
 
-	code := run(context.Background(), []string{"--config.file=" + f.Name()})
+	code := app.Run(context.Background(), []string{"--config.file=" + f.Name()})
 	if code != 1 {
 		t.Errorf("invalid YAML: exit code = %d, want 1", code)
 	}
@@ -741,7 +741,7 @@ func TestRunInvalidYAMLConfig(t *testing.T) {
 func TestRunLogLevelFlag(t *testing.T) {
 	for _, level := range []string{"debug", "warn", "error"} {
 		t.Run(level, func(t *testing.T) {
-			code := run(context.Background(), []string{
+			code := app.Run(context.Background(), []string{
 				"--log.level=" + level,
 				"--config.file=/nonexistent/path.yaml",
 			})
@@ -792,7 +792,7 @@ federation:
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	code := run(ctx, []string{
+	code := app.Run(ctx, []string{
 		"--config.file=" + cfgPath,
 		"--web.listen-address=" + listenAddr,
 	})
@@ -841,7 +841,7 @@ federation:
 	listenAddr := ln.Addr().String()
 	_ = ln.Close()
 
-	code := run(context.Background(), []string{
+	code := app.Run(context.Background(), []string{
 		"--config.file=" + cfgPath,
 		"--web.listen-address=" + listenAddr,
 	})
@@ -882,7 +882,7 @@ snapshot:
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	code := run(ctx, []string{
+	code := app.Run(ctx, []string{
 		"--config.file=" + cfgPath,
 		"--web.listen-address=" + listenAddr,
 	})
@@ -926,7 +926,7 @@ snapshot:
 
 	done := make(chan int, 1)
 	go func() {
-		done <- run(ctx, []string{
+		done <- app.Run(ctx, []string{
 			"--config.file=" + cfgPath,
 			"--web.listen-address=" + listenAddr,
 		})
@@ -952,9 +952,9 @@ snapshot:
 // TestNewLogger exercises all switch branches in newLogger.
 func TestNewLogger(t *testing.T) {
 	for _, level := range []string{"debug", "warn", "error", "info", "unknown"} {
-		lg := newLogger(level)
+		lg := app.NewLogger(level)
 		if lg == nil {
-			t.Errorf("newLogger(%q) returned nil", level)
+			t.Errorf("app.NewLogger(%q) returned nil", level)
 		}
 	}
 }
@@ -2291,7 +2291,7 @@ listen:
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan int, 1)
 	go func() {
-		done <- run(ctx, []string{"--config.file=" + cfgPath})
+		done <- app.Run(ctx, []string{"--config.file=" + cfgPath})
 	}()
 
 	// Wait for the TLS server to become ready.
@@ -2393,7 +2393,7 @@ listen:
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan int, 1)
 	go func() {
-		done <- run(ctx, []string{"--config.file=" + cfgPath})
+		done <- app.Run(ctx, []string{"--config.file=" + cfgPath})
 	}()
 
 	client := &http.Client{
