@@ -369,6 +369,7 @@ func TestRunCycleLLDPEdge(t *testing.T) {
 	}
 	if target == nil {
 		t.Fatalf("no edge found connecting sw-01 and sw-02; edges: %v", g.Edges)
+		return // unreachable, but staticcheck SA5011 needs the explicit terminator
 	}
 
 	if target.Direction != discovery.DirectionBidirectional {
@@ -513,7 +514,7 @@ func TestMaybeWarnLargeTopologyCooldownSuppressesOscillation(t *testing.T) {
 	// Cycle 1 + cooldown: drop below first, then cross upward again past the
 	// cooldown — must emit.
 	prevAbove, lastWarnCycle = app.MaybeWarnLargeTopology(logger, below, 10, prevAbove, 1+app.LargeTopologyWarnCooldownCycles, lastWarnCycle)
-	prevAbove, lastWarnCycle = app.MaybeWarnLargeTopology(logger, above, 10, prevAbove, 2+app.LargeTopologyWarnCooldownCycles, lastWarnCycle)
+	_, lastWarnCycle = app.MaybeWarnLargeTopology(logger, above, 10, prevAbove, 2+app.LargeTopologyWarnCooldownCycles, lastWarnCycle)
 	if buf.Len() == first {
 		t.Errorf("upward crossing after cooldown did not emit")
 	}
@@ -2352,7 +2353,7 @@ func TestRunWebConfigBasicAuth(t *testing.T) {
 	// bcrypt cost 4 is the lowest valid cost — fine for a unit test, and avoids
 	// the multi-hundred-millisecond hashing cost the toolkit default (10)
 	// incurs on every test run.
-	const password = "topology-test-pass"
+	const password = "topology-test-pass" //nolint:gosec // synthetic basic-auth credential for in-process exporter-toolkit web-config test; not used outside this test
 	hashBytes, err := bcrypt.GenerateFromPassword([]byte(password), 4)
 	if err != nil {
 		t.Fatalf("bcrypt.GenerateFromPassword: %v", err)

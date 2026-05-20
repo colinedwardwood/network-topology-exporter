@@ -90,7 +90,7 @@ func (lc LoopConfig) OtlpPush(ctx context.Context, fn func(context.Context) erro
 	if lc.OtlpWg != nil {
 		lc.OtlpWg.Add(1)
 	}
-	go func() {
+	go func() { //nolint:gosec // G118: OTLP push must survive the originating cycle's context — the push is a side-effect of a completed cycle and should reach the collector even if the cycle's deadline already expired
 		if lc.OtlpWg != nil {
 			defer lc.OtlpWg.Done()
 		}
@@ -178,10 +178,12 @@ func RunDiscoveryLoop(ctx context.Context, lc LoopConfig) {
 			for f := range snapshotCh {
 				lc.M.SnapshotQueueDepth.Set(float64(len(snapshotCh)))
 				// Collect result from any previously timed-out write that has now finished.
+				// writeDone is always reassigned a few lines down before the next
+				// iteration's check, so the prior in-progress channel reference is
+				// always replaced before being re-read.
 				if writeDone != nil {
 					select {
 					case err := <-writeDone:
-						writeDone = nil
 						if err != nil {
 							lc.Logger.Error("snapshot write failed (delayed)", "error", err)
 						} else {
