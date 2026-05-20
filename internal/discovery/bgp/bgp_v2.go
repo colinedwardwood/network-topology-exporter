@@ -19,10 +19,10 @@ package bgp
 
 import (
 	"fmt"
+	"net"
 	"strconv"
 
 	gsnmp "github.com/gosnmp/gosnmp"
-	"net"
 )
 
 // vendorPeer accumulates the columns we need for one row of any vendor's

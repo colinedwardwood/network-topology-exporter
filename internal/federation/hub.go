@@ -420,7 +420,7 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var payload SpokePayload
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<20)) // 16 MiB
@@ -1024,10 +1024,11 @@ func (h *Hub) runSnapshotWriter(ctx context.Context) {
 			return
 		case g := <-h.snapshotCh:
 			// Collect result from any previously timed-out write that has now finished.
+			// writeDone is always reassigned below before the next iteration's check,
+			// so prior channel references don't leak across iterations.
 			if writeDone != nil {
 				select {
 				case <-writeDone:
-					writeDone = nil
 				default:
 					h.logger.Warn("hub: snapshot write still in flight; dropping snapshot (NFS stall?)")
 					continue
@@ -1040,17 +1041,20 @@ func (h *Hub) runSnapshotWriter(ctx context.Context) {
 			}(g, writeDone)
 			select {
 			case <-writeDone:
-				writeDone = nil
+				// success path — writeDone naturally falls out of scope at the
+				// next iteration's `writeDone = make(...)`.
 			case <-time.After(h.snapshotWriteTimeout):
 				h.logger.Warn("hub: snapshot write timed out (NFS stall?)", "timeout", h.snapshotWriteTimeout)
 				// writeDone goroutine still running; next iteration will detect this.
 			case <-ctx.Done():
-				if writeDone != nil {
-					select {
-					case <-writeDone:
-					case <-time.After(h.snapshotWriteTimeout):
-						h.logger.Warn("hub: snapshot write did not complete before shutdown; data may be lost")
-					}
+				// writeDone was just assigned a non-nil channel above and the
+				// success branch above is the only other case that could have
+				// fired; so writeDone is definitively non-nil here. Wait for
+				// the in-flight write or shutdown-grace timeout.
+				select {
+				case <-writeDone:
+				case <-time.After(h.snapshotWriteTimeout):
+					h.logger.Warn("hub: snapshot write did not complete before shutdown; data may be lost")
 				}
 				return
 			}
