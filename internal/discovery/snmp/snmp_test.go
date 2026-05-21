@@ -375,6 +375,7 @@ func TestWalkSystemGroup(t *testing.T) {
 	}
 	if dev == nil {
 		t.Fatal("Walk returned nil device")
+		return
 	}
 	if dev.ID != "core-sw-01" {
 		t.Errorf("ID = %q, want core-sw-01", dev.ID)
@@ -411,6 +412,7 @@ func TestWalkSystemGroupSysUpTimeWrongType(t *testing.T) {
 	}
 	if dev == nil {
 		t.Fatal("Walk returned nil device")
+		return
 	}
 	if dev.ID != "core-sw-01" {
 		t.Errorf("ID = %q, want core-sw-01", dev.ID)
@@ -445,6 +447,7 @@ func TestWalkSystemRejectsNegativeSysUpTime(t *testing.T) {
 		}
 		if dev == nil {
 			t.Fatal("Walk returned nil device")
+			return
 		}
 		if dev.Uptime != 0 {
 			t.Errorf("Uptime = %v, want 0 (negative sysUpTime must be rejected)", dev.Uptime)
@@ -469,6 +472,7 @@ func TestWalkSystemRejectsNegativeSysUpTime(t *testing.T) {
 		}
 		if dev == nil {
 			t.Fatal("Walk returned nil device")
+			return
 		}
 		want := time.Duration(50000) * 10 * time.Millisecond
 		if dev.Uptime != want {
@@ -903,6 +907,7 @@ func TestWalkNoSysName(t *testing.T) {
 	}
 	if dev == nil {
 		t.Fatal("Walk returned nil device")
+		return
 	}
 	// ID should fall back to IP string when sysName is absent.
 	if dev.ID != ip.String() {

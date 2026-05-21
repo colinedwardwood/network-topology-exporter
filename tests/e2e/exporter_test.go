@@ -25,7 +25,8 @@ func TestExporterBinary(t *testing.T) {
   parallelism: 8
   scope:
     cidr_allow_list:
-%s
+      - 0.0.0.0/0
+      - ::/0
 modules:
   snmp:
     enabled: true
@@ -36,7 +37,7 @@ modules:
 snapshot:
   path: %s
 targets:
-%s`, buildCIDRList(nodeIPs), snapshotPath, buildTargetList(nodeIPs, []string{"spine1", "leaf1", "leaf2"}))
+%s`, snapshotPath, buildTargetList(nodeIPs, []string{"spine1", "leaf1", "leaf2"}))
 
 	if err := os.WriteFile(configPath, []byte(cfg), 0600); err != nil {
 		t.Fatalf("write config: %v", err)

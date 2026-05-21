@@ -77,3 +77,19 @@ test-e2e-srl: ## Run SR Linux e2e tests (requires Docker + containerlab + x86)
 .PHONY: clean
 clean: ## Remove build artifacts
 	rm -rf bin coverage.out coverage.html
+
+# ─── Test Harness ───────────────────────────────────────────────────────────
+GRAFANA_URL   ?= https://networko11ydev.grafana.net
+GRAFANA_TOKEN ?= $(shell cat $(HOME)/Code/grafana/network-o11y-demo/grafana-cloud-api.token 2>/dev/null || echo "MISSING_TOKEN")
+
+.PHONY: dashboards-apply
+dashboards-apply: ## Apply test-harness dashboards to Grafana Cloud using grafana-cli
+	@if [ "$(GRAFANA_TOKEN)" = "MISSING_TOKEN" ]; then \
+		echo "Error: Provisioning token not found at ~/Code/grafana/network-o11y-demo/grafana-cloud-api.token"; \
+		exit 1; \
+	fi
+	@command -v grafana-cli >/dev/null || { echo "Error: grafana-cli not found. Install it from: https://grafana.com/docs/grafana/latest/as-code/observability-as-code/grafana-cli/"; exit 1; }
+	@for file in dashboards/test-harness/*.json; do \
+		echo "Applying $$file..."; \
+		grafana-cli dashboards apply --url $(GRAFANA_URL) --token $(GRAFANA_TOKEN) --folder "Test Harness" $$file; \
+	done

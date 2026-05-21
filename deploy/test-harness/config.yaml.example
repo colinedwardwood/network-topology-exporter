@@ -1,0 +1,38 @@
+# Test Harness Configuration — topology-exporter
+# Fill in your lab CIDR and SNMP community, then rename to config.yaml
+
+discovery:
+  interval: 60s
+  timeout_per_device: 10s
+  parallelism: 20
+
+  scope:
+    cidr_allow_list:
+      - "192.168.1.0/24"  # REPLACE with your lab CIDR
+
+modules:
+  snmp:
+    enabled: true
+    version: v2c
+  lldp:
+    enabled: true
+  cdp:
+    enabled: true
+  bgp:
+    enabled: false
+  ospf:
+    enabled: false
+  isis:
+    enabled: false
+  fdb:
+    enabled: false
+
+credentials:
+  profiles:
+    - name: lab-v2c
+      type: snmp_v2c
+      community_env: SNMP_COMMUNITY
+  fallback_order: [lab-v2c]
+
+snapshot:
+  path: /var/lib/network-topology-exporter/snapshot.json

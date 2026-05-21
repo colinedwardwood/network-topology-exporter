@@ -1,0 +1,71 @@
+// Test Harness Alloy Configuration
+// Fill in your Grafana Cloud credentials and rename to config.alloy
+
+logging {
+  level = "info"
+}
+
+// --- Metrics Scrape ---
+
+prometheus.scrape "exporter" {
+  targets = [{
+    __address__ = "topology-exporter:9100",
+  }]
+  forward_to = [prometheus.remote_write.grafanacloud.receiver]
+}
+
+prometheus.remote_write "grafanacloud" {
+  endpoint {
+    url = "https://prometheus-prod-01-eu-west-0.grafana.net/api/prom/push" // REPLACE with your GC Prometheus URL
+    basic_auth {
+      username = "REPLACE_WITH_USER_ID"
+      password = "REPLACE_WITH_TOKEN"
+    }
+  }
+
+  external_labels = {
+    tester_id     = "REPLACE_WITH_YOUR_NAME",
+    alloy_version = "v1.0.0", // This will be updated by Alloy at runtime if we use constants
+  }
+}
+
+// --- Logs Tail ---
+
+discovery.docker "exporter" {
+  host = "unix:///var/run/docker.sock"
+}
+
+loki.source.docker "exporter" {
+  host    = "unix:///var/run/docker.sock"
+  targets = discovery.docker.exporter.targets
+  forward_to = [loki.relabel.exporter.receiver]
+}
+
+loki.relabel "exporter" {
+  forward_to = [loki.write.grafanacloud.receiver]
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/test-harness-topology-exporter-1"
+    action        = "keep"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    target_label  = "container"
+  }
+}
+
+loki.write "grafanacloud" {
+  endpoint {
+    url = "https://logs-prod-006.grafana.net/loki/api/v1/push" // REPLACE with your GC Loki URL
+    basic_auth {
+      username = "REPLACE_WITH_USER_ID"
+      password = "REPLACE_WITH_TOKEN"
+    }
+  }
+
+  external_labels = {
+    tester_id = "REPLACE_WITH_YOUR_NAME",
+  }
+}

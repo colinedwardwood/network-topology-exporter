@@ -50,14 +50,15 @@ discovery:
   parallelism: 8
   scope:
     cidr_allow_list: []
-`, hubFedAddr, pki.caCertFile, pki.serverCertFile, pki.serverKeyFile)
+snapshot:
+  path: %s
+`, hubFedAddr, pki.caCertFile, pki.serverCertFile, pki.serverKeyFile, dir+"/hub-snapshot.json")
 	if err := os.WriteFile(hubCfgPath, []byte(hubCfg), 0600); err != nil {
 		t.Fatalf("write hub config: %v", err)
 	}
 
 	// Spoke config — same discovery setup as TestExporterBinary, role: spoke.
 	spokeCfgPath := dir + "/spoke.yaml"
-	cidrs := buildCIDRList(nodeIPs)
 	targets := buildTargetList(nodeIPs, []string{"spine1", "leaf1", "leaf2"})
 	spokeCfg := fmt.Sprintf(`federation:
   role: spoke
@@ -74,7 +75,8 @@ discovery:
   parallelism: 8
   scope:
     cidr_allow_list:
-%s
+      - 0.0.0.0/0
+      - ::/0
 modules:
   snmp:
     enabled: true
@@ -82,8 +84,10 @@ modules:
     community_env: SNMP_COMMUNITY
   lldp:
     enabled: true
+snapshot:
+  path: %s
 targets:
-%s`, hubFedAddr, pki.caCertFile, pki.clientCertFile, pki.clientKeyFile, cidrs, targets)
+%s`, hubFedAddr, pki.caCertFile, pki.clientCertFile, pki.clientKeyFile, dir+"/spoke-snapshot.json", targets)
 	if err := os.WriteFile(spokeCfgPath, []byte(spokeCfg), 0600); err != nil {
 		t.Fatalf("write spoke config: %v", err)
 	}

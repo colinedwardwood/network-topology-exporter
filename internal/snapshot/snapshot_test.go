@@ -127,6 +127,7 @@ func TestWriteLoadRoundTrip(t *testing.T) {
 	}
 	if out == nil {
 		t.Fatal("Load returned nil for an existing snapshot")
+		return
 	}
 	if out.Version != CurrentVersion {
 		t.Errorf("Version = %d, want %d", out.Version, CurrentVersion)
