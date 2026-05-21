@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## Unreleased — planned as v1.4.0-rc.1
+
+Upcoming releases adopt `-rc.N` suffixes to signal that the public
+surface is intentionally not frozen — see the pre-release notice in
+the README. The lab-fixture-capture work previously slotted for
+v1.3.1 lands under this milestone instead, renamed to
+[v1.4.0-rc.1 — Lab Fixture Capture](https://github.com/colinedwardwood/network-topology-exporter/milestones).
 
 ### Features
 
@@ -31,12 +37,13 @@
 - README now lists both test environments (`deploy/test-harness/` and
   `deploy/long-running-test/`).
 - **Test-harness onboarding now uses the published GHCR image.**
-  `deploy/test-harness/docker-compose.yml` references
-  `ghcr.io/colinedwardwood/network-topology-exporter:latest`, and the
-  "00. Getting Started" dashboard plus `deploy/test-harness/README.md`
-  now instruct testers to `docker compose pull` instead of running a
-  local `docker build`. Cuts cold-start time from minutes (Go toolchain
-  + multi-arch build) to seconds (image pull).
+  `deploy/test-harness/docker-compose.yml` pins
+  `ghcr.io/colinedwardwood/network-topology-exporter:1.3.1-rc1` so every
+  tester runs the same build, and the "00. Getting Started" dashboard
+  plus `deploy/test-harness/README.md` now instruct testers to
+  `docker compose pull` instead of running a local `docker build`.
+  Cuts cold-start time from minutes (Go toolchain + multi-arch build)
+  to seconds (image pull).
 - **Removed OTLP/Tempo references from tester onboarding.** The default
   harness ships metrics + logs only; the trace-related access-policy
   scope, Tempo username, and OTLP push endpoint have been dropped from
@@ -57,7 +64,6 @@ First release candidate for the 1.3.1 milestone. Includes the new tester-onboard
 - **D52 (Static Analysis)** — Resolved 16 `SA5011` possible-nil-dereference warnings across the test suite by ensuring test termination after fatal failures.
 - **D53 (E2E Stability)** — Fixed `permission denied` errors in E2E tests by explicitly configuring local snapshot paths for test binaries.
 - **D54 (Scope Guard)** — LLDP and CDP modules now support catch-all CIDRs (`0.0.0.0/0`) in the `cidr_allow_list`, allowing discovery of non-IP neighbors (like MAC-only containerlab nodes) when explicitly permitted by the operator.
-
 ## v1.3.0 — 2026-05-17
 
 Post-audit hardening. 25 numbered changes (D22–D46) covering 28 closed
