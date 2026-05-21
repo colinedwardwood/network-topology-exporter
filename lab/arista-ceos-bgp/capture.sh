@@ -83,7 +83,7 @@ for entry in "${NODES[@]}"; do
       echo "# oid:    ${oid}"
       echo "# walker fed: see comments in capture.sh"
       echo
-      snmpwalk -v2c -c "${COMMUNITY}" -On -Oe -Ovq=0 "${host}" "${oid}" 2>&1
+      snmpwalk -v2c -c "${COMMUNITY}" -On -Oe "${host}" "${oid}" 2>&1
     } > "${out}"
     if grep -q "No Such Object\|No Such Instance\|Timeout\|No Response" "${out}"; then
       echo "  ${oid} → empty/error (see ${out#$(dirname "$0")/})"
