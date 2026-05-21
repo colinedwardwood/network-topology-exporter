@@ -1,10 +1,19 @@
 # Changelog
 
-## Unreleased — planned as v1.3.1
+## v1.3.1-rc1 — 2026-05-21
 
-The next release is the v1.3.1 lab-fixture-capture milestone — see
-[v1.3.1 — Lab Fixture Capture](https://github.com/colinedwardwood/network-topology-exporter/milestones).
-Entries below will be added as the milestone work lands.
+First release candidate for the 1.3.1 milestone. Includes the new tester-onboarding stack and critical codebase health fixes.
+
+### Features
+
+- **D50 (Test Harness)** — Full tester-deployable stack added in `deploy/test-harness/`. Includes a turnkey `docker-compose.yml` with the exporter and Grafana Alloy, plus curated Grafana dashboards for topology visualization and health monitoring. Closes #45.
+- **D51 (Makefile Automation)** — Added `make dashboards-apply` to synchronize JSON dashboards from the repository to Grafana Cloud via `grafana-cli`.
+
+### Bug Fixes
+
+- **D52 (Static Analysis)** — Resolved 16 `SA5011` possible-nil-dereference warnings across the test suite by ensuring test termination after fatal failures.
+- **D53 (E2E Stability)** — Fixed `permission denied` errors in E2E tests by explicitly configuring local snapshot paths for test binaries.
+- **D54 (Scope Guard)** — LLDP and CDP modules now support catch-all CIDRs (`0.0.0.0/0`) in the `cidr_allow_list`, allowing discovery of non-IP neighbors (like MAC-only containerlab nodes) when explicitly permitted by the operator.
 
 ## v1.3.0 — 2026-05-17
 

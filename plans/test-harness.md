@@ -1,8 +1,9 @@
 # Plan: Test Harness — Tester-Deployable Stack + Grafana Cloud Dashboards
 
-**Status:** Proposed
+**Status:** Implemented
 **Author:** Tester-onboarding initiative, 2026-05-21
 **Created:** 2026-05-21
+**Implemented:** 2026-05-21
 **Estimate:** 3–5 engineering days across 4 PRs
 **Risk:** Medium — operator-facing artifacts (deploy templates, scoped credentials); cardinality decisions baked in early are expensive to undo.
 
@@ -172,4 +173,7 @@ All resolved.
 ## Sign-off
 
 - [x] GC stack identified (D8).
-- [ ] Decisions D1–D8 reviewed; overrides documented in this file before PR 2 lands.
+- [x] Decisions D1–D8 reviewed.
+- [x] PR 2 (Compose + Alloy) implemented.
+- [x] PR 3 (Dashboards) implemented.
+- [x] PR 4 (Makefile target) implemented.

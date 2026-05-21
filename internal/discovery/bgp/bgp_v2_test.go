@@ -229,6 +229,7 @@ func TestVendorSpecForKnownVendors(t *testing.T) {
 			}
 			if spec == nil {
 				t.Fatalf("vendorSpecFor(%q) = nil, want spec %q", c.vendor, c.want)
+				return
 			}
 			if spec.name != c.want {
 				t.Errorf("spec.name = %q, want %q", spec.name, c.want)
