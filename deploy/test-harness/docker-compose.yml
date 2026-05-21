@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  topology-exporter:
+    image: network-topology-exporter:latest # Build this with: docker build -t network-topology-exporter:latest .
+    container_name: test-harness-topology-exporter-1
+    volumes:
+      - ./config.yaml:/etc/topology-exporter/config.yaml:ro
+      - exporter-data:/var/lib/network-topology-exporter
+    environment:
+      - SNMP_COMMUNITY=${SNMP_COMMUNITY:-public}
+    ports:
+      - "9100:9100"
+    restart: unless-stopped
+
+  alloy:
+    image: grafana/alloy:latest
+    container_name: test-harness-alloy-1
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: run --storage.path=/var/lib/alloy/data /etc/alloy/config.alloy
+    environment:
+      - ALLOY_DEPLOY_MODE=docker
+    restart: unless-stopped
+
+volumes:
+  exporter-data:

@@ -370,6 +370,17 @@ func IPInNets(ip net.IP, nets []*net.IPNet) bool {
 	return false
 }
 
+// IsCatchAll returns true if any CIDR in the list is 0.0.0.0/0 or ::/0.
+func IsCatchAll(nets []*net.IPNet) bool {
+	for _, n := range nets {
+		ones, bits := n.Mask.Size()
+		if ones == 0 && bits != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // NormaliseName trims surrounding whitespace and lowercases s. Used to
 // normalise sysName / device-ID values from SNMP PDUs consistently across
 // LLDP, CDP, and the SYSTEM group walker.

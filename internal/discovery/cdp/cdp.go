@@ -150,7 +150,7 @@ func buildEdges(localDevice string, ifNames map[int]string, entries map[cacheKey
 
 		// LD-11: cdpCacheAddress with addrType 1 (IPv4) gives the neighbor IP.
 		remIP := cdpNeighborIP(e)
-		if remIP == nil && len(allowedNets) > 0 {
+		if remIP == nil && len(allowedNets) > 0 && !snmputil.IsCatchAll(allowedNets) {
 			// Cannot validate scope for non-IP neighbor; skip when scope filtering is active.
 			slog.Debug("cdp: skipping non-IP neighbor when scope filtering is active",
 				"device", localDevice, "neighbor", e.deviceID)
@@ -158,7 +158,7 @@ func buildEdges(localDevice string, ifNames map[int]string, entries map[cacheKey
 		}
 		if remIP != nil && len(allowedNets) > 0 && !snmputil.IPInNets(remIP, allowedNets) {
 			oos = append(oos, discovery.OutOfScopeNeighbour{
-				Proto:           "cdp",
+				Proto:           string(discovery.DiscoveryProtocolCDP),
 				ReportingDevice: localDevice,
 				ReportingPort:   localPort,
 				NeighbourHint:   e.deviceID,

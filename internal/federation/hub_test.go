@@ -723,6 +723,7 @@ func TestHubWriteSnapshotPersistsGraph(t *testing.T) {
 	}
 	if f == nil {
 		t.Fatal("snapshot.Load returned nil, expected written file")
+		return
 	}
 	if len(f.Devices) != 1 || f.Devices[0].ID != "sw-hub-1" {
 		t.Errorf("loaded devices = %#v, want [{ID:sw-hub-1}]", f.Devices)

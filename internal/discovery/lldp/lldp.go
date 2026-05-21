@@ -303,7 +303,7 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 			}
 			if len(allowedNets) > 0 && !snmputil.IPInNets(remIP, allowedNets) {
 				oos = append(oos, discovery.OutOfScopeNeighbour{
-					Proto:           "lldp",
+					Proto:           string(discovery.DiscoveryProtocolLLDP),
 					ReportingDevice: localDevice,
 					ReportingPort:   localPort,
 					NeighbourHint:   remDevice,
@@ -312,7 +312,7 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 				})
 				continue
 			}
-		} else if len(allowedNets) > 0 {
+		} else if len(allowedNets) > 0 && !snmputil.IsCatchAll(allowedNets) {
 			// Cannot validate scope for non-IP chassis ID; skip when scope
 			// filtering is active (mirrors CDP behaviour).
 			slog.Debug("lldp: non-IP chassis ID with scope filtering active; skipping entry",
