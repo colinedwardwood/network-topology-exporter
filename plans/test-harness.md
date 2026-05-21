@@ -85,27 +85,20 @@ plans/
 
 The tester's Alloy adds these `external_labels` to every metric and log line:
 
-- `tester_id` — short string, tester picks from a registration form or is assigned one. Low cardinality (1 per tester).
+- `tester_id` — short string, tester picks (e.g. their Grafana corp username). Filterable everywhere.
 - `lab_id` — optional, tester can use this if they run more than one lab.
-- `stack_version` — derived from the running image tag (`v1.4.0-rc.1` etc).
+- `stack_version` — derived from the running exporter image tag (`v1.4.0-rc.1` etc).
+- `alloy_version` — populated from Alloy's own version so test reports cite the exact agent that produced them.
 
-Filtering on `tester_id` in every dashboard makes "show me everything from Alice's lab" trivial. The cardinality cost is bounded — one tester = one label value.
+### Token model
 
-### Token security
-
-The project maintainer pre-provisions a single Grafana Cloud Access Policy with:
-- Scope: `metrics:write` + `logs:write` only, no admin, no read.
-- Per-stack restriction (one stack, one tenant).
-- Optionally: per-tester tokens cut from the same policy if the tester base grows beyond ~5 people.
-
-V1: one shared token across testers (faster onboarding).
-V2 (if tester count grows): per-tester tokens, automate cutting via the Grafana Cloud API and a `make register-tester` target.
+Testers are Grafana employees and cut their own Alloy write tokens against the project stack (`networko11ydev.grafana.net`). Maintainer-side, a separate **provisioning** token (at `~/Code/grafana/network-o11y-demo/grafana-cloud-api.token`, never committed) drives dashboard CRUD via `grafana-cli`.
 
 ### Dashboard provisioning
 
-Terraform with the `grafana/grafana` provider. Dashboard JSON lives in `dashboards/test-harness/*.json`. `terraform apply` writes them to the project-controlled stack, in a folder named `Test Harness`. The tester never runs terraform — they only fill in two config files and bring up the compose stack.
+`grafana-cli` (Grafana's observability-as-code CLI), not terraform. See https://grafana.com/docs/grafana/latest/as-code/observability-as-code/grafana-cli/.
 
-Terraform state lives in the project repo's git (not remote) since this is one-shot maintainer ops, not CI.
+Dashboard JSON lives in `dashboards/test-harness/*.json`. A `make dashboards-apply` target wraps `grafana-cli` against the stack URL + provisioning token, writing the JSON files into a folder named `Test Harness` on the stack. Testers never run this — only the maintainer does, when a dashboard changes. No terraform state to manage.
 
 ### Dashboard contents
 
@@ -131,10 +124,9 @@ Terraform state lives in the project repo's git (not remote) since this is one-s
 | **PR 1 (this plan)** | `plans/test-harness.md` design doc | < 0.5 day | Low |
 | **PR 2** | `deploy/test-harness/` — compose + Alloy config + tester-facing README | ~1 day | Medium — operator-facing |
 | **PR 3** | `dashboards/test-harness/*.json` — three dashboards as JSON | ~1–2 days | Medium — JSON authoring tedious, panel choice critical |
-| **PR 4** | `terraform/test-harness/` — provisions folder + dashboards into the project GC stack | ~0.5 day | Higher — terraform state, GC API credentials handling |
-| **PR 5 (optional v2)** | Per-tester token automation, registration flow | ~1 day | Low — pure tooling |
+| **PR 4** | `make dashboards-apply` target driving `grafana-cli` against the project stack | ~0.25 day | Low — no terraform state |
 
-Dependencies: PR 3 can be authored against the existing metric surface in parallel with PR 2; PR 4 depends on PR 3.
+Dependencies: PR 3 can be authored in parallel with PR 2; PR 4 depends on PR 3.
 
 ## Resolved scope decisions
 
@@ -144,22 +136,21 @@ These are this plan's recommendations; the user has chance to override at review
 |---|---|---|
 | D1 | **Tester deploy footprint = docker-compose**, not helm | Lowest friction for ad-hoc testers; helm chart is a v2 follow-up if k8s shops ask |
 | D2 | **Alloy in the middle**, not exporter OTLP-push direct | Unified scrape + log-tail + retry + buffering; one agent the tester installs and configures |
-| D3 | **Shared token v1, per-tester v2** | Faster onboarding now; revocation/attribution if tester count grows |
-| D4 | **Dashboard provisioning via terraform with `grafana/grafana` provider** | Maintainer-side only; testers never run terraform |
+| D3 | **Per-tester Alloy tokens — tester self-serves** | Testers are Grafana employees; they cut their own Alloy tokens against the project stack. No maintainer-side token distribution. |
+| D4 | **Dashboard provisioning via `grafana-cli` (observability-as-code), NOT terraform** | One CLI, no provider/state machinery; ships dashboards from a git-tracked folder. Docs: https://grafana.com/docs/grafana/latest/as-code/observability-as-code/grafana-cli/ |
 | D5 | **`How to Use` dashboard = markdown panels + one live "configured?" stat panel** | Discoverable on landing; no separate doc site needed |
-| D6 | **`tester_id` label injected by Alloy `external_labels`** | Low cardinality, filterable in every panel, doesn't require schema changes in the exporter |
+| D6 | **`tester_id` + `alloy_version` labels injected by Alloy `external_labels`** | `tester_id` for per-tester filtering. `alloy_version` recorded so test reports cite the exact agent version that produced them. |
 | D7 | **Native node graph panel, NOT graphviz** | Designed exactly for nodes+edges data; clickable detail panels; no DOT conversion step |
+| D8 | **Target GC stack: `networko11ydev.grafana.net` (instance 1544961)** | Maintainer-controlled; provisioning token lives at `~/Code/grafana/network-o11y-demo/grafana-cloud-api.token` and never enters the repo |
 
 ## Risks and mitigations
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Tester accidentally leaks the shared GC token | Anyone with the token can write to the project's metrics/logs tenant | Token is scoped `metrics:write`+`logs:write` only — no read, no admin. Rotate periodically. |
-| Cardinality explosion from a misconfigured tester lab | GC bill grows; query latency degrades | Set Mimir tenant ingest limits in GC before testers onboard; monitor `cortex_distributor_received_samples_total` |
 | Tester reports a "bug" that's actually a misconfigured lab on their side | Wasted maintainer triage | The `How to Use` dashboard's "configured?" stat panel is the first triage step ("does your lab show green here?") |
 | Node graph panel chokes on very dense topologies (>500 edges) | Tester sees an unusable graph and assumes the exporter is broken | Document a "shows the top N most-active edges" override and a fallback to the flat edge table |
-| Alloy version drift between testers | Hard-to-reproduce telemetry shape differences | Pin the Alloy image tag in `docker-compose.yml`; bump deliberately |
-| Dashboard JSON drift if hand-edited in the UI | Terraform plan shows churn forever | Document: changes happen in the JSON file + `terraform apply`, never directly in the UI. Add a CI check that the deployed JSON matches the repo JSON |
+| Dashboard JSON drift if hand-edited in the UI | `make dashboards-apply` overwrites tester edits, or stale repo JSON propagates | Document: changes happen in the JSON file + `make dashboards-apply`, never directly in the UI. Add a CI check that the deployed JSON matches the repo JSON. |
+| Tester's Alloy version not recorded with bug reports | Hard-to-reproduce telemetry shape differences | `alloy_version` external label baked into every series/log; bug reports cite it. |
 
 ## Out of scope
 
@@ -172,14 +163,13 @@ These are this plan's recommendations; the user has chance to override at review
 
 ## Open questions / blockers
 
-1. **Which Grafana Cloud stack is "the project's"?** Maintainer needs to identify (or create) a stack with capacity headroom for ~5 testers' worth of metrics + logs. Free-tier capacity is probably enough for the first 2–3 testers; paid tier or sponsored stack needed beyond.
-2. **Per-tester onboarding form.** Lightweight Google Form / Tally / GitHub issue template? V1 = ad-hoc maintainer DM; V2 = automate.
-3. **Terraform state location.** Local file in the repo (single maintainer, single stack) — acceptable but means only one person can `apply`. Remote backend (GCS / S3) is a fair v2.
-4. **Does the project have a Grafana Cloud account already?** If yes, what's the org/stack ID? If no, who creates one?
+All resolved.
+
+- GC stack: **`networko11ydev.grafana.net`** (instance `1544961`).
+- Tester onboarding: tester cuts their own Alloy token — no registration form.
+- Provisioning state: handled by `grafana-cli`; no terraform state to track.
 
 ## Sign-off
 
-- [ ] Maintainer confirms a Grafana Cloud stack is available and supplies its URL + admin access for terraform.
-- [ ] Decisions D1–D7 reviewed; overrides documented in this file before PR 2 lands.
-- [ ] Token scoping verified — write-only, no read, no admin.
-- [ ] Cardinality budget set on the GC stack before any tester onboards.
+- [x] GC stack identified (D8).
+- [ ] Decisions D1–D8 reviewed; overrides documented in this file before PR 2 lands.
