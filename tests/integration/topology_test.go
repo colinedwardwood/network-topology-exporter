@@ -64,7 +64,7 @@ func snmpParams(addr string, timeout time.Duration) snmputil.Params {
 	return snmputil.Params{
 		IP:        ip,
 		Port:      port,
-		Community: "public",
+		Community: []byte("public"),
 		Timeout:   timeout,
 	}
 }
@@ -130,13 +130,17 @@ func TestTwoDeviceLLDPBidirectional(t *testing.T) {
 	if e.SrcDevice != "sw-a" || e.DstDevice != "sw-b" {
 		t.Errorf("endpoints = (%s, %s), want (sw-a, sw-b)", e.SrcDevice, e.DstDevice)
 	}
-	// Reconcile normalises for grouping only; port names in emitted edges
-	// preserve the original encoding from the winning observation source.
-	if e.SrcPort != "GigabitEthernet0/1" {
-		t.Errorf("SrcPort = %q, want GigabitEthernet0/1", e.SrcPort)
+	// graph.Reconcile applies NormalizePortName to the chosen edge's SrcPort
+	// and DstPort (graph.go:187-188) so EdgeKey stays stable across cycles
+	// when the winning protocol flips between LLDP (long form) and CDP
+	// (short form). The PDUs above feed "GigabitEthernet0/1" and
+	// "GigabitEthernet0/2"; the reconciler abbreviates these to "Gi0/1" /
+	// "Gi0/2" via the interfaceAbbreviations table.
+	if e.SrcPort != "Gi0/1" {
+		t.Errorf("SrcPort = %q, want Gi0/1 (normalized from GigabitEthernet0/1)", e.SrcPort)
 	}
-	if e.DstPort != "GigabitEthernet0/2" {
-		t.Errorf("DstPort = %q, want GigabitEthernet0/2", e.DstPort)
+	if e.DstPort != "Gi0/2" {
+		t.Errorf("DstPort = %q, want Gi0/2 (normalized from GigabitEthernet0/2)", e.DstPort)
 	}
 	if e.DiscoveryProto != "lldp" {
 		t.Errorf("DiscoveryProto = %q, want lldp", e.DiscoveryProto)
@@ -238,11 +242,14 @@ func TestMetricsEmittedAfterReconcile(t *testing.T) {
 	m.Topology.Update(discovery.Graph{Edges: reconEdges})
 
 	// Verify the edge_info collector emits the expected series.
-	// Reconcile preserves original port encoding from the winning observation.
+	// graph.Reconcile applies NormalizePortName to the chosen edge's
+	// SrcPort/DstPort (graph.go:187-188), so the metric series carry the
+	// abbreviated forms ("Gi0/1" / "Gi0/2") even though the LLDP PDUs above
+	// advertised the long forms.
 	const want = `
 # HELP network_topology_edge_info One series per discovered topology edge. Value is always 1.
 # TYPE network_topology_edge_info gauge
-network_topology_edge_info{direction="bidirectional",discovery_proto="lldp",dst_device="sw-b",dst_port="GigabitEthernet0/2",link_kind="ethernet",src_device="sw-a",src_port="GigabitEthernet0/1"} 1
+network_topology_edge_info{direction="bidirectional",discovery_proto="lldp",dst_device="sw-b",dst_port="Gi0/2",link_kind="ethernet",src_device="sw-a",src_port="Gi0/1"} 1
 `
 	if err := testutil.GatherAndCompare(m.Registry(), strings.NewReader(want), "network_topology_edge_info"); err != nil {
 		t.Errorf("edge_info mismatch: %v", err)
