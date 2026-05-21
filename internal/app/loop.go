@@ -195,6 +195,7 @@ func RunDiscoveryLoop(ctx context.Context, lc LoopConfig) {
 						// would emit this Warn every cycle until the stall
 						// clears. Limiter keeps the operator alerted at first
 						// occurrence and re-alerted hourly, not every minute.
+						lc.M.SnapshotDropsTotal.WithLabelValues(string(metrics.SnapshotDropReasonWriteInFlight)).Inc()
 						lc.WarnSnapshot(ctx, "snapshot_write_in_flight",
 							"snapshot write still in flight; dropping snapshot (NFS stall?)")
 						continue
@@ -322,6 +323,7 @@ func RunDiscoveryLoop(ctx context.Context, lc LoopConfig) {
 				// symptom of the same chronic-NFS stall as the two branches
 				// in the writer goroutine. Keys are distinct so each path
 				// surfaces independently on first occurrence.
+				lc.M.SnapshotDropsTotal.WithLabelValues(string(metrics.SnapshotDropReasonQueueFull)).Inc()
 				lc.WarnSnapshot(ctx, "snapshot_queue_full",
 					"snapshot write queue full; dropping (previous write still in flight)")
 			}
