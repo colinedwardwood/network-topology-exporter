@@ -750,6 +750,116 @@ func TestWriteSnapshotAsyncIsNonBlocking(t *testing.T) {
 	}
 }
 
+// TestWriteSnapshotAsyncIncrementsDropsOnQueueFull verifies that the
+// queue-full drop path on writeSnapshotAsync increments
+// SnapshotDropsTotal{reason="queue_full"}. Issue #42.
+func TestWriteSnapshotAsyncIncrementsDropsOnQueueFull(t *testing.T) {
+	m := metrics.New(false)
+	h := NewHub(config.FederationConfig{}, m, nil, t.TempDir()+"/snap.json")
+
+	before := testutil.ToFloat64(m.SnapshotDropsTotal.WithLabelValues(
+		string(metrics.SnapshotDropReasonQueueFull)))
+
+	h.snapshotCh <- discovery.Graph{}       // fill cap-1 channel
+	h.writeSnapshotAsync(discovery.Graph{}) // must drop
+
+	after := testutil.ToFloat64(m.SnapshotDropsTotal.WithLabelValues(
+		string(metrics.SnapshotDropReasonQueueFull)))
+	if got := after - before; got != 1 {
+		t.Errorf("SnapshotDropsTotal{queue_full} delta = %v, want 1", got)
+	}
+}
+
+// TestRunSnapshotWriterIncrementsDropsOnWriteInFlight verifies that when
+// runSnapshotWriter dequeues a snapshot while a previous write goroutine
+// is still in-flight, the new snapshot is dropped and
+// SnapshotDropsTotal{reason="write_in_flight"} increments. Issue #42.
+//
+// Test shape mirrors TestRunSnapshotWriterTimeoutContinues: stall the first
+// write past the timeout (so writeDone is still non-nil when the next
+// snapshot arrives), then enqueue a second snapshot before unblocking the
+// first. The writer's `if writeDone != nil` check finds the previous write
+// still pending and takes the drop branch.
+func TestRunSnapshotWriterIncrementsDropsOnWriteInFlight(t *testing.T) {
+	dir := t.TempDir()
+	m := metrics.New(false)
+	h := NewHub(config.FederationConfig{SpokeTimeout: 5 * time.Minute}, m, nil, filepath.Join(dir, "snap.json"))
+
+	block := make(chan struct{})
+	started := make(chan struct{}, 1)
+	firstWriteDone := make(chan struct{})
+	firstDone := false
+	var mu sync.Mutex
+
+	h.snapshotWriteFn = func(_ string, _ snapshot.File) error {
+		mu.Lock()
+		isFirst := !firstDone
+		if isFirst {
+			firstDone = true
+		}
+		mu.Unlock()
+
+		if isFirst {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-block
+			close(firstWriteDone)
+		}
+		return nil
+	}
+	h.snapshotWriteTimeout = 20 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go h.runSnapshotWriter(ctx)
+
+	// First write: enqueue and wait for it to start.
+	h.writeSnapshotAsync(discovery.Graph{Devices: []discovery.Device{{ID: "first"}}})
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first write never started")
+	}
+
+	// Wait for the writer's outer-select timeout to fire (20ms + margin). The
+	// first write goroutine is still blocked on `block`; writeDone is still
+	// non-nil from the writer's perspective.
+	time.Sleep(100 * time.Millisecond)
+
+	before := testutil.ToFloat64(m.SnapshotDropsTotal.WithLabelValues(
+		string(metrics.SnapshotDropReasonWriteInFlight)))
+
+	// Second snapshot arrives while writeDone is still pending — must drop.
+	h.writeSnapshotAsync(discovery.Graph{Devices: []discovery.Device{{ID: "second"}}})
+
+	// Give runSnapshotWriter a chance to dequeue + take the drop branch.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		after := testutil.ToFloat64(m.SnapshotDropsTotal.WithLabelValues(
+			string(metrics.SnapshotDropReasonWriteInFlight)))
+		if after-before >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	after := testutil.ToFloat64(m.SnapshotDropsTotal.WithLabelValues(
+		string(metrics.SnapshotDropReasonWriteInFlight)))
+	if got := after - before; got != 1 {
+		t.Errorf("SnapshotDropsTotal{write_in_flight} delta = %v, want 1", got)
+	}
+
+	// Unblock the stalled write so the test cleans up without leaking.
+	close(block)
+	select {
+	case <-firstWriteDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stalled write never unblocked")
+	}
+}
+
 // TestHubWriteSnapshotNoopWhenPathEmpty verifies that writeSnapshot is a no-op
 // when snapshotPath is empty (the normal test configuration).
 func TestHubWriteSnapshotNoopWhenPathEmpty(_ *testing.T) {

@@ -25,6 +25,7 @@ All metrics use the `network_` prefix. No metric uses a raw IP address or free-f
 | `network_topology_graph_stale` | gauge (0/1) | 1 while serving snapshot on startup; 0 after first live cycle. Alert: `network_topology_graph_stale == 1 for 15m` |
 | `network_topology_snapshot_last_written_timestamp_seconds` | gauge | Alert: absent or stopped advancing after two cycle intervals. |
 | `network_topology_snapshot_loaded_devices_total` | gauge | Sanity check at startup; compare to expected fleet size. |
+| `network_topology_snapshot_drops_total` | counter | Snapshot writes dropped because the persistence pipeline could not absorb them. `reason` ∈ {`queue_full`, `write_in_flight`}. Issue #42. Alert: `rate(...) > 0 for 5m` — persistent drops mean on-disk state is going stale; restart will cold-start from a worse position the longer the stall lasts. |
 
 ## Discovery cycle health
 
