@@ -33,3 +33,6 @@ vendor/
 .claude/worktrees/
 /topology-exporter
 clab-nte-e2e/
+
+# Personal scratchpad — not a project artifact
+TODOs.txt
