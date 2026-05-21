@@ -101,6 +101,18 @@ type Metrics struct {
 	// writing (0 or 1 for the capacity-1 channel).
 	SnapshotQueueDepth prometheus.Gauge
 
+	// SnapshotDropsTotal counts snapshot writes that were dropped because
+	// the snapshot pipeline could not absorb them. Partitioned by `reason`:
+	//   - queue_full:      caller couldn't enqueue (snapshot channel full)
+	//   - write_in_flight: writer found previous write still pending
+	//
+	// Both reasons surface the same underlying condition (storage stall
+	// preventing the previous snapshot from completing) at different
+	// layers; they are kept distinct so operators can tell whether the
+	// upstream cycle has started outpacing the writer, or the writer
+	// itself is stalled. Issue #42.
+	SnapshotDropsTotal *prometheus.CounterVec
+
 	// CycleBudgetSkipsTotal counts targets that were never polled in a discovery
 	// cycle because the cycle budget deadline expired before their goroutine could
 	// acquire the parallelism semaphore.
@@ -257,6 +269,10 @@ func New(emitBoundaryObs bool) *Metrics {
 			Name: "network_topology_snapshot_queue_depth",
 			Help: "Current number of snapshots queued for writing.",
 		}),
+		SnapshotDropsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "network_topology_snapshot_drops_total",
+			Help: "Snapshot writes dropped because the pipeline could not absorb them. reason ∈ {queue_full, write_in_flight}.",
+		}, []string{"reason"}),
 		CycleBudgetSkipsTotal: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "network_topology_cycle_budget_skips_total",
 			Help: "Targets skipped in a discovery cycle because the cycle budget deadline expired before their goroutine could start.",
@@ -312,6 +328,7 @@ func New(emitBoundaryObs bool) *Metrics {
 		m.FDBSuppressedMACs,
 		m.GoRoutines,
 		m.SnapshotQueueDepth,
+		m.SnapshotDropsTotal,
 		m.CycleBudgetSkipsTotal,
 		m.MetricsRenderDuration,
 		m.MetricsPayloadBytes,

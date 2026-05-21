@@ -29,6 +29,22 @@ per-row instance OID. The type system enforces this via `snmputil.TableOID`.
 Current table OIDs walked: ~12. `module` is one of the ~9 discovery modules.
 `reason` is one of: `invalid_type`, `invalid_oid`. Maximum cardinality: ~200.
 
+## network_topology_snapshot_drops_total
+Labels: `reason`
+
+Cardinality = 2 (closed enum: `queue_full`, `write_in_flight`). Counter
+increments when the snapshot persistence pipeline cannot absorb a write
+(typically during a storage stall — slow NFS, full disk, EBS hang). The
+two reasons surface the same underlying condition at different layers:
+
+- `queue_full` — caller couldn't enqueue (bounded snapshot channel full).
+- `write_in_flight` — writer goroutine dequeued a new snapshot but found
+  its previous write still pending from an earlier timed-out goroutine.
+
+Alert: `rate(network_topology_snapshot_drops_total[10m]) > 0` for 5m.
+Persistent drops mean the on-disk state is increasingly stale and a
+restart will cold-start from a worse position the longer the stall lasts.
+
 ## network_topology_federation_spoke_last_push_timestamp_seconds
 Labels: `spoke_id`
 

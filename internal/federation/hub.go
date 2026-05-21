@@ -1030,6 +1030,7 @@ func (h *Hub) runSnapshotWriter(ctx context.Context) {
 				select {
 				case <-writeDone:
 				default:
+					h.m.SnapshotDropsTotal.WithLabelValues(string(metrics.SnapshotDropReasonWriteInFlight)).Inc()
 					h.logger.Warn("hub: snapshot write still in flight; dropping snapshot (NFS stall?)")
 					continue
 				}
@@ -1072,6 +1073,7 @@ func (h *Hub) writeSnapshotAsync(g discovery.Graph) {
 	select {
 	case h.snapshotCh <- g:
 	default:
+		h.m.SnapshotDropsTotal.WithLabelValues(string(metrics.SnapshotDropReasonQueueFull)).Inc()
 		h.logger.Warn("hub: snapshot write queue full; dropping (NFS stall?)")
 	}
 }
