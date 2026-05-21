@@ -61,9 +61,12 @@ routers over the VPN. This produces the same shape of capture as
    Typical reservation: 4–8 hours, free, queue-based.
 2. Wait for the `devnetsandbox@cisco.com` email with VPN host, group,
    username, password.
-3. Connect:
+3. Connect (the `<group>` value comes from the same DevNet reservation email
+   as the username; it's typically `VPN` or similar):
    ```sh
-   sudo openconnect --protocol=anyconnect --user=<sandbox-user> <vpn-host>
+   sudo openconnect --protocol=anyconnect \
+       --authgroup=<group> \
+       --user=<sandbox-user> <vpn-host>
    ```
 4. SSH to the CML controller (URL in the email). In the CML UI, create a
    new lab with **two CSR1000v** (or **c8000v**) nodes connected by a
@@ -91,16 +94,23 @@ VPN's reverse path).
 1. Reserve at https://devnetsandbox.cisco.com/RM/Topology (search "IOS XE").
 2. Connect via `openconnect` as above. Note the management IP from the
    email (example: `10.10.20.48`).
-3. Verify your Ubuntu host's VPN-side IP: `ip addr show | grep tun0`.
-   This is the IP the CSR will see you on.
-4. Start a local BGP speaker (bird2 example):
+3. Verify your Ubuntu host's VPN-side IP:
    ```sh
-   cat > /etc/bird/bird.conf <<'EOF'
+   ip -4 -o addr show tun0 | awk '{print $4}' | cut -d/ -f1
+   ```
+   This is the IP the CSR will see you on.
+4. Start a local BGP speaker (bird2 example). `multihop;` is required —
+   the CSR sets `ebgp-multihop 4` and bird's default TTL of 1 will not
+   reach the CSR across the VPN, so without it the session never reaches
+   `Established`:
+   ```sh
+   sudo tee /etc/bird/bird.conf >/dev/null <<'EOF'
    router id <your-vpn-ip>;
    protocol device { }
    protocol bgp csr_peer {
      local as 65002;
      neighbor 10.10.20.48 as 65001;
+     multihop;
      ipv4 { import all; export none; };
    }
    EOF
@@ -156,6 +166,47 @@ The sandbox is reset between reservations, so no per-router cleanup
 is required.
 
 Disconnect VPN: `sudo killall openconnect`.
+
+## Troubleshooting
+
+### `openconnect` exits with "authentication failure" or hangs at a group prompt
+
+The DevNet sandbox VPN requires the `--authgroup` value from the reservation
+email. The example in step 3 of Option A shows the canonical form. If the
+group isn't in your email, log into the DevNet portal and re-open the
+reservation details.
+
+### `snmpwalk` returns `Timeout` for every OID
+
+VPN reachability is broken or the SNMP community on the router differs from
+the script default (`public`).
+
+- `ip addr show tun0` — is the VPN interface up?
+- `ping <router-ip>` — does ICMP reach the router?
+- On the CSR/CML console, run `show snmp community` and confirm `public RO`
+  is configured. Sandbox routers usually do NOT pre-configure SNMP; you
+  must paste the relevant `snmp-server community public RO` line from the
+  `configs/iosxe-*.cfg` block before walking.
+
+### DevNet reservation expired mid-capture
+
+Reservation windows are 4-8h, queue-based. If `snmpwalk` starts returning
+`Timeout` partway through a run, check the DevNet portal — your reservation
+may have ended. Re-reserve and resume; partial captures already on disk are
+still useful.
+
+### BGP session never reaches `Established`
+
+- Option A (CML two-router): `show ip route 10.0.0.0/30` on both r1 and r2.
+  Both should see the connected `/30`. If the interface is still in switching
+  mode (CML default for some images), `no switchport` may have been
+  rejected — re-paste the interface stanza and check `show interface Gi2`.
+- Option B (CSR + bird): on the CSR, `show ip bgp neighbors <peer-ip>` —
+  is the session `Active`/`OpenSent` rather than `Established`? Likeliest
+  cause is the `multihop;` directive missing from bird's config (eBGP TTL=1
+  cannot traverse the DevNet VPN's multi-hop path; CSR sets
+  `ebgp-multihop 4` and bird must match). On the Ubuntu host:
+  `sudo birdc show protocols csr_peer` and check the state.
 
 ## Converting captures to fixtures
 

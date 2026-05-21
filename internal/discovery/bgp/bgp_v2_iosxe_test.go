@@ -54,21 +54,17 @@ import (
 //
 // TODO(#1): replace placeholder values with values from
 // lab/cisco-iosxe-bgp/captures/<r1-host>__1_3_6_1_4_1_9_9_187_1_2_5.txt
-// once captures land. Numeric OID form is mandatory.
+// once captures land. Numeric OID form is mandatory. The current
+// placeholder values use RFC 5737 TEST-NET-1 (10.255.255.254) and
+// RFC 6996 private AS 64999 deliberately, so that if t.Skip is removed
+// without updating both the PDUs below and the assertions in the test,
+// the failure mode is loud (assertion mismatch) rather than a false pass.
 func buildCiscoCbgpPeer2IOSXERealPDUs() []gsnmp.SnmpPDU {
 	const base = ".1.3.6.1.4.1.9.9.187.1.2.5.1."
-	// TODO(#1): confirm index encoding matches IOL — expected format
-	// from MIB documentation: <addrType=1=ipv4>.<addrLen=4>.<addrBytes>.
-	// Replace with the actual index suffix observed in the capture.
-	const idx = "1.4.10.0.0.2"
+	const idx = "1.4.10.255.255.254"
 	return []gsnmp.SnmpPDU{
-		// TODO(#1): col 3 = bgpPeer2State; expect Integer(6)=established
-		// when BGP is up. Read the value from the capture line that
-		// matches the OID prefix and column number.
 		{Name: base + "3." + idx, Type: gsnmp.Integer, Value: bgpStateEstablished},
-		// TODO(#1): col 11 = bgpPeer2RemoteAs; expect Gauge32(65001) for
-		// Option A iBGP, Gauge32(65002) for Option B eBGP-to-bird.
-		{Name: base + "11." + idx, Type: gsnmp.Gauge32, Value: uint(65001)},
+		{Name: base + "11." + idx, Type: gsnmp.Gauge32, Value: uint(64999)},
 	}
 }
 
@@ -102,13 +98,13 @@ func TestWalkVendorCiscoFromIOSXECapture(t *testing.T) {
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge from IOS-XE vendor walker, got %d: %+v", len(edges), edges)
 	}
-	// TODO(#1): assert the expected DstDevice — 10.0.0.2 for Option A,
-	// or the bird router-id for Option B.
-	if got := edges[0].DstDevice; got != "10.0.0.2" {
-		t.Errorf("DstDevice = %q, want 10.0.0.2 (from IOS-XE cbgpPeer2 index)", got)
+	// TODO(#1): update both the expected DstDevice and the expected
+	// remote-AS once captures land — 10.0.0.2/65001 for Option A iBGP,
+	// or the bird router-id/65002 for Option B eBGP.
+	if got := edges[0].DstDevice; got != "10.255.255.254" {
+		t.Errorf("DstDevice = %q, want 10.255.255.254 (placeholder)", got)
 	}
-	// TODO(#1): assert remote-AS — 65001 for Option A iBGP, 65002 for Option B eBGP.
-	if got := edges[0].Metadata[metaKeyRemoteAs]; got != "65001" {
-		t.Errorf("RemoteAs metadata = %q, want 65001 (from IOS-XE col 11)", got)
+	if got := edges[0].Metadata[metaKeyRemoteAs]; got != "64999" {
+		t.Errorf("RemoteAs metadata = %q, want 64999 (placeholder)", got)
 	}
 }
