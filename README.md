@@ -1,5 +1,14 @@
 # network-topology-exporter
 
+> [!WARNING]
+> **This is a test release, not a stable v1.x.** Despite the existing
+> `v1.0.0`–`v1.3.0` tags, the project follows pre-1.0 stability
+> conventions: the public surface (config schema, metric names, CLI
+> flags, on-disk snapshot format, federation API) can break between
+> minor releases. Upcoming releases will use `-rc.N` suffixes —
+> next: `v1.4.0-rc.1`. Pin exact versions in anything you care about,
+> and please file issues for anything you can break.
+
 A standalone, Apache 2.0 Go exporter that discovers network topology over SNMP, LLDP, CDP, BGP, OSPF, FDB, IS-IS, and MPLS-TE, and emits four signals:
 
 - **Prometheus metrics** for device inventory and topology edges, scraped via `/metrics`.
@@ -15,7 +24,7 @@ The Prometheus / Grafana stack already covers storage, query, alerting, and visu
 
 ## Status
 
-**Release candidate.** SNMP / LLDP / CDP / BGP / OSPF / FDB / IS-IS / MPLS-TE discovery, graph reconciliation, credential management, snapshot persistence, multi-instance federation, and optional OTLP push are all implemented and covered by unit, integration, and end-to-end tests.
+**Functionally complete, public surface intentionally unstable.** SNMP / LLDP / CDP / BGP / OSPF / FDB / IS-IS / MPLS-TE discovery, graph reconciliation, credential management, snapshot persistence, multi-instance federation, and optional OTLP push are all implemented and covered by unit, integration, and end-to-end tests. The project ships against test deployments and welcomes adversarial feedback — see the pre-release notice at the top of this README.
 
 ## Quickstart
 
