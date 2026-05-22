@@ -1,0 +1,18 @@
+name: nte-dynamic-1
+topology:
+  nodes:
+    spine1: { kind: linux, image: nte-testnode:latest }
+    spine2: { kind: linux, image: nte-testnode:latest }
+    leaf1:  { kind: linux, image: nte-testnode:latest }
+    leaf2:  { kind: linux, image: nte-testnode:latest }
+    leaf3:  { kind: linux, image: nte-testnode:latest }
+  links:
+    # Leaf 1 connects to both spines
+    - endpoints: ["leaf1:eth1", "spine1:eth1"]
+    - endpoints: ["leaf1:eth2", "spine2:eth1"]
+    # Leaf 2 connects to both spines
+    - endpoints: ["leaf2:eth1", "spine1:eth2"]
+    - endpoints: ["leaf2:eth2", "spine2:eth2"]
+    # Leaf 3 connects to both spines
+    - endpoints: ["leaf3:eth1", "spine1:eth3"]
+    - endpoints: ["leaf3:eth2", "spine2:eth3"]

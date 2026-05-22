@@ -1,0 +1,294 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-infinity"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "blue",
+            "mode": "fixed"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "none",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^Time$/",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": false
+      },
+      "pluginVersion": "13.1.0-25668120414",
+      "targets": [
+        {
+          "columns": [],
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-infinity"
+          },
+          "filters": [],
+          "format": "as-is",
+          "global_query_id": "",
+          "parser": "jq-backend",
+          "refId": "A",
+          "root_selector": "[{Time: .time}]\n",
+          "source": "url",
+          "type": "json",
+          "url": "https://timeapi.io/api/time/current/zone?timeZone=UTC",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          }
+        }
+      ],
+      "title": "Current Time (UTC)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-infinity"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "blue",
+            "mode": "fixed"
+          },
+          "mappings": [
+            {
+              "options": {
+                "1": {
+                  "index": 0,
+                  "text": "Star"
+                },
+                "2": {
+                  "index": 1,
+                  "text": "Hybrid"
+                },
+                "3": {
+                  "index": 2,
+                  "text": "Ring"
+                },
+                "4": {
+                  "index": 3,
+                  "text": "Clos"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "colorMode": "none",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^Topology$/",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": false
+      },
+      "pluginVersion": "13.1.0-25668120414",
+      "targets": [
+        {
+          "columns": [],
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-infinity"
+          },
+          "filters": [],
+          "format": "as-is",
+          "global_query_id": "",
+          "parser": "jq-backend",
+          "refId": "A",
+          "root_selector": "[{Topology: (.hour % 4) + 1}]\n",
+          "source": "url",
+          "type": "json",
+          "url": "https://timeapi.io/api/time/current/zone?timeZone=UTC",
+          "url_options": {
+            "data": "",
+            "method": "GET"
+          }
+        }
+      ],
+      "title": "Current Expected Topology",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "grafanacloud-infinity"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 23,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "id": 2,
+      "options": {
+        "SVGBaseFix": true,
+        "add100Percentage": false,
+        "calcsMutation": "none",
+        "centerAlignContent": false,
+        "codeData": "{\n  \"utcTimeVariable\": \"${utc_time}\"\n}",
+        "css": "",
+        "dynamicData": false,
+        "dynamicFieldDisplayValues": false,
+        "dynamicHtmlGraphics": false,
+        "dynamicProps": false,
+        "html": "<p>This lab cycles through four physical topologies automatically based on the UTC hour. The mutation runs every hour on the hour.</p>\n<h3>Current Schedule (UTC)</h3>\n\n<table style=\"width: 100%; border-collapse: collapse; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #334155;\">\n  <thead>\n    <tr>\n      <th style=\"background-color: #fafafa; color: #475569; font-weight: 600; text-align: left; padding: 12px; border-bottom: 2px solid #e2e8f0;\">Time Range (Base Cycle)</th>\n      <th style=\"background-color: #fafafa; color: #475569; font-weight: 600; text-align: left; padding: 12px; border-bottom: 2px solid #e2e8f0;\">File</th>\n      <th style=\"background-color: #fafafa; color: #475569; font-weight: 600; text-align: left; padding: 12px; border-bottom: 2px solid #e2e8f0;\">Name</th>\n      <th style=\"background-color: #fafafa; color: #475569; font-weight: 600; text-align: left; padding: 12px; border-bottom: 2px solid #e2e8f0;\">Description</th>\n      <th style=\"background-color: #fafafa; color: #475569; font-weight: 600; text-align: left; padding: 12px; border-bottom: 2px solid #e2e8f0;\">Diagram</th>\n    </tr>\n  </thead>\n  <tbody>\n    <tr id=\"row-1\">\n      <td style=\"padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; background-color: #fafafa;\"><strong>[00:00, 01:00) / mod 0</strong></td>\n      <td style=\"padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; background-color: #fafafa;\"><code style=\"background-color: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 0.9em; color: #0f172a;\">topo-1.yml</code></td>\n      <td style=\"padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; background-color: #fafafa;\"><strong>1. Star</strong></td>\n      <td style=\"padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; background-color: #fafafa;\">Centralized hub-and-spoke.</td>\n      <td style=\"padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; width: 190px; text-align: center; background-color: #fafafa;\">\n        <svg width=\"160\" height=\"130\" viewBox=\"0 0 180 150\">\n          <line x1=\"90\" y1=\"75\" x2=\"30\" y2=\"75\" stroke=\"#64748b\" stroke-width=\"2\"/>\n          <line x1=\"90\" y1=\"75\" x2=\"90\" y2=\"20\" stroke=\"#64748b\" stroke-width=\"2\"/>\n          <line x1=\"90\" y1=\"75\" x2=\"150\" y2=\"75\" stroke=\"#64748b\" stroke-width=\"2\"/>\n          <line x1=\"90\" y1=\"75\" x2=\"90\" y2=\"130\" stroke=\"#64748b\" stroke-width=\"2\"/>\n          <circle cx=\"90\" cy=\"75\" r=\"16\" fill=\"#1e3a8a\"/>\n          <text x=\"90\" y=\"75\" fill=\"white\" font-size=\"8\" font-family=\"sans-serif\" font-weight=\"bold\" text-anchor=\"middle\" dy=\"3\">spine1</text>\n          <circle cx=\"30\" cy=\"75\" r=\"16\" fill=\"#3b82f6\"/>\n          <text x=\"30\" y=\"75\" fill=\"white\" font-size=\"8\" font-family=\"sans-serif\" font-weight=\"bold\" text-anchor=\"middle\" dy=\"3\">leaf1</text>\n          <circle cx=\"90\" cy=\"20\" r=\"16\" fill=\"#3b82f6\"/>\n          <text x=\"90\" y=\"20\" fill=\"white\" font-size=\"8\" font-family=\"sans-serif\" font-weight=\"bold\" text-anchor=\"middle\" dy=\"3\">leaf2</text>\n          <circle cx=\"150\" cy=\"75\" r=\"16\" fill=\"#3b82f6\"/>\n          <text x=\"150\" y=\"75\" fill=\"white\" font-size=\"8\" font-family=\"sans-serif\" font-weight=\"bold\" text-anchor=\"middle\" dy=\"3\">leaf3</text>\n          <circle cx=\"90\" cy=\"130\" r=\"16\" fill=\"#3b82f6\"/>\n          <text x=\"90\" y=\"130\" fill=\"white\" font-size=\"8\" font-family=\"sans-serif\" font-weight=\"bold\" text-anchor=\"middle\" dy=\"3\">leaf4</text>\n        </svg>\n      </td>\n    </tr>\n    <tr id=\"row-2\">\n      <td style=\"padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; background-color: #fafafa;\"><strong>[01:00, 02:00) / mod 1</strong></td>\n      <td style=\"padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; background-color: #fafafa;\"><code style=\"background-color: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 0.9em; color: #0f172a;\">topo-2.yml</code></td>\n      <td style=\"padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; background-color: #fafafa;\"><strong>2. Hybrid</strong></td>\n      <td style=\"padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; background-color: #fafafa;\">Cross-links and daisy-chaining.</td>\n      <td style=\"padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; width: 190px; text-align: center; background-color: #fafafa;\">\n        <svg width=\"160\" height=\"130\" viewBox=\"0 0 180 150\">\n          <line x1=\"30\" y1=\"80\" x2=\"90\" y2=\"25\" stroke=\"#64748b\" stroke-width=\"2\"/>\n          <line x1=\"90\" y1=\"80\" x2=\"90\" y2=\"25\" stroke=\"#64748b\" stroke-width=\"2\"/>\n          <line x1=\"150\" y1=\"80\" x2=\"90\" y2=\"25\" stroke=\"#64748b\" stroke-width=\"2\"/>\n          <line x1=\"30\" y1=\"80\" x2=\"90\" y2=\"80\" stroke=\"#64748b\" stroke-width=\"2\"/>\n          <line x1=\"150\" y1=\"80\" x2=\"150\" y2=\"130\" stroke=\"#64748b\" stroke-width=\"2\"/>\n          <circle cx=\"90\" cy=\"25\" r=\"16\" fill=\"#1e3a8a\"/>\n          <text x=\"90\" y=\"25\" fill=\"white\" font-size=\"8\" font-family=\"sans-serif\" font-weight=\"bold\" text-anchor=\"middle\" dy=\"3\">spine1</text>\n          <circle cx=\"30\" cy=\"80\" r=\"16\" fill=\"#3b82f6\"/>\n          <text x=\"30\" y=\"80\" fill=\"white\" font-size=\"8\" font-family=\"sans-serif\" font-weight=\"bold\" text-anchor=\"middle\" dy=\"3\">leaf1</text>\n          <circle cx=\"90\" cy=\"80\" r=\"16\" fill=\"#3b82f6\"/>\n          <text x=\"90\" y=\"80\" fill=\"white\" font-size=\"8\" font-family=\"sans-serif\" font-weight=\"bold\" text-anchor=\"middle\" dy=\"3\">leaf2</text>\n          <circle cx=\"150\" cy=\"80\" r=\"16\" fill=\"#3b82f6\"/>\n          <text x=\"150\" y=\"80\" fill=\"white\" font-size=\"8\" font-family=\"sans-serif\" font-weight=\"bold\" text-anchor=\"middle\" dy=\"3\">leaf3</text>\n          <circle cx=\"150\" cy=\"130\" r=\"16\" fill=\"#3b82f6\"/>\n          <text x=\"150\" y=\"130\" fill=\"white\" font-size=\"8\" font-family=\"sans-serif\" font-weight=\"bold\" text-anchor=\"middle\" dy=\"3\">leaf4</text>\n        </svg>\n      </td>\n    </tr>\n    <tr id=\"row-3\">\n      <td style=\"padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; background-color: #fafafa;\"><strong>[02:00, 03:00) / mod 2</strong></td>\n      <td style=\"padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; background-color: #fafafa;\"><code style=\"background-color: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 0.9em; color: #0f172a;\">topo-3.yml</code></td>\n      <td style=\"padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; background-color: #fafafa;\"><strong>3. Ring</strong></td>\n      <td style=\"padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; background-color: #fafafa;\">Full-loop ring topology.</td>\n      <td style=\"padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; width: 190px; text-align: center; background-color: #fafafa;\">\n        <svg width=\"160\" height=\"130\" viewBox=\"0 0 180 150\">\n          <line x1=\"90\" y1=\"30\" x2=\"138\" y2=\"65\" stroke=\"#64748b\" stroke-width=\"2\"/>\n          <line x1=\"138\" y1=\"65\" x2=\"120\" y2=\"120\" stroke=\"#64748b\" stroke-width=\"2\"/>\n          <line x1=\"120\" y1=\"120\" x2=\"60\" y2=\"120\" stroke=\"#64748b\" stroke-width=\"2\"/>\n          <line x1=\"60\" y1=\"120\" x2=\"42\" y2=\"65\" stroke=\"#64748b\" stroke-width=\"2\"/>\n          <line x1=\"42\" y1=\"65\" x2=\"90\" y2=\"30\" stroke=\"#64748b\" stroke-width=\"2\"/>\n          <circle cx=\"90\" cy=\"30\" r=\"16\" fill=\"#1e3a8a\"/>\n          <text x=\"90\" y=\"30\" fill=\"white\" font-size=\"8\" font-family=\"sans-serif\" font-weight=\"bold\" text-anchor=\"middle\" dy=\"3\">spine1</text>\n          <circle cx=\"138\" cy=\"65\" r=\"16\" fill=\"#3b82f6\"/>\n          <text x=\"138\" y=\"65\" fill=\"white\" font-size=\"8\" font-family=\"sans-serif\" font-weight=\"bold\" text-anchor=\"middle\" dy=\"3\">leaf1</text>\n          <circle cx=\"120\" cy=\"120\" r=\"16\" fill=\"#3b82f6\"/>\n          <text x=\"120\" y=\"120\" fill=\"white\" font-size=\"8\" font-family=\"sans-serif\" font-weight=\"bold\" text-anchor=\"middle\" dy=\"3\">leaf2</text>\n          <circle cx=\"60\" cy=\"120\" r=\"16\" fill=\"#3b82f6\"/>\n          <text x=\"60\" y=\"120\" fill=\"white\" font-size=\"8\" font-family=\"sans-serif\" font-weight=\"bold\" text-anchor=\"middle\" dy=\"3\">leaf3</text>\n          <circle cx=\"42\" cy=\"65\" r=\"16\" fill=\"#3b82f6\"/>\n          <text x=\"42\" y=\"65\" fill=\"white\" font-size=\"8\" font-family=\"sans-serif\" font-weight=\"bold\" text-anchor=\"middle\" dy=\"3\">leaf4</text>\n        </svg>\n      </td>\n    </tr>\n    <tr id=\"row-4\">\n      <td style=\"padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; background-color: #fafafa;\"><strong>[03:00, 04:00) / mod 3</strong></td>\n      <td style=\"padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; background-color: #fafafa;\"><code style=\"background-color: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 0.9em; color: #0f172a;\">topo-4.yml</code></td>\n      <td style=\"padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; background-color: #fafafa;\"><strong>4. Clos</strong></td>\n      <td style=\"padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; background-color: #fafafa;\">3-stage redundant fabric.</td>\n      <td style=\"padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; width: 190px; text-align: center; background-color: #fafafa;\">\n        <svg width=\"160\" height=\"130\" viewBox=\"0 0 180 150\">\n          <line x1=\"40\" y1=\"115\" x2=\"60\" y2=\"35\" stroke=\"#64748b\" stroke-width=\"2\"/>\n          <line x1=\"40\" y1=\"115\" x2=\"120\" y2=\"35\" stroke=\"#64748b\" stroke-width=\"2\"/>\n          <line x1=\"90\" y1=\"115\" x2=\"60\" y2=\"35\" stroke=\"#64748b\" stroke-width=\"2\"/>\n          <line x1=\"90\" y1=\"115\" x2=\"120\" y2=\"35\" stroke=\"#64748b\" stroke-width=\"2\"/>\n          <line x1=\"140\" y1=\"115\" x2=\"60\" y2=\"35\" stroke=\"#64748b\" stroke-width=\"2\"/>\n          <line x1=\"140\" y1=\"115\" x2=\"120\" y2=\"35\" stroke=\"#64748b\" stroke-width=\"2\"/>\n          <circle cx=\"60\" cy=\"35\" r=\"16\" fill=\"#1e3a8a\"/>\n          <text x=\"60\" y=\"35\" fill=\"white\" font-size=\"8\" font-family=\"sans-serif\" font-weight=\"bold\" text-anchor=\"middle\" dy=\"3\">spine1</text>\n          <circle cx=\"120\" cy=\"35\" r=\"16\" fill=\"#1e3a8a\"/>\n          <text x=\"120\" y=\"35\" fill=\"white\" font-size=\"8\" font-family=\"sans-serif\" font-weight=\"bold\" text-anchor=\"middle\" dy=\"3\">spine2</text>\n          <circle cx=\"40\" cy=\"115\" r=\"16\" fill=\"#3b82f6\"/>\n          <text x=\"40\" y=\"115\" fill=\"white\" font-size=\"8\" font-family=\"sans-serif\" font-weight=\"bold\" text-anchor=\"middle\" dy=\"3\">leaf1</text>\n          <circle cx=\"90\" cy=\"115\" r=\"16\" fill=\"#3b82f6\"/>\n          <text x=\"90\" y=\"115\" fill=\"white\" font-size=\"8\" font-family=\"sans-serif\" font-weight=\"bold\" text-anchor=\"middle\" dy=\"3\">leaf2</text>\n          <circle cx=\"140\" cy=\"115\" r=\"16\" fill=\"#3b82f6\"/>\n          <text x=\"140\" y=\"115\" fill=\"white\" font-size=\"8\" font-family=\"sans-serif\" font-weight=\"bold\" text-anchor=\"middle\" dy=\"3\">leaf3</text>\n        </svg>\n      </td>\n    </tr>\n  </tbody>\n</table>",
+        "onInit": "",
+        "onInitOnResize": false,
+        "onRender": "",
+        "overflow": "visible",
+        "panelupdateOnMount": false,
+        "reduceOptions": {
+          "calcs": []
+        },
+        "renderOnMount": true,
+        "rootCSS": "",
+        "useGrafanaScrollbar": true
+      },
+      "pluginVersion": "2.2.3",
+      "targets": [
+        {
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "grafanacloud-infinity"
+          },
+          "refId": "A"
+        }
+      ],
+      "title": "Topology Mutation Schedule",
+      "type": "gapit-htmlgraphics-panel"
+    }
+  ],
+  "preload": false,
+  "refresh": "",
+  "schemaVersion": 42,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "2h",
+      "1d"
+    ]
+  },
+  "timezone": "utc",
+  "title": "04. Topology Schedule",
+  "uid": "topology-schedule",
+  "version": 7
+}
