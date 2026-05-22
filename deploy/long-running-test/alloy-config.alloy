@@ -73,23 +73,23 @@ discovery.docker "exporter" {
 loki.source.docker "exporter" {
   host    = "unix:///var/run/docker.sock"
   targets = discovery.docker.exporter.targets
-  forward_to = [loki.relabel.exporter.receiver]
+  forward_to = [loki.relabel.long_running_containers.receiver]
 }
 
-loki.relabel "exporter" {
+loki.relabel "long_running_containers" {
   forward_to = [loki.write.grafana_cloud_loki.receiver]
   rule {
     source_labels = ["__meta_docker_container_name"]
-    regex         = "/long-running-exporter"
+    regex         = "/long-running-(exporter|mutator|alloy)"
     action        = "keep"
   }
   rule {
     source_labels = ["__meta_docker_container_name"]
+    regex         = "/long-running-(.+)"
     target_label  = "job"
-    replacement   = "topology-exporter"
+    replacement   = "long-running-$1"
   }
   rule {
-    source_labels = ["__meta_docker_container_name"]
     target_label  = "instance"
     replacement   = "macbookpro-2015"
   }
