@@ -49,7 +49,7 @@ self_heal_if_needed() {
   emit self_heal_triggered "missing_count=!${#missing[@]}" "missing=${missing[*]}"
   local t0; t0=$(date +%s)
   containerlab destroy -t "$BASE_TOPO" --cleanup >/dev/null 2>&1 || true
-  if containerlab deploy -t "$BASE_TOPO" 2>&1 >/dev/null; then
+  if containerlab deploy -t "$BASE_TOPO" >/dev/null 2>&1; then
     : > "$STATE_FILE"    # truncate; next apply_topology will treat current as empty
     emit self_heal_success "duration_s=!$(( $(date +%s) - t0 ))"
     return 0
