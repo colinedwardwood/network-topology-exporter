@@ -4,8 +4,7 @@ discovery:
   parallelism: 20
   scope:
     cidr_allow_list:
-      - "172.20.20.0/24"
-      - "0.0.0.0/0"
+      - "172.30.0.0/24"
 
 modules:
   snmp:
@@ -25,13 +24,15 @@ snapshot:
   path: /var/lib/network-topology-exporter/snapshot.json
 
 targets:
-  - host: 172.20.20.2 # spine1
+  - host: 172.30.0.11 # spine1
     labels: { site: long-running-lab }
-  - host: 172.20.20.3 # spine2
+  - host: 172.30.0.12 # spine2
     labels: { site: long-running-lab }
-  - host: 172.20.20.4 # leaf1
+  - host: 172.30.0.21 # leaf1
     labels: { site: long-running-lab }
-  - host: 172.20.20.5 # leaf2
+  - host: 172.30.0.22 # leaf2
     labels: { site: long-running-lab }
-  - host: 172.20.20.6 # leaf3
+  - host: 172.30.0.23 # leaf3
+    labels: { site: long-running-lab }
+  - host: 172.30.0.24 # leaf4
     labels: { site: long-running-lab }
