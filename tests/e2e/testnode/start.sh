@@ -30,10 +30,12 @@ for i in $(seq 1 20); do
 done
 
 # containerlab attaches data-plane interfaces (eth1, eth2, ...) after the
-# container starts. Wait until eth1 has carrier (LOWER_UP) before starting
-# lldpd; checking existence alone is not sufficient because lldpd may scan
-# before the link is ready and never pick up the interface via netlink events.
-until ip link show eth1 2>/dev/null | grep -q "LOWER_UP"; do
+# container starts. Wait up to 30s for eth1 to come up so lldpd's initial
+# scan picks it up. If eth1 never appears (long-running-lab base deploy
+# attaches links lazily via the mutator), start lldpd anyway and rely on
+# its netlink listener to handle RTM_NEWLINK events for later additions.
+for _ in $(seq 1 60); do
+    ip link show eth1 2>/dev/null | grep -q "LOWER_UP" && break
     sleep 0.5
 done
 
