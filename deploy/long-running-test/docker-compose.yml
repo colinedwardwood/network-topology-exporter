@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  topology-exporter:
+    image: network-topology-exporter:latest
+    container_name: long-running-exporter
+    volumes:
+      - ./config.yaml:/etc/topology-exporter/config.yaml:ro
+      - exporter-data:/var/lib/network-topology-exporter
+    environment:
+      - SNMP_COMMUNITY=${SNMP_COMMUNITY:-public}
+    ports:
+      - "9100:9100"
+    restart: unless-stopped
+    networks:
+      - clab
+
+  alloy:
+    image: grafana/alloy:latest
+    container_name: long-running-alloy
+    volumes:
+      - ./alloy-config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "12346:12345" # Alloy UI (remapped host 12346 -> container 12345)
+      - "4319:4317"   # OTLP gRPC (remapped host 4319 -> container 4317)
+      - "4320:4318"   # OTLP HTTP (remapped host 4320 -> container 4318)
+    command: run --storage.path=/var/lib/alloy/data /etc/alloy/config.alloy
+    environment:
+      - ALLOY_DEPLOY_MODE=docker
+      - GRAFANA_CLOUD_TOKEN
+      - GRAFANA_PROM_USER
+      - GRAFANA_LOKI_USER
+      - GRAFANA_TEMPO_USER
+    restart: unless-stopped
+    networks:
+      - clab
+
+  mutator:
+    image: alpine:latest
+    container_name: long-running-mutator
+    volumes:
+      - .:/work
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /work
+    environment:
+      - TARGET_PWD=${PWD}
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache bash docker-cli && ./mutate.sh"]
+    restart: unless-stopped
+
+networks:
+  clab:
+    external: true
+
+volumes:
+  exporter-data:
