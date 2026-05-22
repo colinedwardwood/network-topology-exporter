@@ -1,0 +1,196 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "red",
+                  "text": "CONFIGURING..."
+                },
+                "1": {
+                  "color": "green",
+                  "text": "LIVE"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "13.1.0-25668120414",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "count(network_topology_graph_stale{tester_id=\"$tester_id\"} == 0)",
+          "refId": "A"
+        }
+      ],
+      "title": "IS YOUR HARNESS FLOWING DATA?",
+      "type": "stat"
+    },
+    {
+      "gridPos": {
+        "h": 16,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "id": 2,
+      "options": {
+        "code": {
+          "language": "plaintext",
+          "showLineNumbers": false,
+          "showMiniMap": false
+        },
+        "content": "# 0. Getting Started Guide\n\nWelcome! This harness helps you validate the Network Topology Exporter in your own lab.\n\n### 1. Get the Exporter\nDownload the latest release binary for your architecture from [GitHub Releases](https://github.com/colinedwardwood/network-topology-exporter/releases):\n- `topology-exporter-linux-amd64` (Standard servers)\n- `topology-exporter-linux-arm64` (Raspberry Pi / ARM)\n\n### 2. Configure the Stack\n- `cp deploy/test-harness/config.yaml.example deploy/test-harness/config.yaml` (Set your lab CIDR)\n- `cp deploy/test-harness/alloy/config.alloy.example deploy/test-harness/alloy/config.alloy` (Set your Grafana Cloud tokens)\n\n### 3. Launch with Docker Compose\n```bash\ncd deploy/test-harness\nexport SNMP_COMMUNITY=your_community\ndocker compose up -d\n```\n\n### 4. Verify\nOnce the box at the top turns **GREEN**, your data is being visualized in the other dashboards.\n\n---\n### Navigation\n- [01. Test Harness Health](./d/harness-health?var-tester_id=$tester_id)\n- [02. Topology Data](./d/topology-data?var-tester_id=$tester_id)",
+        "mode": "markdown"
+      },
+      "pluginVersion": "13.1.0-25668120414",
+      "targets": [],
+      "title": "Onboarding",
+      "type": "text"
+    }
+  ],
+  "preload": false,
+  "refresh": "1m",
+  "schemaVersion": 42,
+  "tags": [
+    "test-harness",
+    "onboarding"
+  ],
+  "templating": {
+    "list": [
+      {
+        "allowCustomValue": true,
+        "current": {
+          "text": "grafanacloud-networko11ydev-prom",
+          "value": "grafanacloud-prom"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "allowCustomValue": true,
+        "current": {
+          "text": "long-running-lab",
+          "value": "long-running-lab"
+        },
+        "datasource": {
+          "type": "prometheus"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Tester ID",
+        "multi": false,
+        "name": "tester_id",
+        "options": [],
+        "query": "label_values(network_topology_device_info, tester_id)",
+        "refresh": 0,
+        "regex": "",
+        "regexApplyTo": "value",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "2h",
+      "1d"
+    ]
+  },
+  "timezone": "browser",
+  "title": "00. Getting Started",
+  "uid": "getting-started",
+  "version": 3
+}

@@ -1,0 +1,13 @@
+name: nte-dynamic-1
+topology:
+  nodes:
+    spine1: { kind: linux, image: nte-testnode:latest }
+    leaf1:  { kind: linux, image: nte-testnode:latest }
+    leaf2:  { kind: linux, image: nte-testnode:latest }
+    leaf3:  { kind: linux, image: nte-testnode:latest }
+    leaf4:  { kind: linux, image: nte-testnode:latest }
+  links:
+    - endpoints: ["spine1:eth1", "leaf1:eth1"]
+    - endpoints: ["spine1:eth2", "leaf2:eth1"]
+    - endpoints: ["spine1:eth3", "leaf3:eth1"]
+    - endpoints: ["spine1:eth4", "leaf4:eth1"]

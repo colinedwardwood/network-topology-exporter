@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **Long-running validation lab** — Added `deploy/long-running-test/`, a
+  continuously-running harness that swaps the underlying containerlab
+  topology every UTC hour (chain → cross-link → ring → CLOS) and ships
+  metrics/logs/traces to Grafana Cloud labeled `tester_id=long-running-lab`.
+  Exercises add/remove/swap reconciliation against a live exporter.
+
+### Security
+
+- **Templatized harness credentials** — Reworked
+  `deploy/long-running-test/alloy-config.alloy` so all Grafana Cloud tokens
+  and user IDs come from environment variables (see `.env.example`). Added
+  `.gitignore` rules for SSH keys (`id_ed25519`), `.env` files, and TLS
+  material (`*.pem`, `*.key`) so this class of file cannot be accidentally
+  committed.
+
+### Documentation
+
+- Added a runbook at `deploy/long-running-test/README.md` covering the
+  mutation schedule, credential layout, and known limitations of the lab.
+- README now lists both test environments (`deploy/test-harness/` and
+  `deploy/long-running-test/`).
+
 ## v1.3.1-rc1 — 2026-05-21
 
 First release candidate for the 1.3.1 milestone. Includes the new tester-onboarding stack and critical codebase health fixes.

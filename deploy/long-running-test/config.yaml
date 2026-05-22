@@ -1,0 +1,37 @@
+discovery:
+  interval: 30s
+  timeout_per_device: 10s
+  parallelism: 20
+  scope:
+    cidr_allow_list:
+      - "172.20.20.0/24"
+      - "0.0.0.0/0"
+
+modules:
+  snmp:
+    enabled: true
+    version: v2c
+  lldp:
+    enabled: true
+
+credentials:
+  profiles:
+    - name: lab-v2c
+      type: snmp_v2c
+      community_env: SNMP_COMMUNITY
+  fallback_order: [lab-v2c]
+
+snapshot:
+  path: /var/lib/network-topology-exporter/snapshot.json
+
+targets:
+  - host: 172.20.20.2 # spine1
+    labels: { site: long-running-lab }
+  - host: 172.20.20.3 # spine2
+    labels: { site: long-running-lab }
+  - host: 172.20.20.4 # leaf1
+    labels: { site: long-running-lab }
+  - host: 172.20.20.5 # leaf2
+    labels: { site: long-running-lab }
+  - host: 172.20.20.6 # leaf3
+    labels: { site: long-running-lab }

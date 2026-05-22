@@ -21,6 +21,24 @@ scripts/bench-results/
 # Local env
 .env
 .env.local
+*.env
+
+# Secrets / credentials — never commit
+**/id_ed25519
+**/id_ed25519.pub
+**/id_rsa
+**/id_rsa.pub
+**/id_ecdsa
+*.pem
+*.key
+*.p12
+*.pfx
+deploy/long-running-test/*.secret*
+deploy/long-running-test/.env
+
+# Snapshot / state from local runs
+snapshot.json
+**/snapshot.json
 
 # SBOM output
 sbom/
