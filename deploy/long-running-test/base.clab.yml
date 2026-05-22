@@ -1,0 +1,22 @@
+# Base lab for long-running-test. Deployed once via deploy.sh; never destroyed
+# by the hourly mutator. Six nodes — the union of every topo-*.yml file's
+# node set — with pinned management IPs in a dedicated subnet so the exporter
+# can target stable addresses regardless of which topology is active.
+#
+# Data-plane links (eth1, eth2, ...) are NOT defined here. The mutator
+# attaches and detaches them per topology at runtime via
+# `containerlab tools veth create` and `ip link del`.
+
+name: nte-dynamic-1
+mgmt:
+  network: nte-dynamic-clab
+  ipv4-subnet: 172.30.0.0/24
+
+topology:
+  nodes:
+    spine1: { kind: linux, image: nte-testnode:latest, mgmt-ipv4: 172.30.0.11 }
+    spine2: { kind: linux, image: nte-testnode:latest, mgmt-ipv4: 172.30.0.12 }
+    leaf1:  { kind: linux, image: nte-testnode:latest, mgmt-ipv4: 172.30.0.21 }
+    leaf2:  { kind: linux, image: nte-testnode:latest, mgmt-ipv4: 172.30.0.22 }
+    leaf3:  { kind: linux, image: nte-testnode:latest, mgmt-ipv4: 172.30.0.23 }
+    leaf4:  { kind: linux, image: nte-testnode:latest, mgmt-ipv4: 172.30.0.24 }
