@@ -118,7 +118,7 @@ apply_topology() {
     [ -z "$link" ] && continue
     local a z
     a="${link%%|*}"; z="${link#*|}"
-    if containerlab tools veth create --name "$LAB_NAME" --a-endpoint "$a" --z-endpoint "$z" >/dev/null 2>&1; then
+    if containerlab tools veth create --a-endpoint "clab-$LAB_NAME-$a" --b-endpoint "clab-$LAB_NAME-$z" >/dev/null 2>&1; then
       emit link_added "a=$a" "z=$z"
     else
       emit link_add_failed "a=$a" "z=$z"
