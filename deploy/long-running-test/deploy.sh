@@ -1,20 +1,28 @@
 #!/bin/bash
-HOST="macbookpro-2015"
-USER="ansible"
-REMOTE_DIR="/home/ansible/long-running-test"
+set -euo pipefail
 
-# 1. Create remote directory
-ssh $HOST -l $USER "mkdir -p $REMOTE_DIR"
+# Long-running-lab deploy. Pushes this directory to the remote host,
+# brings up the base containerlab lab (once), then starts the compose
+# stack. Re-runnable: clab destroy is idempotent.
+#
+# CAVEAT: this script is pinned to the colinwood homelab. Parameterize
+# REMOTE_HOST / REMOTE_USER / REMOTE_DIR before sharing.
 
-# 2. Rsync the files
-rsync -avz --exclude 'deploy.sh' . $USER@$HOST:$REMOTE_DIR/
+REMOTE_HOST="${REMOTE_HOST:-macbookpro-2015}"
+REMOTE_USER="${REMOTE_USER:-ansible}"
+REMOTE_DIR="${REMOTE_DIR:-/home/ansible/long-running-test}"
 
-# 3. Pull/Build necessary images on target
-ssh $HOST -l $USER "cd $REMOTE_DIR && docker build -t network-topology-exporter:latest ../../" # Assuming same path structure or we should send the context
+# 1) Sync (exclude SSH keys and local env)
+ssh "$REMOTE_USER@$REMOTE_HOST" "mkdir -p $REMOTE_DIR"
+rsync -avz \
+  --exclude 'deploy.sh' \
+  --exclude 'id_ed25519' \
+  --exclude 'id_ed25519.pub' \
+  --exclude '.env' \
+  . "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/"
 
-# Actually, it's safer to send the entire project context or build it locally and push it.
-# Let's assume we can build it on the target if the code is there.
-# If not, we should use the one we just built if we can push it.
+# 2) Bring up the base lab (idempotent)
+ssh "$REMOTE_USER@$REMOTE_HOST" "cd $REMOTE_DIR && sudo containerlab deploy -t base.clab.yml --reconfigure"
 
-# For now, let's just run docker compose
-ssh $HOST -l $USER "cd $REMOTE_DIR && docker compose up -d"
+# 3) Start the compose stack
+ssh "$REMOTE_USER@$REMOTE_HOST" "cd $REMOTE_DIR && docker compose --env-file .env up -d"
