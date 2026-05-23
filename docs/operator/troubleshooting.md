@@ -112,6 +112,8 @@ When cycles take longer than the interval, the exporter falls behind and metrics
 3. Increase `discovery.parallelism` incrementally, then re-observe cycle duration after a few cycles.
 4. Lower `discovery.timeout_per_device` if devices reliably respond faster than the current value.
 
+If timeouts cluster around a stateful firewall or NAT device in path and `nf_conntrack_count` is climbing, the root cause may be SNMP socket churn rather than the exporter or the targets. See [scale.md § SNMP session lifecycle and conntrack pressure](scale.md#snmp-session-lifecycle-and-conntrack-pressure).
+
 ---
 
 ## 6. Conflict metrics rising

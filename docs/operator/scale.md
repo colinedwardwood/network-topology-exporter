@@ -174,6 +174,54 @@ Caveats:
 
 ---
 
+## SNMP session lifecycle and conntrack pressure
+
+Each discovery cycle opens a **fresh UDP SNMP session per (target × enabled module)** and closes it when the walk finishes. With every module turned on, that's roughly nine sessions per target per cycle:
+
+- 1 SYSTEM walk (sysName / sysObjectID / sysDescr)
+- 1 each for LLDP, CDP, OSPF, IS-IS, BGP, MPLS-TE
+- 1 for FDB, plus 1 more per VLAN when the FDB module walks Cisco IOS VLAN-community indices
+
+At 10k targets on a 60s discovery interval with all modules enabled, that's on the order of **1,500 short-lived UDP socket open/close operations per second** from the exporter, plus matching activity on any conntrack-tracking firewall in path. FDB-heavy Cisco fleets add more.
+
+### Why it's done this way
+
+`gosnmp`'s `*GoSNMP` struct is not goroutine-safe (see `internal/discovery/snmp/snmp.go:142`), so the exporter's parallel module fan-out per target cannot share one session across modules. Each module owns its own session for the duration of its walk; the alternatives (per-target session pools with checkout/return, serialising modules per target) were judged not worth the complexity for the current scale ceiling.
+
+### When it matters
+
+The kernel cost is modest in isolation — UDP has no TIME_WAIT, so socket-table churn is the dominant overhead, not state-table accumulation. It becomes load-bearing in three deployment shapes:
+
+- **Stateful firewall in path.** Conntrack tracks UDP "connections" by 5-tuple with its own timeout (typically 30s on Linux). At ~1,500 new flows/sec the table can fill faster than entries time out; if `nf_conntrack_max` is at its default (≈262 144 on modern kernels) you have headroom, but heavily-tuned-down hosts hit the ceiling and silently drop packets.
+- **Large fleets with FDB enabled.** FDB's per-VLAN walks on Cisco IOS multiply the per-cycle session count. A 10k-target fleet with 64 active VLANs on average adds tens of thousands of extra UDP flows per cycle.
+- **NAT'd outbound paths.** Source-NAT devices with limited port pools (cloud NAT gateways, small CGN deployments) can exhaust 5-tuples under sustained churn.
+
+### Diagnosing it
+
+Symptoms surface on the firewall or NAT device, not the exporter. Look for:
+
+- Linux: `cat /proc/sys/net/netfilter/nf_conntrack_count` climbing under exporter load; `dmesg | grep -i conntrack` showing "table full, dropping packet" entries
+- `nf_conntrack_udp_timeout` set lower than the SNMP timeout (`modules.snmp.timeout`, default 5s) — entries time out mid-walk, packet drops manifest as SNMP timeouts on the exporter side
+- Cloud NAT gateways logging port exhaustion or connection-rate-limit hits
+
+The exporter itself will report these as ordinary SNMP timeouts in `network_topology_snmp_timeout_total`. The firewall is where the root cause lives.
+
+### Operator mitigations available today
+
+In rough order of leverage:
+
+1. **Raise `nf_conntrack_max`** on Linux firewalls and the exporter host (`sysctl -w net.netfilter.nf_conntrack_max=1048576`). Cheapest, has no downside if the host has the memory (~300 bytes per entry).
+2. **Increase `discovery.interval`.** Doubling the cycle time halves the steady-state new-flow rate. Trades freshness for kernel headroom.
+3. **Lower `discovery.parallelism`.** Flattens the burst so peak new-flow rate drops, even if total flows per cycle stay the same. Cycle time grows.
+4. **Disable FDB unless you need it.** FDB's per-VLAN walks are by far the biggest contributor on Cisco IOS gear.
+5. **Set `modules.snmp.timeout` ≤ `nf_conntrack_udp_timeout`** so SNMP gives up before conntrack does, surfacing failures as exporter-side timeouts rather than mysterious packet drops.
+
+### What we're evaluating
+
+Pooling SNMP sessions per target across cycles is on the table but not currently planned. The implementation would need to handle credential rotation (#5 territory), dead-session detection over UDP (no surface signal), and per-target memory cost (~50 KB × targets × modules). No current operator incident is driving the work; tracked as [#33](https://github.com/colinedwardwood/network-topology-exporter/issues/33).
+
+---
+
 ## What we considered and rejected
 
 **Chunked / paginated `/metrics`.** Investigated in `plans/metrics-chunking.md`.
