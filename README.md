@@ -105,10 +105,43 @@ Precedence is encoded as an integer rank where **lower rank = higher priority** 
 | LLDP | LLDP-MIB (IEEE 802.1AB) | 2 | `modules.lldp.enabled` | Standard; preferred source when available. |
 | CDP | CISCO-CDP-MIB | 3 | `modules.cdp.enabled` | Cisco-only; lower precedence than LLDP. |
 | FDB | BRIDGE-MIB (RFC 4188) | 4 | `modules.fdb.enabled` | Layer-2 only; noisy on large networks. |
-| IS-IS | ISIS-MIB (RFC 4444) | 5 | `modules.isis.enabled` | See below. |
+| IS-IS | ISIS-MIB (RFC 4444) | 5 | `modules.isis.enabled` | |
 | OSPF | OSPF-MIB (RFC 4750) | 6 | `modules.ospf.enabled` | |
 | BGP | BGP4-MIB (RFC 4273) | 7 | `modules.bgp.enabled` | |
-| MPLS-TE | MPLS-TE-STD-MIB (RFC 3812) | 8 | `modules.mpls_te.enabled` | See below. |
+| MPLS-TE | MPLS-TE-STD-MIB (RFC 3812) | 8 | `modules.mpls_te.enabled` | |
+
+### LLDP (IEEE 802.1AB)
+
+Walks `lldpLocPortTable` and `lldpRemTable`. `SrcPort` is decoded from `lldpLocPortIdSubtype` / `lldpLocPortId`, falling back to `lldpLocPortDesc`. `DstDevice` is the remote system name and `DstPort` is the remote port from the same row. Highest discovery confidence — the protocol is designed for this.
+
+```yaml
+modules:
+  lldp:
+    enabled: true
+```
+
+### CDP (CISCO-CDP-MIB)
+
+Walks `cdpCacheTable`. `DstDevice` is `cdpCacheDeviceId`; `DstPort` is `cdpCacheDevicePort`. Cisco-proprietary — non-Cisco devices return empty walks.
+
+```yaml
+modules:
+  cdp:
+    enabled: true
+```
+
+### FDB (RFC 4188 / Q-BRIDGE)
+
+Walks `dot1dTpFdbTable` and `dot1dBasePortTable`; on VLAN-aware switches it also walks `dot1qTpFdbTable` and `dot1qVlanCurrentTable`. Emits one edge per MAC seen on exactly one bridge port — multi-MAC ports are uplinks rather than direct peers and are suppressed. `DstDevice` is the raw MAC; graph reconciliation resolves it to a device identity via L3 ARP correlation, so enable `modules.arp.enabled` alongside FDB. `max_vlans` caps the number of per-VLAN community walks on classic Cisco IOS (`0` = unlimited).
+
+```yaml
+modules:
+  fdb:
+    enabled: true
+    max_vlans: 0
+  arp:
+    enabled: true   # required to translate MAC → device on FDB edges
+```
 
 ### IS-IS (RFC 4444)
 
@@ -118,6 +151,27 @@ Walks `isisISAdjState` and `isisISAdjIPAddrTable`. Only adjacencies in state `up
 modules:
   isis:
     enabled: true
+```
+
+### OSPF (RFC 4750)
+
+Walks `ospfNbrTable`. Only neighbours in state `full(8)` or `twoWay(2)` produce edges. `DstDevice` is `ospfNbrIpAddr`; unnumbered P2P links (`0.0.0.0`), link-local, and loopback neighbour addresses are skipped to avoid emitting unusable edges.
+
+```yaml
+modules:
+  ospf:
+    enabled: true
+```
+
+### BGP (RFC 4273 BGP4-MIB)
+
+Walks `bgpPeerTable` (RFC 4273, IPv4-only) plus vendor BGP4V2 tables under enterprise OIDs for IPv6 and VRF peers. Only peers in state `established(6)` produce edges; `DstDevice` is the remote peer IP. Confidence is Low and adjacency is `unknown` because BGP peers are not necessarily directly connected. Set `disable_v2_mib: true` to fall back to RFC 4273-only behaviour if a vendor walker regresses.
+
+```yaml
+modules:
+  bgp:
+    enabled: true
+    disable_v2_mib: false   # default; true disables the BGP4V2 vendor walkers
 ```
 
 ### MPLS-TE (RFC 3812)
