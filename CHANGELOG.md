@@ -30,6 +30,18 @@
   mutation schedule, credential layout, and known limitations of the lab.
 - README now lists both test environments (`deploy/test-harness/` and
   `deploy/long-running-test/`).
+- **Test-harness onboarding now uses the published GHCR image.**
+  `deploy/test-harness/docker-compose.yml` references
+  `ghcr.io/colinedwardwood/network-topology-exporter:latest`, and the
+  "00. Getting Started" dashboard plus `deploy/test-harness/README.md`
+  now instruct testers to `docker compose pull` instead of running a
+  local `docker build`. Cuts cold-start time from minutes (Go toolchain
+  + multi-arch build) to seconds (image pull).
+- **Removed OTLP/Tempo references from tester onboarding.** The default
+  harness ships metrics + logs only; the trace-related access-policy
+  scope, Tempo username, and OTLP push endpoint have been dropped from
+  the Getting Started dashboard to stop confusing first-time testers
+  with a path the harness doesn't actually exercise.
 
 ## v1.3.1-rc1 — 2026-05-21
 
