@@ -691,22 +691,40 @@
       "type": "timeseries"
     },
     {
+      "id": 9,
+      "type": "logs",
+      "title": "Mutator Events",
       "gridPos": {
         "h": 10,
         "w": 8,
         "x": 0,
         "y": 35
       },
-      "id": 9,
-      "options": {},
-      "pluginVersion": "13.1.0-25668120414",
+      "datasource": {
+        "type": "loki",
+        "uid": "grafanacloud-logs"
+      },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
       "targets": [
         {
-          "refId": "A"
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "grafanacloud-logs"
+          },
+          "expr": "{job=\"long-running-mutator\", tester_id=\"long-running-lab\"} | json",
+          "queryType": "range"
         }
-      ],
-      "title": "New panel",
-      "type": "__unconfigured-panel"
+      ]
     }
   ],
   "preload": false,
@@ -787,5 +805,5 @@
   "timezone": "browser",
   "title": "01. Test Harness Health",
   "uid": "harness-health",
-  "version": 5
+  "version": 6
 }
