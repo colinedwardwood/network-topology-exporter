@@ -1,11 +1,17 @@
 // Test Harness Alloy Configuration
-// Fill in your Grafana Cloud credentials and rename to config.alloy
+//
+// Pre-filled for the shared `networko11ydev.grafana.net` Grafana Cloud stack.
+// Only two placeholders left for you to fill in:
+//   - YOUR_GLC_TOKEN  (see "00. Getting Started" dashboard Step 2)
+//   - YOUR_TESTER_ID  (your unique kebab-case slug, see Step 1)
+//
+// Rename to `config.alloy` after editing.
 
 logging {
   level = "info"
 }
 
-// --- Metrics Scrape ---
+// --- Metrics scrape ---
 
 prometheus.scrape "exporter" {
   targets = [{
@@ -16,56 +22,62 @@ prometheus.scrape "exporter" {
 
 prometheus.remote_write "grafanacloud" {
   endpoint {
-    url = "https://prometheus-prod-01-eu-west-0.grafana.net/api/prom/push" // REPLACE with your GC Prometheus URL
+    url = "https://prometheus-prod-66-prod-us-east-3.grafana.net/api/prom/push"
     basic_auth {
-      username = "REPLACE_WITH_USER_ID"
-      password = "REPLACE_WITH_TOKEN"
+      username = "3014150"
+      password = "YOUR_GLC_TOKEN"
     }
   }
 
   external_labels = {
-    tester_id     = "REPLACE_WITH_YOUR_NAME",
-    alloy_version = "v1.0.0", // This will be updated by Alloy at runtime if we use constants
+    tester_id = "YOUR_TESTER_ID",
   }
 }
 
-// --- Logs Tail ---
+// --- Logs tail ---
 
-discovery.docker "exporter" {
+// Discover all containers, then filter at DISCOVERY time so loki.source.docker
+// only opens log tailers for our two containers, not every container on the
+// host. Doing the filter here (rather than later in a loki.relabel block) also
+// keeps the __meta_docker_* labels in scope so we can promote them to real
+// labels like `job` before the loki source consumes them.
+discovery.docker "all" {
   host = "unix:///var/run/docker.sock"
 }
 
-loki.source.docker "exporter" {
-  host    = "unix:///var/run/docker.sock"
-  targets = discovery.docker.exporter.targets
-  forward_to = [loki.relabel.exporter.receiver]
-}
-
-loki.relabel "exporter" {
-  forward_to = [loki.write.grafanacloud.receiver]
+discovery.relabel "test_harness_containers" {
+  targets = discovery.docker.all.targets
 
   rule {
     source_labels = ["__meta_docker_container_name"]
-    regex         = "/test-harness-topology-exporter-1"
+    regex         = "/test-harness-(topology-exporter|alloy)-1"
     action        = "keep"
   }
 
   rule {
     source_labels = ["__meta_docker_container_name"]
-    target_label  = "container"
+    regex         = "/test-harness-(.+)-1"
+    target_label  = "job"
+    replacement   = "test-harness-$1"
   }
+}
+
+loki.source.docker "exporter" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.test_harness_containers.output
+  forward_to = [loki.write.grafanacloud.receiver]
 }
 
 loki.write "grafanacloud" {
   endpoint {
-    url = "https://logs-prod-006.grafana.net/loki/api/v1/push" // REPLACE with your GC Loki URL
+    url = "https://logs-prod-042.grafana.net/loki/api/v1/push"
     basic_auth {
-      username = "REPLACE_WITH_USER_ID"
-      password = "REPLACE_WITH_TOKEN"
+      username = "1502750"
+      password = "YOUR_GLC_TOKEN"
     }
   }
 
   external_labels = {
-    tester_id = "REPLACE_WITH_YOUR_NAME",
+    tester_id = "YOUR_TESTER_ID",
   }
 }
