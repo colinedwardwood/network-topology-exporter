@@ -36,6 +36,7 @@ services:
     volumes:
       - .:/work
       - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/containerlab:/usr/local/bin/containerlab:ro
     working_dir: /work
     network_mode: host
     pid: host
