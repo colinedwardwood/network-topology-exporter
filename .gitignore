@@ -56,3 +56,10 @@ clab-nte-e2e/
 TODOs.txt
 
 deploy/long-running-test/.last-topo
+
+# Personal: implementation plans with concrete homelab paths
+docs/superpowers/plans/
+
+# Personal: deploy.sh is pinned to colinwood homelab; rewrite parameterized
+# version per deployment before sharing.
+deploy/long-running-test/deploy.sh
