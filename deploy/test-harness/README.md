@@ -18,7 +18,11 @@ Turnkey stack to scrape metrics and logs from the exporter and ship them to Graf
 3. **Configure Alloy (Grafana Cloud):**
    ```bash
    cp deploy/test-harness/alloy/config.alloy.example deploy/test-harness/alloy/config.alloy
-   # Edit alloy/config.alloy with your Grafana Cloud credentials and tester_id
+   # Two placeholders to fill in (URLs + user IDs are pre-filled for the
+   # shared networko11ydev.grafana.net stack):
+   #   YOUR_GLC_TOKEN   — write token from the stack's connections page
+   #   YOUR_TESTER_ID   — your unique kebab-case slug
+   # Full instructions: see the "00. Getting Started" dashboard.
    ```
 
 4. **Launch the stack:**
