@@ -3,8 +3,14 @@ discovery:
   timeout_per_device: 10s
   parallelism: 20
   scope:
+    # 172.30.0.0/24 bounds IP-based scope to the lab subnet.
+    # 0.0.0.0/0 is required for LLDP because nte-testnode advertises a MAC
+    # chassis ID; the LD-11 scope filter at internal/discovery/lldp/lldp.go:316
+    # otherwise drops every neighbour with a non-IP chassis when the allow-list
+    # is non-catch-all. See CHANGELOG entry D54 for the rationale.
     cidr_allow_list:
       - "172.30.0.0/24"
+      - "0.0.0.0/0"
 
 modules:
   snmp:
