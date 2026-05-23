@@ -211,7 +211,7 @@ func validateLabelKey(k string) error {
 func validateLabelValue(v string) error {
 	// Size cap runs before per-rune iteration so a 16 MiB value cannot force
 	// ~4M iterations of the control-char check. Prometheus / OpenMetrics
-	// impose no formal max on label value length (REMEDIATION.md §3), but
+	// impose no formal max on label value length (docs/remediation.md §3), but
 	// client_golang defaults and Grafana Cloud Mimir limits operate well
 	// under 4 KiB per value, so 4096 bytes is a safe upper bound.
 	if len(v) > limits.MaxLabelValueBytes {
