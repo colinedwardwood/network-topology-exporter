@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   topology-exporter:
-    image: network-topology-exporter:latest # Build this with: docker build -t network-topology-exporter:latest .
+    image: ghcr.io/colinedwardwood/network-topology-exporter:1.3.1-rc1
     container_name: test-harness-topology-exporter-1
     volumes:
       - ./config.yaml:/etc/topology-exporter/config.yaml:ro

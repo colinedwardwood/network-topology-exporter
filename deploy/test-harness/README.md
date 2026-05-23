@@ -4,18 +4,15 @@ Turnkey stack to scrape metrics and logs from the exporter and ship them to Graf
 
 ## Quickstart
 
-1. **Build the exporter image:**
-   ```bash
-   docker build -t network-topology-exporter:latest .
-   ```
+> The exporter image is published to `ghcr.io/colinedwardwood/network-topology-exporter`. The harness pins the current tester build (`:1.3.1-rc1`) so every tester is on the same image — Compose will pull it on first `up`, no local build required. Bump the tag in `docker-compose.yml` when a new release candidate ships.
 
-2. **Configure the exporter:**
+1. **Configure the exporter:**
    ```bash
    cp deploy/test-harness/config.yaml.example deploy/test-harness/config.yaml
    # Edit config.yaml to set your discovery.scope.cidr_allow_list
    ```
 
-3. **Configure Alloy (Grafana Cloud):**
+2. **Configure Alloy (Grafana Cloud):**
    ```bash
    cp deploy/test-harness/alloy/config.alloy.example deploy/test-harness/alloy/config.alloy
    # Two placeholders to fill in (URLs + user IDs are pre-filled for the
@@ -25,14 +22,15 @@ Turnkey stack to scrape metrics and logs from the exporter and ship them to Graf
    # Full instructions: see the "00. Getting Started" dashboard.
    ```
 
-4. **Launch the stack:**
+3. **Launch the stack:**
    ```bash
    cd deploy/test-harness
    export SNMP_COMMUNITY=your_community
+   docker compose pull
    docker compose up -d
    ```
 
-5. **Verify:**
+4. **Verify:**
    - Exporter metrics: `curl http://localhost:9100/metrics`
    - Alloy UI (optional): `http://localhost:12345` (if port mapped)
    - Check your Grafana Cloud instance for the `network_topology_*` metrics.
