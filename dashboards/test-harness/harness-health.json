@@ -74,7 +74,7 @@
             "uid": "grafanacloud-prom"
           },
           "editorMode": "code",
-          "expr": "5",
+          "expr": "6",
           "legendFormat": "__auto",
           "range": true,
           "refId": "A"
@@ -159,6 +159,7 @@
           "color": {
             "mode": "thresholds"
           },
+          "noValue": "0",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -225,6 +226,7 @@
           "color": {
             "mode": "thresholds"
           },
+          "noValue": "0",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -805,5 +807,5 @@
   "timezone": "browser",
   "title": "01. Test Harness Health",
   "uid": "harness-health",
-  "version": 6
+  "version": 8
 }
