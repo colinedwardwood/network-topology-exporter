@@ -70,10 +70,12 @@ discovery.docker "exporter" {
   host = "unix:///var/run/docker.sock"
 }
 
-// Filter targets at discovery time so loki.source.docker only opens log
-// tailers for our three containers, not every container on the host.
-// Without this, Alloy would tail 30+ unrelated containers and exhaust
-// the docker socket — symptom: "channel was blocked" on loki.write.
+// All label work must happen here. The __meta_docker_* labels do not carry
+// through to loki.source.docker output — we have to promote them to regular
+// labels (job, instance) BEFORE the source consumes the targets. Filtering
+// also happens here so loki.source.docker only opens tailers for our three
+// containers, not every container on the host (which exhausts the docker
+// socket — symptom: "channel was blocked" on loki.write).
 discovery.relabel "long_running_containers" {
   targets = discovery.docker.exporter.targets
   rule {
@@ -81,16 +83,6 @@ discovery.relabel "long_running_containers" {
     regex         = "/long-running-(exporter|mutator|alloy)"
     action        = "keep"
   }
-}
-
-loki.source.docker "exporter" {
-  host    = "unix:///var/run/docker.sock"
-  targets = discovery.relabel.long_running_containers.output
-  forward_to = [loki.relabel.long_running_containers.receiver]
-}
-
-loki.relabel "long_running_containers" {
-  forward_to = [loki.write.grafana_cloud_loki.receiver]
   rule {
     source_labels = ["__meta_docker_container_name"]
     regex         = "/long-running-(.+)"
@@ -101,6 +93,12 @@ loki.relabel "long_running_containers" {
     target_label  = "instance"
     replacement   = "macbookpro-2015"
   }
+}
+
+loki.source.docker "exporter" {
+  host    = "unix:///var/run/docker.sock"
+  targets = discovery.relabel.long_running_containers.output
+  forward_to = [loki.write.grafana_cloud_loki.receiver]
 }
 
 // --- Traces (OTLP) ---
