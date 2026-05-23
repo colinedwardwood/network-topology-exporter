@@ -148,10 +148,9 @@
   "templating": {
     "list": [
       {
-        "current": {},
-        "datasource": {
-          "type": "prometheus",
-          "uid": "grafanacloud-prom"
+        "current": {
+          "text": "grafanacloud-networko11ydev-prom",
+          "value": "grafanacloud-prom"
         },
         "hide": 0,
         "includeAll": false,
@@ -162,7 +161,9 @@
         "refresh": 1,
         "regex": "",
         "skipUrlSync": false,
-        "type": "datasource"
+        "type": "datasource",
+        "allowCustomValue": true,
+        "multi": false
       },
       {
         "allValue": null,
@@ -198,5 +199,5 @@
   "timezone": "",
   "title": "Test Harness \u2014 Topology Graph",
   "uid": "topology-graph",
-  "version": 3
+  "version": 4
 }
