@@ -51,7 +51,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "network_topology_device_info{tester_id=\"$tester_id\"}",
+          "expr": "label_replace(network_topology_device_info{tester_id=\"$tester_id\"}, \"mainStat\", \"$1\", \"device_id\", \"(.+)\")",
           "format": "table",
           "instant": true,
           "refId": "Nodes"
@@ -73,15 +73,20 @@
           "options": {
             "excludeByName": {
               "Time": true,
-              "Value": true
+              "Value": true,
+              "__name__": true,
+              "job": true,
+              "instance": true,
+              "env": true,
+              "tester_id": true,
+              "os_version": true,
+              "model": true
             },
             "indexByName": {},
             "renameByName": {
               "device_id": "id",
               "vendor": "title",
-              "model": "subTitle",
-              "os_version": "mainStat",
-              "site": "secondaryStat",
+              "site": "subTitle",
               "src_device": "source",
               "dst_device": "target",
               "discovery_proto": "mainStat",
@@ -130,7 +135,10 @@
   "refresh": "1m",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["test-harness", "topology"],
+  "tags": [
+    "test-harness",
+    "topology"
+  ],
   "templating": {
     "list": [
       {
@@ -182,7 +190,7 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "Test Harness — Topology Graph",
+  "title": "Test Harness \u2014 Topology Graph",
   "uid": "topology-graph",
-  "version": 1
+  "version": 2
 }
