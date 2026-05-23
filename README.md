@@ -174,6 +174,17 @@ modules:
     disable_v2_mib: false   # default; true disables the BGP4V2 vendor walkers
 ```
 
+**Vendor walker coverage.** The v2 walkers ship with mixed validation status:
+
+| Vendor | MIB / OID | Status |
+|--------|-----------|--------|
+| Cisco | `cbgpPeer2Table` (1.3.6.1.4.1.9.9.187.1.2.5) | Real-device validated (IOS / IOS-XE family via Cisco IOL 17.12.1) |
+| Arista | enterprise BGP4V2 (1.3.6.1.4.1.30065.4.1.1.2) | Real-device validated (cEOS 4.36) |
+| Juniper | `jnxBgpM2PeerTable` (1.3.6.1.4.1.2636.5.1.1.2.1.1) | **Experimental** — columns transcribed from MIB docs, not lab-verified |
+| Nokia | `tBgpPeerTable` (1.3.6.1.4.1.6527.3.1.2.13.2) | **Experimental** — same caveat as Juniper |
+
+On Junos / SR-OS / SR Linux fleets, set `disable_v2_mib: true` until the per-vendor capture work lands. The walker exposes failure modes via `network_topology_bgp_walker_outcome_total{outcome=...}` (labels include `walker_drift`, `malformed_index`, `mib_unimplemented`) so a broken vendor walk is alertable rather than silent.
+
 ### MPLS-TE (RFC 3812)
 
 Walks `mplsTunnelOperStatus`. `SrcPort` is formatted as `te-tunnel<idx>` where `idx` is the tunnel index from the MIB. `DstDevice` is the egress LSR IP.
