@@ -70,19 +70,27 @@ discovery.docker "exporter" {
   host = "unix:///var/run/docker.sock"
 }
 
-loki.source.docker "exporter" {
-  host    = "unix:///var/run/docker.sock"
+// Filter targets at discovery time so loki.source.docker only opens log
+// tailers for our three containers, not every container on the host.
+// Without this, Alloy would tail 30+ unrelated containers and exhaust
+// the docker socket — symptom: "channel was blocked" on loki.write.
+discovery.relabel "long_running_containers" {
   targets = discovery.docker.exporter.targets
-  forward_to = [loki.relabel.long_running_containers.receiver]
-}
-
-loki.relabel "long_running_containers" {
-  forward_to = [loki.write.grafana_cloud_loki.receiver]
   rule {
     source_labels = ["__meta_docker_container_name"]
     regex         = "/long-running-(exporter|mutator|alloy)"
     action        = "keep"
   }
+}
+
+loki.source.docker "exporter" {
+  host    = "unix:///var/run/docker.sock"
+  targets = discovery.relabel.long_running_containers.output
+  forward_to = [loki.relabel.long_running_containers.receiver]
+}
+
+loki.relabel "long_running_containers" {
+  forward_to = [loki.write.grafana_cloud_loki.receiver]
   rule {
     source_labels = ["__meta_docker_container_name"]
     regex         = "/long-running-(.+)"
