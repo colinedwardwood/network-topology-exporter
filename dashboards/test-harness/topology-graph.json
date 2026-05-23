@@ -36,13 +36,17 @@
       "id": 1,
       "options": {
         "edges": {
-          "mainStatUnit": "none",
-          "secondaryStatUnit": "none"
+          "mainStatUnit": "short",
+          "secondaryStatUnit": "short"
         },
+        "layoutAlgorithm": "layered",
         "nodes": {
-          "mainStatUnit": "none",
-          "secondaryStatUnit": "none"
-        }
+          "arcs": [],
+          "mainStatUnit": "short",
+          "nodeRadius": 40,
+          "secondaryStatUnit": "short"
+        },
+        "zoomMode": "cooperative"
       },
       "title": "Network Topology Graph",
       "targets": [
@@ -51,7 +55,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "label_replace(network_topology_device_info{tester_id=\"$tester_id\"}, \"mainStat\", \"$1\", \"device_id\", \"(.+)\")",
+          "expr": "label_replace(label_replace(label_replace(label_replace(network_topology_device_info{tester_id=\"$tester_id\"}, \"id\", \"$1\", \"device_id\", \"(.*)\"), \"mainStat\", \"$1\", \"device_id\", \"(.*)\"), \"title\", \"$1\", \"vendor\", \"(.*)\"), \"subTitle\", \"$1\", \"site\", \"(.*)\")",
           "format": "table",
           "instant": true,
           "refId": "Nodes"
@@ -61,7 +65,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "network_topology_edge_info{tester_id=\"$tester_id\"}",
+          "expr": "label_replace(label_replace(label_replace(label_replace(label_replace(network_topology_edge_info{tester_id=\"$tester_id\"}, \"id\", \"$1\", \"src_port\", \"(.*)\"), \"source\", \"$1\", \"src_device\", \"(.*)\"), \"target\", \"$1\", \"dst_device\", \"(.*)\"), \"mainStat\", \"$1\", \"discovery_proto\", \"(.*)\"), \"secondaryStat\", \"$1\", \"link_kind\", \"(.*)\")",
           "format": "table",
           "instant": true,
           "refId": "Edges"
@@ -73,26 +77,28 @@
           "options": {
             "excludeByName": {
               "Time": true,
-              "Value": true,
+              "Value #Edges": true,
+              "Value #Nodes": true,
               "__name__": true,
+              "device_id": true,
+              "vendor": true,
+              "model": true,
+              "os_version": true,
+              "site": true,
+              "src_device": true,
+              "src_port": true,
+              "dst_device": true,
+              "dst_port": true,
+              "discovery_proto": true,
+              "link_kind": true,
+              "direction": true,
+              "env": true,
               "job": true,
               "instance": true,
-              "env": true,
-              "tester_id": true,
-              "os_version": true,
-              "model": true
+              "tester_id": true
             },
             "indexByName": {},
-            "renameByName": {
-              "device_id": "id",
-              "vendor": "title",
-              "site": "subTitle",
-              "src_device": "source",
-              "dst_device": "target",
-              "discovery_proto": "mainStat",
-              "link_kind": "secondaryStat",
-              "src_port": "id"
-            }
+            "renameByName": {}
           }
         }
       ],
@@ -192,5 +198,5 @@
   "timezone": "",
   "title": "Test Harness \u2014 Topology Graph",
   "uid": "topology-graph",
-  "version": 2
+  "version": 3
 }
