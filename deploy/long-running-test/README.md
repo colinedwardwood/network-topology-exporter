@@ -9,29 +9,35 @@ to Grafana Cloud.
 
 | Container             | Image                          | Purpose                                                  |
 | --------------------- | ------------------------------ | -------------------------------------------------------- |
-| `long-running-exporter` | `network-topology-exporter:latest` | Discovers the lab, exposes `/metrics`                 |
-| `long-running-alloy`    | `grafana/alloy:latest`         | Scrapes the exporter and ships logs/metrics/traces to Grafana Cloud |
-| `long-running-mutator`  | `alpine:latest` + `clab`       | Swaps the lab topology every UTC hour                    |
+| `clab-nte-dynamic-1-{spine1,spine2,leaf1..leaf4}` | `nte-testnode:latest` | The lab itself: 6 always-on nodes with pinned mgmt IPs in `172.30.0.0/24`. |
+| `long-running-exporter` | `network-topology-exporter:latest` | Discovers the lab, exposes `/metrics`                  |
+| `long-running-alloy`    | `grafana/alloy:latest`         | Scrapes the exporter and all `long-running-*` container logs; ships metrics/logs/traces to Grafana Cloud |
+| `long-running-mutator`  | `alpine:latest` + `clab`       | Reconciles veth links between the 6 base nodes every UTC hour; emits structured JSON events to stdout |
 
 ## Mutation schedule
 
-`mutate.sh` selects a topology file based on `UTC hour mod 4`:
+The mutator selects a topology file by `UTC hour mod 4` and applies it
+by **reconciling veth links between always-on nodes**. Nodes never
+restart; SNMP/LLDP keep state across mutations.
 
 | `UTC hour % 4` | File          | Topology                                                |
 | -------------- | ------------- | ------------------------------------------------------- |
-| `0`            | `topo-1.yml`  | spine + 4 leaves, star (chain)                          |
-| `1`            | `topo-2.yml`  | star + 2 leaf cross-link, leaf4 daisy-chained           |
+| `0`            | `topo-1.yml`  | spine1 + 4 leaves, star (chain)                         |
+| `1`            | `topo-2.yml`  | star + leaf cross-link, leaf4 daisy-chained             |
 | `2`            | `topo-3.yml`  | 5-node ring                                             |
-| `3`            | `topo-4.yml`  | **CLOS** — 2 spines × 3 leaves (canonical fabric)      |
+| `3`            | `topo-4.yml`  | CLOS — spine1+spine2 × leaf1..3                         |
 
-On the hour boundary, the mutator runs
-`containerlab deploy -t topologies/topo-N.yml --reconfigure`, which fully
-tears down the running lab and rebuilds it. The exporter sees a ~20–40s
-window of SNMP timeouts during each swap.
+Nodes that don't participate in the current topology (`spine2` in
+`topo-1/2/3`; `leaf4` in `topo-4`) stay running with no data-plane
+links — the exporter sees the device but reports zero edges.
 
-The exporter target list in `config.yaml` is the **union** of all addresses
-across topologies; devices not present in the current topology will fail
-discovery and age out via the standard stale-edge eviction path.
+The mutator emits JSON events on stdout that Alloy ships to Loki:
+`mutator_starting`, `mutation_start`, `link_added`, `link_removed`,
+`link_add_failed`, `link_remove_failed`, `mutation_success`,
+`mutation_failed`, `self_heal_triggered`, `self_heal_success`,
+`self_heal_failed`. Query with:
+
+    {job="long-running-mutator", tester_id="long-running-lab"} | json
 
 ## Prerequisites
 
@@ -45,19 +51,15 @@ discovery and age out via the standard stale-edge eviction path.
 ## Bring-up
 
 ```bash
-# 1) Populate credentials (see .env.example)
 cp .env.example .env
 $EDITOR .env
 
-# 2) Pre-create the clab network so compose can attach to it
-sudo containerlab deploy -t topologies/topo-4.yml --reconfigure
-
-# 3) Start the stack
-docker compose --env-file .env up -d
-
-# 4) Tail logs
-docker compose logs -f
+bash deploy.sh    # rsyncs, brings up base lab, starts compose
 ```
+
+`deploy.sh` is idempotent: rerun it any time the base lab or compose
+stack needs a refresh. Use `REMOTE_HOST=...`, `REMOTE_USER=...`, and
+`REMOTE_DIR=...` env vars to target a host other than the default.
 
 ## Operator notes
 
@@ -79,11 +81,20 @@ docker compose logs -f
 
 ## Known limitations
 
-- `deploy.sh` is currently pinned to `macbookpro-2015` and rsyncs the
-  working tree (including `id_ed25519`) to the remote. Use only on a host
-  you control.
-- The mutator has no retry/backoff. A failed `clab deploy` retries on the
-  next minute with the same parameters.
-- All four topologies share the lab name `nte-dynamic-1`; `clab inspect`
-  reflects the *currently deployed* topology regardless of which YAML you
-  point at.
+- `deploy.sh` rsyncs the working tree but does *not* push the
+  `nte-testnode:latest` image — build it on the remote host once.
+- The mutator does not retry on failure; the next hour boundary
+  triggers a fresh attempt. The most recent `mutation_failed` event
+  in Loki is the current failure signal.
+- All four topology files share the lab name `nte-dynamic-1`. The
+  mutator addresses links by node name (`spine1:eth1`), so this is
+  fine — but `clab inspect` always points at `base.clab.yml`.
+- The mutator tracks state in `.last-topo` (gitignored). On manual
+  intervention (e.g. someone runs `ip link del` outside the
+  mutator), the next mutation will compute a wrong diff. Restarting
+  the mutator triggers a self-heal pass that destroys + redeploys
+  the base lab and resets the state file.
+- The `cidr_allow_list` in `config.yaml` includes `0.0.0.0/0`. This is
+  intentional: nte-testnode advertises a MAC chassis ID over LLDP, and
+  the exporter's scope filter (LD-11) drops MAC-chassis neighbours
+  when the allow-list is non-catch-all. See CHANGELOG entry D54.
