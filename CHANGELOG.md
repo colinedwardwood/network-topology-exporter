@@ -5,10 +5,15 @@
 ### Features
 
 - **Long-running validation lab** — Added `deploy/long-running-test/`, a
-  continuously-running harness that swaps the underlying containerlab
-  topology every UTC hour (chain → cross-link → ring → CLOS) and ships
-  metrics/logs/traces to Grafana Cloud labeled `tester_id=long-running-lab`.
-  Exercises add/remove/swap reconciliation against a live exporter.
+  continuously-running harness. Six containerlab nodes (`spine1, spine2,
+  leaf1..leaf4`) deploy once with pinned management IPs in a dedicated
+  `172.30.0.0/24` subnet. An hourly mutator reconciles veth links
+  between them per topology (`topo-1` chain → `topo-2` cross-link →
+  `topo-3` ring → `topo-4` CLOS) without restarting containers. The
+  exporter sees real edge add/remove events on the hour boundary,
+  exercising the same reconciliation code path it exists to validate.
+  Mutator emits structured JSON events to stdout; Alloy ships them to
+  Loki labelled `tester_id=long-running-lab, job=long-running-mutator`.
 
 ### Security
 
