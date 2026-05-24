@@ -29,9 +29,24 @@ v1.3.1 lands under this milestone instead, renamed to
   `.gitignore` rules for SSH keys (`id_ed25519`), `.env` files, and TLS
   material (`*.pem`, `*.key`) so this class of file cannot be accidentally
   committed.
+- **Signed release artefacts.** Every release (container image + Go
+  binaries) is now signed with cosign keyless signing and carries a SLSA
+  build-provenance attestation produced via `actions/attest-build-provenance`.
+  Operators verify with `cosign verify` / `gh attestation verify`; commands
+  documented in `docs/operator/security.md` § "Verifying release artefact
+  provenance." Closes the supply-chain attestation gap identified in the
+  May 2026 architectural review.
 
 ### Documentation
 
+- **Threat model document** — New `docs/operator/threat-model.md` with a
+  STRIDE matrix scoped to the binary's role on the management plane. Names
+  assets, threats, mitigations shipping today, and gaps tracked as
+  follow-up issues (#70 fuzz coverage, #72 per-device rate limit).
+- **Hub HA patterns** — New section in `docs/operator/federation.md` § "Hub
+  high-availability patterns" covering three workarounds operators have today
+  (cold standby, active-passive LB with shared snapshot, dual independent
+  stacks). Real native HA is v2.0 work; tracked at #71.
 - Added a runbook at `deploy/long-running-test/README.md` covering the
   mutation schedule, credential layout, and known limitations of the lab.
 - README now lists both test environments (`deploy/test-harness/` and

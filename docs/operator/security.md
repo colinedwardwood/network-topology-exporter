@@ -96,6 +96,49 @@ tls_server_config:
 
 The legacy `listen.tls_cert_file` and `listen.tls_key_file` fields remain accepted but emit a startup deprecation warning. They configure server-side TLS only — no client authentication — and will be removed in v1.5.0. Migrate to `listen.web_config_file` (set `tls_server_config.cert_file` / `key_file` to the same paths) and the deprecation warning goes away.
 
+## Verifying release artefact provenance
+
+Every release artefact (Go binaries + multi-arch container image) is signed via [cosign](https://github.com/sigstore/cosign) keyless signing and carries a [SLSA build provenance attestation](https://slsa.dev/spec/v1.0/provenance) produced by `actions/attest-build-provenance`. Verifying these before deployment confirms the artefact came from this repository's release workflow and was not tampered with after the fact.
+
+### Container image
+
+```bash
+# Verify the keyless cosign signature
+cosign verify \
+  --certificate-identity-regexp '^https://github.com/colinedwardwood/network-topology-exporter/.github/workflows/' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  ghcr.io/colinedwardwood/network-topology-exporter:VERSION
+
+# Verify the SLSA provenance attestation
+gh attestation verify \
+  oci://ghcr.io/colinedwardwood/network-topology-exporter:VERSION \
+  --owner colinedwardwood
+```
+
+Replace `VERSION` with the tag you are deploying (e.g. `v1.3.0`).
+
+### Binary (downloaded from a GitHub Release)
+
+```bash
+# Download the artefacts
+curl -LO https://github.com/colinedwardwood/network-topology-exporter/releases/download/VERSION/topology-exporter-linux-amd64
+curl -LO https://github.com/colinedwardwood/network-topology-exporter/releases/download/VERSION/topology-exporter-linux-amd64.sig
+curl -LO https://github.com/colinedwardwood/network-topology-exporter/releases/download/VERSION/topology-exporter-linux-amd64.cert
+
+# Verify the keyless cosign signature
+cosign verify-blob \
+  --signature topology-exporter-linux-amd64.sig \
+  --certificate topology-exporter-linux-amd64.cert \
+  --certificate-identity-regexp '^https://github.com/colinedwardwood/network-topology-exporter/.github/workflows/' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  topology-exporter-linux-amd64
+
+# Verify the SLSA provenance attestation
+gh attestation verify topology-exporter-linux-amd64 --owner colinedwardwood
+```
+
+If either verification fails the artefact is not authentic — do not deploy it. Open a security advisory via GitHub Security Advisories on this repository before proceeding.
+
 ## References
 
 - Issue #5 — the GitHub issue that motivated the SNMP zeroization work.
@@ -104,3 +147,5 @@ The legacy `listen.tls_cert_file` and `listen.tls_key_file` fields remain accept
 - `internal/discovery/snmp/snmp.go` — the `Params` struct that holds credentials.
 - `cmd/topology-exporter/main.go` — `walkSystemWithCredentials` (candidate-trial zeroization), `runCycle` (per-device defer), and the `web.ListenAndServe` integration.
 - [Prometheus exporter-toolkit web-configuration.md](https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md) — full schema reference for `web_config_file`.
+- [SLSA v1.0 provenance spec](https://slsa.dev/spec/v1.0/provenance) and [cosign documentation](https://docs.sigstore.dev/cosign/).
+- [`threat-model.md`](threat-model.md) — STRIDE matrix and asset-level analysis.

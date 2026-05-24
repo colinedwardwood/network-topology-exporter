@@ -189,10 +189,16 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build-test, integration-test, lint, helm-lint, docker]
     permissions:
-      contents: write  # create GitHub release
-      packages: write  # push to ghcr.io
+      contents: write       # create GitHub release
+      packages: write       # push to ghcr.io
+      id-token: write       # OIDC for cosign keyless + SLSA attestations
+      attestations: write   # write build-provenance attestations to GitHub
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
 
       - uses: docker/setup-qemu-action@v3
 
@@ -203,6 +209,8 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: sigstore/cosign-installer@v3
 
       - name: docker metadata
         id: meta
@@ -215,6 +223,7 @@ jobs:
             type=sha
 
       - name: build and push
+        id: build_push
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -229,6 +238,22 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: sign container image (cosign keyless)
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build_push.outputs.digest }}
+        run: |
+          for tag in ${TAGS}; do
+            cosign sign --yes "${tag}@${DIGEST}"
+          done
+
+      - name: attest container image build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.build_push.outputs.digest }}
+          push-to-registry: true
+
       - name: go build release binaries
         run: |
           mkdir -p bin
@@ -241,10 +266,30 @@ jobs:
           CGO_ENABLED=0 GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" \
             -o bin/topology-exporter-linux-arm64 ./cmd/topology-exporter
 
+      - name: sign release binaries (cosign keyless)
+        run: |
+          for f in bin/topology-exporter-linux-amd64 bin/topology-exporter-linux-arm64; do
+            cosign sign-blob --yes \
+              --output-signature "${f}.sig" \
+              --output-certificate "${f}.cert" \
+              "${f}"
+          done
+
+      - name: attest binary build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            bin/topology-exporter-linux-amd64
+            bin/topology-exporter-linux-arm64
+
       - name: create github release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             bin/topology-exporter-linux-amd64
+            bin/topology-exporter-linux-amd64.sig
+            bin/topology-exporter-linux-amd64.cert
             bin/topology-exporter-linux-arm64
+            bin/topology-exporter-linux-arm64.sig
+            bin/topology-exporter-linux-arm64.cert
           generate_release_notes: true
