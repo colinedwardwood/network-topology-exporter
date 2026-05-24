@@ -18,7 +18,6 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": null,
   "liveNow": false,
   "panels": [
     {
@@ -587,6 +586,52 @@
     },
     {
       "datasource": {
+        "type": "loki",
+        "uid": "grafanacloud-logs"
+      },
+      "gridPos": {
+        "h": 18,
+        "w": 12,
+        "x": 12,
+        "y": 17
+      },
+      "id": 9,
+      "options": {
+        "dedupStrategy": "none",
+        "enableInfiniteScrolling": false,
+        "enableLogDetails": true,
+        "prettifyLogMessage": true,
+        "showCommonLabels": false,
+        "showControls": false,
+        "showFieldSelector": false,
+        "showLabels": false,
+        "showLevel": true,
+        "showLogAttributes": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "timestampResolution": "ms",
+        "unwrappedColumns": false,
+        "wrapLogMessage": true
+      },
+      "pluginVersion": "13.1.0-25668120414",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "grafanacloud-logs"
+          },
+          "direction": "backward",
+          "editorMode": "code",
+          "expr": "{job=\"long-running-mutator\", tester_id=\"long-running-lab\"} \n| json \n",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "Mutator Events",
+      "type": "logs"
+    },
+    {
+      "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
       },
@@ -691,42 +736,6 @@
       ],
       "title": "Exporter Health: Conflicts & Drops",
       "type": "timeseries"
-    },
-    {
-      "id": 9,
-      "type": "logs",
-      "title": "Mutator Events",
-      "gridPos": {
-        "h": 10,
-        "w": 8,
-        "x": 0,
-        "y": 35
-      },
-      "datasource": {
-        "type": "loki",
-        "uid": "grafanacloud-logs"
-      },
-      "options": {
-        "showTime": true,
-        "showLabels": false,
-        "showCommonLabels": false,
-        "wrapLogMessage": true,
-        "prettifyLogMessage": true,
-        "enableLogDetails": true,
-        "dedupStrategy": "none",
-        "sortOrder": "Descending"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "loki",
-            "uid": "grafanacloud-logs"
-          },
-          "expr": "{job=\"long-running-mutator\", tester_id=\"long-running-lab\"} | json",
-          "queryType": "range"
-        }
-      ]
     }
   ],
   "preload": false,
@@ -807,5 +816,5 @@
   "timezone": "browser",
   "title": "01. Test Harness Health",
   "uid": "harness-health",
-  "version": 8
+  "version": 9
 }
