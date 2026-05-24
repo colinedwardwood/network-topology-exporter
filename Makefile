@@ -91,5 +91,5 @@ dashboards-apply: ## Apply test-harness dashboards to Grafana Cloud using grafan
 	@command -v grafana-cli >/dev/null || { echo "Error: grafana-cli not found. Install it from: https://grafana.com/docs/grafana/latest/as-code/observability-as-code/grafana-cli/"; exit 1; }
 	@for file in dashboards/test-harness/*.json; do \
 		echo "Applying $$file..."; \
-		grafana-cli dashboards apply --url $(GRAFANA_URL) --token $(GRAFANA_TOKEN) --folder "Test Harness" $$file; \
+		grafana-cli dashboards apply --url $(GRAFANA_URL) --token $(GRAFANA_TOKEN) --folder "topology-exporter-testing" $$file; \
 	done
