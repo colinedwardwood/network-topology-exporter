@@ -347,6 +347,40 @@ The hub loads the same snapshot path as standalone/spoke instances. On startup, 
 
 Check `network_topology_federation_spoke_last_push_timestamp_seconds{spoke_id="..."}` to identify which spoke is overdue. A value of 0 means the hub has never received a push from that spoke since starting (no snapshot entry for it either).
 
+## Hub high-availability patterns
+
+The hub is a single point of failure today. If the active hub goes down, spokes' pushes fail with retries and the hub's `/metrics` endpoint stops serving topology data. Spokes continue local discovery uninterrupted and replay their most recent graph to the hub once it returns. Real native HA — leader election, shared state, automatic failover — is v2.0 work tracked separately. Until then, three patterns reduce blast radius. None is turnkey.
+
+### Pattern A: Cold standby with manual cutover
+
+Run a second hub binary against the same snapshot path (NFS, S3-mounted-via-csi-driver, EBS volume mounted on standby) configured with the same mTLS CA. Keep the standby stopped. On primary failure: stop the primary, start the standby, repoint DNS (or load balancer backend) for spokes' `hub_url` at the standby. Spokes' next push hits the standby and the graph is rebuilt within one `discovery.interval`.
+
+- **Recovery time:** human reaction time + spoke push retry interval (typically 1–3 minutes).
+- **Data loss window:** none — spokes replay their current graph on first successful push.
+- **Risk:** snapshot-path consistency. If the standby was reading the snapshot file mid-write by the primary, it may load a torn snapshot. Stop the primary first, then start the standby; never both at once.
+
+### Pattern B: Active-passive with shared TCP load balancer
+
+Place a TCP-mode load balancer in front of two hub binaries; both share a snapshot path. Spokes push to the LB; the LB forwards to whichever hub is healthy. Configure the LB with a short health-check interval against `/healthz`.
+
+- **Recovery time:** load balancer health-check interval (typically 5–30s).
+- **Risk:** **split-brain.** Both hubs may simultaneously be marked healthy and write the snapshot, producing conflicting state. Mitigations: pick one as "writer" and configure the LB to fail to the other only when the writer is fully unreachable; OR mount the snapshot path read-only on the standby until cutover.
+- **Risk:** spoke push deduplication. The hub doesn't deduplicate by `(spoke_id, cycle_at)`, so if a push arrives at both hubs via LB retry semantics, the second one is processed normally.
+- **Recommendation:** if you go this route, prefer Pattern A's cold standby unless you've validated a specific LB's failure semantics against the snapshot write path.
+
+### Pattern C: Dual independent stacks with downstream aggregation
+
+Run two fully independent hubs, each receiving pushes from a disjoint subset of spokes (or, for full coverage, each spoke pushes to both hubs via two `federation.spoke` instances on the spoke host). Each hub publishes its own `/metrics` to its own Prometheus scrape target. Aggregation happens downstream — e.g. a Mimir recording rule unions both hubs' `network_topology_edge_info` series with deduplication on `src_device, dst_device`.
+
+- **Recovery time:** zero — both hubs are always live.
+- **Operational cost:** highest of the three. Two hub deployments, two scrape targets, downstream union rules to maintain.
+- **Caveat:** the topology metric carries no `hub_id` label today; the recording rule has to deduplicate on edge identity alone. If the two hubs disagree (e.g. different `network_topology_conflict_total` values for the same edge), the downstream view picks one arbitrarily.
+- **Best for:** large deployments where the hub is also the scrape source for `network_topology_conflict_total` alerting and you can't tolerate the scrape gap of Pattern A.
+
+### What changes in v2.0
+
+Real HA — leader election between hub instances, shared state via Raft or similar, automatic failover, deduplicated spoke pushes — is v2.0 work. See the [v2.0.0 milestone](https://github.com/colinedwardwood/network-topology-exporter/milestones) for design tracking. Today's patterns above are operator-side workarounds that don't require code changes.
+
 ## Alert runbook entries
 
 ### FederationSpokeDown

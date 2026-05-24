@@ -209,5 +209,5 @@ was.
   newer revision exists and the project is still tracking an older one, file
   a follow-up issue rather than silently expanding scope.
 - **Documents that don't exist yet.** This workflow assumes `README.md` for
-  the active-freeze hook in Step 0. There is no `CLAUDE.md` or `AGENTS.md` in
-  this repo — don't reference them.
+  the active-freeze hook in Step 0. Don't reference contributor-handbook or
+  tooling-config files that don't exist in this repo.
