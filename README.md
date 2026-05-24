@@ -26,6 +26,8 @@ The Prometheus / Grafana stack already covers storage, query, alerting, and visu
 
 **Functionally complete, public surface intentionally unstable.** SNMP / LLDP / CDP / BGP / OSPF / FDB / IS-IS / MPLS-TE discovery, graph reconciliation, credential management, snapshot persistence, multi-instance federation, and optional OTLP push are all implemented and covered by unit, integration, and end-to-end tests. The project ships against test deployments and welcomes adversarial feedback — see the pre-release notice at the top of this README.
 
+The path to a real v1.0 GA — what's left, the per-release plan, and what's intentionally out of scope — is in [ROADMAP.md](ROADMAP.md).
+
 ## Quickstart
 
 ```bash
