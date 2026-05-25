@@ -41,6 +41,8 @@ An edge you expect is absent from `network_topology_edge_info`.
 
 5. Confirm the relevant protocol module is enabled (`modules.lldp.enabled`, `modules.fdb.enabled`, etc.).
 
+6. **Nokia SR Linux fleets:** SR Linux 24.x does not implement the standard IEEE 802.1AB LLDP MIB at `1.0.8802.1.1.2` via SNMP. The SNMP daemon exposes the system group, IF-MIB interface tables, and selected Nokia enterprise OIDs — but `lldpLocPortTable` and `lldpRemTable` return `No Such Object available on this agent`. LLDP topology on SR Linux is only accessible via gNMI / JSON-RPC at the `/system/lldp` YANG path. The exporter is SNMP-only today; SR Linux LLDP discovery via this binary is not supported. The classic SR-OS family (7705 SAR, 7750 SR, 7250 IXR running SR-OS rather than SR Linux) does implement the standard MIB and works as expected. gNMI as a first-class discovery transport is tracked at v2.0.0.
+
 ---
 
 ## 3. SNMP timeouts and walk failures

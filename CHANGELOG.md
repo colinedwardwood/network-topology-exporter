@@ -54,6 +54,24 @@ v1.3.1 lands under this milestone instead, renamed to
   provenance." Closes the supply-chain attestation gap identified in the
   May 2026 architectural review.
 
+### Discovery
+
+- **Nokia SR Linux LLDP-via-SNMP marked as not supported by the vendor.**
+  Local reproduction (2026-05-25) against `ghcr.io/nokia/srlinux:24.7.2`
+  with containerlab's default SNMP config confirmed that SR Linux 24.x
+  does not implement the standard IEEE 802.1AB LLDP MIB at
+  `1.0.8802.1.1.2` — every probe returns `No Such Object available on
+  this agent at this OID`. The classic TIMETRA-LLDP-MIB at
+  `1.3.6.1.4.1.6527.3.1.2.43` (used on SR-OS) is also absent. LLDP data
+  on SR Linux is exposed via gNMI / JSON-RPC at `/system/lldp` only.
+  The exporter's LLDP walker code is IEEE 802.1AB-2016 compliant; this
+  is a vendor coverage gap, not a walker bug. The four LLDP tests in
+  `tests/e2e/srl/` now skip with a clear explanation pointing operators
+  at gNMI as the future path (v2.0.0). `TestSNMPSystemWalk` continues
+  to run — the SNMP system group is exposed on SR Linux and works as
+  expected. The classic SR-OS family is unaffected. `troubleshooting.md`
+  § 2 gains a Nokia-fleet note describing the limitation. Closes #46.
+
 ### Documentation
 
 - **Threat model document** — New `docs/operator/threat-model.md` with a

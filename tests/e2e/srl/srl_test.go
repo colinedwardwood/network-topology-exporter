@@ -12,6 +12,27 @@
 // Run with:
 //
 //	CLAB_SUDO=1 go test ./tests/e2e/srl/... -tags e2e_srl -v -count=1 -timeout 20m
+//
+// LLDP-via-SNMP on SR Linux: not supported by the vendor.
+//
+// SR Linux 24.7.2 (and verified across the 24.x series) does NOT implement
+// the standard IEEE 802.1AB LLDP MIB at OID 1.0.8802.1.1.2 via its SNMP
+// daemon. It also does not implement the classic TIMETRA-LLDP-MIB at
+// 1.3.6.1.4.1.6527.3.1.2.43 that SR-OS exposes. LLDP data on SR Linux is
+// only available via gNMI or JSON-RPC at the /system/lldp YANG path.
+//
+// Reproduced 2026-05-25 against ghcr.io/nokia/srlinux:24.7.2 with the
+// same SNMP startup config that containerlab applies via the kind:srl
+// default template (snmpv2.cfg). The SNMP system group (sysName, sysDescr,
+// sysObjectID) is exposed and works — TestSNMPSystemWalk continues to
+// pass. Standard LLDP MIB returns `No Such Object available on this agent
+// at this OID` for every probe.
+//
+// The exporter's LLDP walker code (`internal/discovery/lldp/lldp.go`) is
+// IEEE 802.1AB-2016 compliant; no walker change can recover LLDP topology
+// from a vendor that doesn't expose the MIB. The four LLDP tests in this
+// package are therefore skipped pending gNMI-based discovery, which is
+// tracked at v2.0.0. See README § Discovery modules and issue #46.
 package srl
 
 import (
@@ -37,6 +58,10 @@ const (
 	topoFile      = "../clab-srl-topology.yml"
 	snmpCommunity = "public"
 )
+
+// srlLLDPSkipMsg explains why the LLDP-via-SNMP tests in this package are
+// skipped. See the package-level doc comment for the full root cause.
+const srlLLDPSkipMsg = "SR Linux 24.7.2 does not implement the standard IEEE 802.1AB LLDP MIB (1.0.8802.1.1.2) via SNMP. LLDP data is exposed via gNMI / JSON-RPC only. Tracked at #46; future path is gNMI discovery (v2.0.0)."
 
 var nodeIPs map[string]net.IP
 
@@ -231,6 +256,7 @@ func TestSNMPSystemWalk(t *testing.T) {
 // TestLLDPSpine1SeesLeafs verifies that spine1 discovers LLDP edges to both
 // leaf1 (via e1-1) and leaf2 (via e1-2).
 func TestLLDPSpine1SeesLeafs(t *testing.T) {
+	t.Skip(srlLLDPSkipMsg)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -264,6 +290,7 @@ func TestLLDPSpine1SeesLeafs(t *testing.T) {
 // TestLLDPLeaf1SeesSpine verifies that leaf1 has exactly one LLDP neighbour
 // (spine1), since it is connected only on e1-1.
 func TestLLDPLeaf1SeesSpine(t *testing.T) {
+	t.Skip(srlLLDPSkipMsg)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -282,6 +309,7 @@ func TestLLDPLeaf1SeesSpine(t *testing.T) {
 // TestLLDPLeaf2SeesSpine verifies that leaf2 has exactly one LLDP neighbour
 // (spine1), since it is connected only on e1-1.
 func TestLLDPLeaf2SeesSpine(t *testing.T) {
+	t.Skip(srlLLDPSkipMsg)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -301,6 +329,7 @@ func TestLLDPLeaf2SeesSpine(t *testing.T) {
 // nodes and verifies both spine-leaf links are seen from both ends —
 // the prerequisite for graph.Reconcile to promote them to bidirectional.
 func TestLLDPFullGraphReconciles(t *testing.T) {
+	t.Skip(srlLLDPSkipMsg)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
