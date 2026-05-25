@@ -7,17 +7,17 @@ import "testing"
 // tunnelIdx.tunnelInstance.ig0.ig1.ig2.ig3.eg0.eg1.eg2.eg3
 // The parser must not panic on any input.
 func FuzzParseTunnelSuffix(f *testing.F) {
-	f.Add("1.0.10.0.0.1.10.0.0.2")        // valid
-	f.Add(".1.0.10.0.0.1.10.0.0.2")       // valid with leading dot (trimmed)
-	f.Add("")                              // empty
-	f.Add(".")                             // single dot
-	f.Add("1.0.10.0.0.1")                  // too few components
-	f.Add("1.0.10.0.0.1.10.0.0.2.extra")   // too many
-	f.Add("notnum.0.10.0.0.1.10.0.0.2")    // non-numeric tunnel index
-	f.Add("0.0.10.0.0.1.10.0.0.2")         // zero tunnel index (rejected)
-	f.Add("-1.0.10.0.0.1.10.0.0.2")        // negative tunnel index
-	f.Add("1.0.10.0.0.1.10.0.0.notnum")    // non-numeric egress octet
-	f.Add("1.0.10.0.0.1.256.0.0.2")        // egress octet > 255
+	f.Add("1.0.10.0.0.1.10.0.0.2")       // valid
+	f.Add(".1.0.10.0.0.1.10.0.0.2")      // valid with leading dot (trimmed)
+	f.Add("")                            // empty
+	f.Add(".")                           // single dot
+	f.Add("1.0.10.0.0.1")                // too few components
+	f.Add("1.0.10.0.0.1.10.0.0.2.extra") // too many
+	f.Add("notnum.0.10.0.0.1.10.0.0.2")  // non-numeric tunnel index
+	f.Add("0.0.10.0.0.1.10.0.0.2")       // zero tunnel index (rejected)
+	f.Add("-1.0.10.0.0.1.10.0.0.2")      // negative tunnel index
+	f.Add("1.0.10.0.0.1.10.0.0.notnum")  // non-numeric egress octet
+	f.Add("1.0.10.0.0.1.256.0.0.2")      // egress octet > 255
 
 	f.Fuzz(func(t *testing.T, suffix string) {
 		_, _, _ = parseTunnelSuffix(suffix)

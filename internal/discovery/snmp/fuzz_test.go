@@ -44,9 +44,9 @@ func FuzzPDUString(f *testing.F) {
 	f.Add(uint8(0), []byte("hello"), 0)
 	f.Add(uint8(0), []byte("with\x00nul"), 0)
 	f.Add(uint8(1), []byte{0xff, 0xfe, 0xfd}, 0)
-	f.Add(uint8(8), []byte{}, 0)                // nil value branch
+	f.Add(uint8(8), []byte{}, 0) // nil value branch
 	f.Add(uint8(0), []byte{}, 0)
-	f.Add(uint8(0), []byte("\x00\x00\x00"), 0)  // all NULs
+	f.Add(uint8(0), []byte("\x00\x00\x00"), 0) // all NULs
 
 	f.Fuzz(func(t *testing.T, selector uint8, raw []byte, num int) {
 		_ = PDUString(pduOf(selector, raw, num))
@@ -99,7 +99,7 @@ func FuzzPDUIPv4(f *testing.F) {
 	f.Add(uint8(0), []byte("10.0.0.1"), 0)
 	f.Add(uint8(0), []byte("notanip"), 0)
 	f.Add(uint8(1), []byte{10, 0, 0, 1}, 0)
-	f.Add(uint8(1), []byte{10, 0, 0}, 0)   // wrong length
+	f.Add(uint8(1), []byte{10, 0, 0}, 0) // wrong length
 	f.Add(uint8(1), []byte{}, 0)
 	f.Add(uint8(8), []byte{}, 0)
 
