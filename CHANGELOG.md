@@ -58,8 +58,9 @@ v1.3.1 lands under this milestone instead, renamed to
 
 - **Threat model document** — New `docs/operator/threat-model.md` with a
   STRIDE matrix scoped to the binary's role on the management plane. Names
-  assets, threats, mitigations shipping today, and gaps tracked as
-  follow-up issues (#70 fuzz coverage, #72 per-device rate limit).
+  assets, threats, mitigations shipping today (including the new PDU fuzz
+  coverage above), and the one remaining known gap tracked as a follow-up
+  (#72 per-device PDU rate limit).
 - **Hub HA patterns** — New section in `docs/operator/federation.md` § "Hub
   high-availability patterns" covering three workarounds operators have today
   (cold standby, active-passive LB with shared snapshot, dual independent
