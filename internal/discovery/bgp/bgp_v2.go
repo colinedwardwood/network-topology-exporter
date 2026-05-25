@@ -54,7 +54,7 @@ const (
 // Used by per-vendor index decoders in bgp_vendor.go. The triplet is
 // the dot-encoded representation of an RFC 4001 InetAddress IndexValue.
 func readInetAddrAt(parts []int, pos int) (net.IP, int, bool) {
-	if pos+2 > len(parts) {
+	if pos < 0 || pos+2 > len(parts) {
 		return nil, 0, false
 	}
 	addrType := parts[pos]

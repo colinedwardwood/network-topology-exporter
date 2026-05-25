@@ -23,6 +23,23 @@ v1.3.1 lands under this milestone instead, renamed to
 
 ### Security
 
+- **Fuzz coverage for SNMP parsers and index decoders.** Sixteen new
+  `Fuzz*` harnesses cover every parser that touches device-controlled
+  bytes: the BGP4-V2 vendor index decoders (`decodeCiscoCbgpPeer2Index`,
+  `decodeAristaBgp4v2Index`, `decodeBgp4v2InstanceIndex`), the RFC 4001
+  InetAddress reader (`readInetAddrAt`), the generic OID splitter
+  (`splitOIDParts`), the FDB Q-BRIDGE index parser, the OSPF neighbour-
+  OID parser, the MPLS-TE tunnel-suffix parser, the LLDP port-ID and
+  chassis-ID decoders, and the SNMP PDU type-coercion helpers
+  (`PDUString`, `PDUBytes`, `PDUInt`, `PDUIntStrict`, `PDUIPv4`). CI
+  runs each target for 30 s per push and 10 min nightly via the new
+  `fuzz-nightly` workflow.
+  Initial pass found a real panic in `readInetAddrAt`: a negative `pos`
+  argument hit `parts[pos]` with no lower bound check (Issue would
+  surface only on hostile bytes since current callers always pass 0
+  or 1). Fixed in the same commit; the failing input is now a
+  permanent regression case at
+  `internal/discovery/bgp/testdata/fuzz/FuzzReadInetAddrAt/`. Closes #70.
 - **Templatized harness credentials** — Reworked
   `deploy/long-running-test/alloy-config.alloy` so all Grafana Cloud tokens
   and user IDs come from environment variables (see `.env.example`). Added

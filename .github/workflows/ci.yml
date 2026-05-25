@@ -53,6 +53,41 @@ jobs:
       - name: integration tests
         run: go test ./tests/integration/... -tags integration -race -count=1 -timeout 60s
 
+  fuzz-short:
+    name: fuzz (short, every PR)
+    runs-on: ubuntu-latest
+    needs: [build-test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      # Short fuzz pass per target — ~30s each — runs on every push / PR.
+      # Catches regressions introduced alongside other changes. The nightly
+      # workflow (fuzz-nightly) runs each target for ~10 min to exercise the
+      # coverage-guided engine more thoroughly.
+      - name: fuzz parsers
+        run: |
+          set -e
+          for pkg in bgp fdb ospf mpls lldp snmp; do
+            cd "$GITHUB_WORKSPACE"
+            FUZZ_TARGETS=$(go test -list 'Fuzz.*' "./internal/discovery/$pkg" | grep '^Fuzz')
+            for t in $FUZZ_TARGETS; do
+              echo "▼ $pkg.$t"
+              go test -run=NONE -fuzz="^$t\$" -fuzztime=30s "./internal/discovery/$pkg"
+            done
+          done
+
+      - name: upload fuzz corpus on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus-failure
+          path: internal/discovery/*/testdata/fuzz/**
+
   lint:
     name: golangci-lint
     runs-on: ubuntu-latest

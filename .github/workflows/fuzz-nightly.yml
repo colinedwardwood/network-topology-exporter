@@ -1,0 +1,69 @@
+name: fuzz-nightly
+
+on:
+  schedule:
+    # 04:00 UTC daily — quiet hour for most contributors.
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    # Manual trigger for ad-hoc deep fuzz runs.
+
+permissions:
+  contents: read
+  issues: write   # auto-file an issue if a long-fuzz pass finds a regression
+
+jobs:
+  fuzz-long:
+    name: fuzz (long, nightly)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      # 10 minutes per target across 16 fuzz harnesses. Coverage-guided
+      # engine reaches deeper paths than the per-PR short pass.
+      - name: deep fuzz parsers
+        id: fuzz
+        run: |
+          set -e
+          for pkg in bgp fdb ospf mpls lldp snmp; do
+            FUZZ_TARGETS=$(go test -list 'Fuzz.*' "./internal/discovery/$pkg" | grep '^Fuzz')
+            for t in $FUZZ_TARGETS; do
+              echo "▼ $pkg.$t"
+              go test -run=NONE -fuzz="^$t\$" -fuzztime=10m "./internal/discovery/$pkg"
+            done
+          done
+
+      - name: upload fuzz corpus on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus-${{ github.run_id }}
+          path: internal/discovery/*/testdata/fuzz/**
+          retention-days: 90
+
+      - name: open issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = `fuzz-nightly: regression detected in run ${context.runId}`;
+            const body = [
+              `Nightly long-running fuzz pass found a crash.`,
+              ``,
+              `**Run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              `**Commit:** ${context.sha}`,
+              ``,
+              `The offending input is attached as an artifact (\`fuzz-corpus-${context.runId}\`) under \`testdata/fuzz/<FuzzName>/\`.`,
+              `Download, commit the case to the corpus, and write the fix.`,
+            ].join('\n');
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ['bug', 'priority/high', 'security'],
+            });
