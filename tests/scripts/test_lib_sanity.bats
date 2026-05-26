@@ -27,3 +27,13 @@ setup() {
   result="$(detect_sha256)"
   [ "$result" = "sha256sum" ] || [ "$result" = "shasum -a 256" ]
 }
+
+@test "ping_flags returns -c only on darwin and -c 3 -W 3 on linux" {
+  load '../../scripts/colleague-capture-lib/lib_preflight.sh'
+  result="$(ping_flags)"
+  case "$(uname)" in
+    Darwin) [ "$result" = "-c 3" ] ;;
+    Linux)  [ "$result" = "-c 3 -W 3" ] ;;
+    *)      [ -n "$result" ] ;;
+  esac
+}
