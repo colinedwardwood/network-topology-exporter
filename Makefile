@@ -76,9 +76,9 @@ test-e2e-srl: ## Run SR Linux e2e tests (requires Docker + containerlab + x86)
 
 .PHONY: lint-scripts
 lint-scripts: ## Run shellcheck on bash scripts and ruff on python scripts
-	shellcheck scripts/*.sh scripts/colleague-capture-lib/*.sh lab/*/colleague-capture.sh lab/*/capture*.sh 2>/dev/null || true
-	shellcheck scripts/*.sh scripts/colleague-capture-lib/*.sh
-	ruff check scripts/redact-snmp-capture.py
+	@find scripts lab -type f \( -name '*.sh' -o -name 'colleague-capture.sh' \) 2>/dev/null \
+	  | xargs -r shellcheck
+	@if [ -f scripts/redact-snmp-capture.py ]; then ruff check scripts/redact-snmp-capture.py; fi
 
 .PHONY: test-scripts
 test-scripts: ## Run bats tests for shell libs
