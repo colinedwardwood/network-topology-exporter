@@ -71,3 +71,44 @@ probe_sysobjectid() {
   snmpwalk "${args[@]}" -On -Oe -t 5 -r 0 "$host" 1.3.6.1.2.1.1.2.0 2>/dev/null \
     | awk -F'OID: ' '/OID:/ {gsub(/^\./, "", $2); print $2; exit}'
 }
+
+# auth_probe HOST ICMP_OUTCOME  → echoes one of:
+#   ok | snmp_auth_failed_authpass | snmp_auth_failed_user
+#   | snmp_auth_failed_security_level | snmp_auth_failed_privpass
+#   | snmp_silent_likely_vrf | snmp_unreachable
+#
+# Depends on lib_faults.sh (match_fault) being sourced before this.
+auth_probe() {
+  local host="${1:-}"
+  local icmp_outcome="${2:-fail}"
+  [ -z "$host" ] && { echo "snmp_unreachable"; return 0; }
+
+  probe_sysdescr "$host"
+  if [ "${PREFLIGHT_EXIT:-1}" -eq 0 ] && [ -n "${PREFLIGHT_STDOUT:-}" ]; then
+    echo "ok"; return 0
+  fi
+
+  local fault
+  fault="$(match_fault "${PREFLIGHT_STDERR:-}")"
+
+  case "$fault" in
+    snmp_auth_failed_authpass|snmp_auth_failed_user|snmp_auth_failed_security_level|snmp_auth_failed_privpass)
+      echo "$fault"; return 0 ;;
+    timeout)
+      # Disambiguation: if v3 authPriv timed out and ICMP was OK, re-probe at authNoPriv.
+      if [ "${SNMP_VERSION:-}" = "3" ] && [ "$icmp_outcome" = "ok" ]; then
+        local -a args
+        mapfile -t args < <(build_snmp_args authNoPriv)
+        if snmpwalk "${args[@]}" -On -Oe -t 5 -r 0 "$host" 1.3.6.1.2.1.1.1.0 >/dev/null 2>&1; then
+          echo "snmp_auth_failed_privpass"; return 0
+        fi
+        echo "snmp_silent_likely_vrf"; return 0
+      fi
+      if [ "$icmp_outcome" = "ok" ]; then
+        echo "snmp_silent_likely_vrf"; return 0
+      fi
+      echo "snmp_unreachable"; return 0 ;;
+    *)
+      echo "snmp_unreachable"; return 0 ;;
+  esac
+}
