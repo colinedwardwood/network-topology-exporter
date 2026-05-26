@@ -101,6 +101,10 @@ v1.3.1 lands under this milestone instead, renamed to
   the Getting Started dashboard to stop confusing first-time testers
   with a path the harness doesn't actually exercise.
 
+### Added
+
+- Vendor lab capture toolkit at `scripts/colleague-capture.sh` and `scripts/redact-snmp-capture.py` — lets a colleague with vendor hardware produce a self-diagnosing snmpwalk tarball in one command, then redact the result before fixture conversion. Lab dirs `lab/cisco-iosxe-bgp/` (#58), with `lab/juniper-jnxbgp/` (#56) and `lab/nokia-srbgp/` (#57) to follow in subsequent PRs.
+
 ## v1.3.1-rc1 — 2026-05-21
 
 First release candidate for the 1.3.1 milestone. Includes the new tester-onboarding stack and critical codebase health fixes.

@@ -40,6 +40,11 @@ deploy/long-running-test/.env
 snapshot.json
 **/snapshot.json
 
+# Colleague-capture wrapper runtime artifacts — per-run working dirs and
+# emitted tarballs, never committed.
+lab/*/captures-*/
+lab/*/topology-capture-*.tar.gz
+
 # SBOM output
 sbom/
 *.spdx.json
