@@ -218,6 +218,31 @@ jobs:
       - name: e2e tests (SR Linux)
         run: CLAB_SUDO=1 go test ./tests/e2e/srl/... -tags e2e_srl -v -count=1 -timeout 20m
 
+  scripts:
+    name: scripts lint + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install shellcheck
+        run: sudo apt-get install -y shellcheck
+      - name: install bats
+        run: |
+          sudo apt-get install -y bats
+      - name: install python + ruff + pytest
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: install python deps
+        run: pip install ruff pytest
+      - name: shellcheck
+        run: shellcheck scripts/*.sh scripts/colleague-capture-lib/*.sh lab/*/colleague-capture.sh
+      - name: ruff
+        run: ruff check scripts/redact-snmp-capture.py
+      - name: bats
+        run: bats tests/scripts/test_lib_*.bats
+      - name: pytest
+        run: pytest tests/scripts/test_redact_snmp_capture.py -v
+
   release:
     name: release
     runs-on: ubuntu-latest

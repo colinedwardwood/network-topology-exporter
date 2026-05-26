@@ -74,6 +74,20 @@ test-e2e: ## Run e2e tests against a live containerlab topology (requires Docker
 test-e2e-srl: ## Run SR Linux e2e tests (requires Docker + containerlab + x86)
 	CLAB_SUDO=1 go test ./tests/e2e/srl/... -tags e2e_srl -v -count=1 -timeout 20m
 
+.PHONY: lint-scripts
+lint-scripts: ## Run shellcheck on bash scripts and ruff on python scripts
+	shellcheck scripts/*.sh scripts/colleague-capture-lib/*.sh lab/*/colleague-capture.sh lab/*/capture*.sh 2>/dev/null || true
+	shellcheck scripts/*.sh scripts/colleague-capture-lib/*.sh
+	ruff check scripts/redact-snmp-capture.py
+
+.PHONY: test-scripts
+test-scripts: ## Run bats tests for shell libs
+	bats tests/scripts/test_lib_*.bats
+
+.PHONY: test-redactor
+test-redactor: ## Run pytest for the redactor
+	pytest tests/scripts/test_redact_snmp_capture.py -v
+
 .PHONY: clean
 clean: ## Remove build artifacts
 	rm -rf bin coverage.out coverage.html
