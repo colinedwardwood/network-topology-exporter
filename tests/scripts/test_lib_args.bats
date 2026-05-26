@@ -60,3 +60,23 @@ setup() {
   run parse_args -h 10.0.0.1
   [ "$status" -ne 0 ]
 }
+
+@test "parse_args rejects -h with no value (no infinite loop)" {
+  run parse_args -h
+  [ "$status" -ne 0 ]
+}
+
+@test "parse_args rejects -h followed by another flag" {
+  run parse_args -h -c public
+  [ "$status" -ne 0 ]
+}
+
+@test "parse_args rejects -V 3 -c (mutex regardless of order)" {
+  run parse_args -h host -V 3 -c public -u u -a SHA -A a -x AES -X p
+  [ "$status" -ne 0 ]
+}
+
+@test "parse_args rejects partial v3 (missing -x and -X)" {
+  run parse_args -h host -V 3 -u monitor -a SHA -A authpw
+  [ "$status" -ne 0 ]
+}
