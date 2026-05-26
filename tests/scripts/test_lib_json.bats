@@ -38,3 +38,40 @@ setup() {
   [ "$(json_bool 1)" = "true" ]
   [ "$(json_bool 0)" = "false" ]
 }
+
+@test "json_string escapes backspace" {
+  result="$(json_string $'\b')"
+  [ "$result" = '"\b"' ]
+}
+
+@test "json_string escapes formfeed" {
+  result="$(json_string $'\f')"
+  [ "$result" = '"\f"' ]
+}
+
+@test "json_string escapes tab" {
+  result="$(json_string $'\t')"
+  [ "$result" = '"\t"' ]
+}
+
+@test "json_string escapes carriage return" {
+  result="$(json_string $'\r')"
+  [ "$result" = '"\r"' ]
+}
+
+@test "json_string handles backslash immediately before n" {
+  # Ensures backslash escape doesn't double-fire on top of \n escape
+  result="$(json_string $'\\n')"
+  [ "$result" = '"\\n"' ]
+}
+
+@test "json_bool no argument returns false (no crash under set -u)" {
+  set -u
+  result="$(json_bool)"
+  [ "$result" = "false" ]
+}
+
+@test "json_bool non-binary integer returns false" {
+  [ "$(json_bool 2)" = "false" ]
+  [ "$(json_bool -1)" = "false" ]
+}
