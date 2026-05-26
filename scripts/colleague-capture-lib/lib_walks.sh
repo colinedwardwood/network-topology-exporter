@@ -13,8 +13,9 @@ do_walk() {
   local host="${1:-}" oid="${2:-}" outfile="${3:-}"
   [ -z "$host" ] || [ -z "$oid" ] || [ -z "$outfile" ] && { echo "other-error|0|0"; return 1; }
 
-  local -a snmp_args
-  mapfile -t snmp_args < <(build_snmp_args)
+  local -a snmp_args=()
+  local _line
+  while IFS= read -r _line; do snmp_args+=("$_line"); done < <(build_snmp_args)
 
   local raw err rc start end duration
   start=$(date +%s)

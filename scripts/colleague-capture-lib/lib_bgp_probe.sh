@@ -18,8 +18,9 @@ _probe_one() {
   local host="${1:-}" oid="${2:-}"
   [ -z "$host" ] || [ -z "$oid" ] && { echo "other-error|0|"; return 1; }
 
-  local -a snmp_args
-  mapfile -t snmp_args < <(build_snmp_args)
+  local -a snmp_args=()
+  local _line
+  while IFS= read -r _line; do snmp_args+=("$_line"); done < <(build_snmp_args)
   local raw err rc rows
   local errfile
   errfile="$(mktemp -t cc-probe-err.XXXXXX)"

@@ -49,8 +49,9 @@ build_snmp_args() {
 probe_sysdescr() {
   local host="${1:-}"
   [ -z "$host" ] && { PREFLIGHT_EXIT=1; PREFLIGHT_STDOUT=""; PREFLIGHT_STDERR="no host"; return 1; }
-  local -a args
-  mapfile -t args < <(build_snmp_args)
+  local -a args=()
+  local _line
+  while IFS= read -r _line; do args+=("$_line"); done < <(build_snmp_args)
   local errfile
   errfile="$(mktemp -t cc-preflight-err.XXXXXX)"
   set +e
@@ -66,8 +67,9 @@ probe_sysdescr() {
 probe_sysobjectid() {
   local host="${1:-}"
   [ -z "$host" ] && return 1
-  local -a args
-  mapfile -t args < <(build_snmp_args)
+  local -a args=()
+  local _line
+  while IFS= read -r _line; do args+=("$_line"); done < <(build_snmp_args)
   snmpwalk "${args[@]}" -On -Oe -t 5 -r 0 "$host" 1.3.6.1.2.1.1.2.0 2>/dev/null \
     | awk -F'OID: ' '/OID:/ {gsub(/^\./, "", $2); print $2; exit}'
 }
@@ -83,7 +85,7 @@ auth_probe() {
   local icmp_outcome="${2:-fail}"
   [ -z "$host" ] && { echo "snmp_unreachable"; return 0; }
 
-  probe_sysdescr "$host"
+  probe_sysdescr "$host" || true
   if [ "${PREFLIGHT_EXIT:-1}" -eq 0 ] && [ -n "${PREFLIGHT_STDOUT:-}" ]; then
     echo "ok"; return 0
   fi
@@ -97,8 +99,9 @@ auth_probe() {
     timeout)
       # Disambiguation: if v3 authPriv timed out and ICMP was OK, re-probe at authNoPriv.
       if [ "${SNMP_VERSION:-}" = "3" ] && [ "$icmp_outcome" = "ok" ]; then
-        local -a args
-        mapfile -t args < <(build_snmp_args authNoPriv)
+        local -a args=()
+        local _line
+        while IFS= read -r _line; do args+=("$_line"); done < <(build_snmp_args authNoPriv)
         if snmpwalk "${args[@]}" -On -Oe -t 5 -r 0 "$host" 1.3.6.1.2.1.1.1.0 >/dev/null 2>&1; then
           echo "snmp_auth_failed_privpass"; return 0
         fi

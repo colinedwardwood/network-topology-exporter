@@ -53,8 +53,9 @@ main() {
     echo "Would run:"
     local h
     for h in "${HOSTS[@]}"; do
-      local -a sa
-      mapfile -t sa < <(build_snmp_args)
+      local -a sa=()
+      local _line
+      while IFS= read -r _line; do sa+=("$_line"); done < <(build_snmp_args)
       local masked="${sa[*]}"
       if [ -n "${V3_AUTH_PASS:-}" ]; then masked="${masked//${V3_AUTH_PASS}/***}"; fi
       if [ -n "${V3_PRIV_PASS:-}" ]; then masked="${masked//${V3_PRIV_PASS}/***}"; fi
