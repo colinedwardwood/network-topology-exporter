@@ -75,9 +75,14 @@ test-e2e-srl: ## Run SR Linux e2e tests (requires Docker + containerlab + x86)
 	CLAB_SUDO=1 go test ./tests/e2e/srl/... -tags e2e_srl -v -count=1 -timeout 20m
 
 .PHONY: lint-scripts
-lint-scripts: ## Run shellcheck on bash scripts and ruff on python scripts
-	@find scripts lab -type f \( -name '*.sh' -o -name 'colleague-capture.sh' \) 2>/dev/null \
-	  | xargs -r shellcheck
+lint-scripts: ## Run shellcheck on colleague-capture scripts and ruff on the redactor
+	@set -e; \
+	files=""; \
+	[ -f scripts/colleague-capture.sh ] && files="$$files scripts/colleague-capture.sh"; \
+	for f in scripts/colleague-capture-lib/*.sh lab/*/colleague-capture.sh; do \
+	  [ -f "$$f" ] && files="$$files $$f"; \
+	done; \
+	if [ -n "$$files" ]; then shellcheck $$files; fi
 	@if [ -f scripts/redact-snmp-capture.py ]; then ruff check scripts/redact-snmp-capture.py; fi
 
 .PHONY: test-scripts

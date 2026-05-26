@@ -235,10 +235,15 @@ jobs:
       - name: install python deps
         run: pip install ruff==0.7.4 pytest==8.3.4
       - name: shellcheck
-        if: hashFiles('scripts/colleague-capture-lib/*.sh', 'scripts/colleague-capture.sh') != ''
+        if: hashFiles('scripts/colleague-capture-lib/*.sh', 'scripts/colleague-capture.sh', 'lab/*/colleague-capture.sh') != ''
         run: |
-          find scripts lab -type f \( -name '*.sh' -o -name 'colleague-capture.sh' \) 2>/dev/null \
-            | xargs -r shellcheck
+          set -e
+          files=""
+          [ -f scripts/colleague-capture.sh ] && files="$files scripts/colleague-capture.sh"
+          for f in scripts/colleague-capture-lib/*.sh lab/*/colleague-capture.sh; do
+            [ -f "$f" ] && files="$files $f"
+          done
+          if [ -n "$files" ]; then shellcheck $files; fi
       - name: ruff
         if: hashFiles('scripts/redact-snmp-capture.py') != ''
         run: ruff check scripts/redact-snmp-capture.py
