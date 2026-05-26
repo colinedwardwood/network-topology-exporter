@@ -1,222 +1,134 @@
 # Lab — cisco-iosxe-bgp
 
-Capture real-device SNMP fixtures for the **`vendor_cisco`** walker
-(`internal/discovery/bgp/bgp_vendor.go`) against **Cisco IOS-XE** — the
-canonical Cisco production OS named in
-[issue #1](https://github.com/colinedwardwood/network-topology-exporter/issues/1)'s
-acceptance criteria.
+Real-device SNMP capture for the **`vendor_cisco`** walker
+(`internal/discovery/bgp/bgp_vendor.go`) on Cisco IOS-XE.
+Closes [issue #58](https://github.com/colinedwardwood/network-topology-exporter/issues/58).
 
-Unlike the sibling labs in this tree, this is **not a containerlab
-topology**. Cisco IOS-XE images are not freely redistributable; the only
-no-cost path is **Cisco DevNet Sandbox**, which provides hosted routers
-reachable via VPN. The lab here is the runbook + capture script for
-that flow.
+## What this lab is for
 
-## Why a separate Cisco lab if `cisco-iol-bgp` already produced captures?
+The walker walks `cbgpPeer2Table` (OID `1.3.6.1.4.1.9.9.187.1.2.5`) on Cisco
+devices. Column numbers were validated against IOL 17.12.1 (see
+`lab/cisco-iol-bgp/`), but issue #58 asks for IOS-XE cross-validation. This
+lab is the runbook + capture script for a colleague (or you, via DevNet)
+to produce that capture.
 
-The `cisco-iol-bgp` lab uses the IOL (IOS-on-Linux) image — historically
-the SDK build of IOS, not the IOS-XE codebase that ships in production
-ASR1000 / CSR1000v / Cat8000v / Cat9000 platforms. Issue #31 was closed
-against IOL captures, but issue #1's acceptance bar specifically names
-"Cisco IOS-XE" because column numbers, index encoding, and
-`cbgpPeer2Table` row composition can diverge between IOL and IOS-XE
-shipping releases. This lab provides the IOS-XE evidence that
-issue #1 requires.
+## Who runs this
 
-If captures here match the IOL captures byte-for-byte at the column
-level, that is itself a strong cross-confirmation worth noting in the
-closing PR.
+- **You (the colleague with the IOS-XE device)** run `./colleague-capture.sh`
+  and send back the tarball.
+- **The maintainer (Colin)** receives the tarball, runs the redactor, and
+  converts the captures into Go fixtures.
 
-## Status
-
-**Scaffold only.** No captures committed yet. Pending: a DevNet reservation
-window and BGP peer establishment.
+If you don't have an IOS-XE device on hand, the **DevNet self-serve** path
+at the bottom of this README is an alternate.
 
 ## Prerequisites
 
 | Tool | How |
 |---|---|
-| Ubuntu host (or Linux VM) | Sandbox VPN reaches the router from this host |
-| Cisco DevNet account | Free signup at https://developer.cisco.com/ |
-| `openconnect` | `apt-get install -y openconnect` — open-source AnyConnect-compatible VPN client; Cisco-acknowledged alternative when AnyConnect download is gated |
-| `ssh` client | Built-in |
-| `snmpwalk` (net-snmp) | `apt-get install -y snmp snmp-mibs-downloader` |
-| (Option B only) `bird2` or `frr` | `apt-get install -y bird2` — local BGP speaker for the external-peer path |
+| `snmpwalk` (net-snmp) | Linux: `apt-get install snmp`. macOS: `brew install net-snmp`. |
+| `tar` | preinstalled |
+| `bash` 3.2+ | preinstalled |
+| `coreutils` on macOS (for `gtimeout`) | `brew install coreutils` |
 
-## Reservation path
+## Switch-side prep (5 minutes)
 
-Two viable DevNet sandboxes; pick based on whether you need multiple
-routers (BGP peers) or a single router (BGP via external speaker).
+Pick v2c or v3, paste the matching config onto the router, then save.
 
-### Option A — CML Sandbox (recommended, multi-router)
-
-[Cisco Modeling Labs (CML) Sandbox](https://devnetsandbox.cisco.com/RM/Topology)
-gives you a reservation window with full CML access. You build a 2-CSR
-topology in CML, configure iBGP between them, then `snmpwalk` both
-routers over the VPN. This produces the same shape of capture as
-`lab/arista-ceos-bgp/` — two nodes, one iBGP session, deterministic
-`cbgpPeer2Table` content.
-
-1. Reserve at https://devnetsandbox.cisco.com/RM/Topology (search "CML").
-   Typical reservation: 4–8 hours, free, queue-based.
-2. Wait for the `devnetsandbox@cisco.com` email with VPN host, group,
-   username, password.
-3. Connect (the `<group>` value comes from the same DevNet reservation email
-   as the username; it's typically `VPN` or similar):
-   ```sh
-   sudo openconnect --protocol=anyconnect \
-       --authgroup=<group> \
-       --user=<sandbox-user> <vpn-host>
-   ```
-4. SSH to the CML controller (URL in the email). In the CML UI, create a
-   new lab with **two CSR1000v** (or **c8000v**) nodes connected by a
-   single Ethernet link (Gi2 ↔ Gi2). Leave management on Gi1 (CML's
-   default). Start the lab. TODO: capture the CML topology export as
-   `configs/cml-topology.yaml` during the first reservation so subsequent
-   runs can re-import.
-5. SSH into each router's console (CML exposes a terminal), paste the
-   contents of `configs/iosxe-r1.cfg` and `configs/iosxe-r2.cfg`.
-6. Wait ~60s for BGP to reach `Established`. Verify:
-   ```sh
-   show ip bgp summary
-   show snmp community
-   ```
-7. Note each router's management IP (CML assigns these per session).
-8. Run `./capture.sh <r1-mgmt-ip> <r2-mgmt-ip>` from the Ubuntu host.
-
-### Option B — Single-CSR Sandbox + external BGP speaker
-
-Use the "IOS XE on CSR Recommended Code" or "IOS XE on Cat 8K"
-reservation sandbox (single-router). Peer the sandbox CSR to a BGP
-speaker running on your Ubuntu host (visible to the sandbox via the
-VPN's reverse path).
-
-1. Reserve at https://devnetsandbox.cisco.com/RM/Topology (search "IOS XE").
-2. Connect via `openconnect` as above. Note the management IP from the
-   email (example: `10.10.20.48`).
-3. Verify your Ubuntu host's VPN-side IP:
-   ```sh
-   ip -4 -o addr show tun0 | awk '{print $4}' | cut -d/ -f1
-   ```
-   This is the IP the CSR will see you on.
-4. Start a local BGP speaker (bird2 example). `multihop;` is required —
-   the CSR sets `ebgp-multihop 4` and bird's default TTL of 1 will not
-   reach the CSR across the VPN, so without it the session never reaches
-   `Established`:
-   ```sh
-   sudo tee /etc/bird/bird.conf >/dev/null <<'EOF'
-   router id <your-vpn-ip>;
-   protocol device { }
-   protocol bgp csr_peer {
-     local as 65002;
-     neighbor 10.10.20.48 as 65001;
-     multihop;
-     ipv4 { import all; export none; };
-   }
-   EOF
-   sudo systemctl restart bird
-   ```
-5. SSH to the sandbox CSR (`ssh developer@10.10.20.48`, password
-   `C1sco12345`), paste the contents of `configs/iosxe-single.cfg`
-   with `<peer-ip>` replaced by your VPN-side IP.
-6. Wait for `Established`. Verify on CSR:
-   ```
-   show ip bgp summary
-   ```
-7. Run `./capture.sh 10.10.20.48` from the Ubuntu host.
-
-**Trade-off**: Option B yields one `cbgpPeer2Table` row (the BGP session
-from CSR to your bird speaker). That's enough to validate column
-numbers, index encoding, and state decoding — which is what the walker
-tests need. Option A's two-router shape is closer to what production
-deployments look like.
-
-## OIDs probed
-
-Same four-OID set as the sibling labs, for direct cross-comparison:
-
-| Root | Walker | Expected on IOS-XE |
-|---|---|---|
-| `1.3.6.1.2.1.1` | (sys group) | populated — `sysObjectID` should resolve to a Cisco enterprise OID (`1.3.6.1.4.1.9.*`) |
-| `1.3.6.1.2.1.15.3` | `rfc4273` (fallback) | populated for IPv4 peers — RFC 4273 baseline |
-| `1.3.6.1.4.1.9.9.187.1.2.5` | **`vendor_cisco`** | the canonical capture for this lab — populated whenever a BGP session exists |
-| `1.3.6.1.3.5.1.1.2` | (removed) | expected empty — IOS-XE does not implement the IETF draft form at this OID. Captured for negative-result evidence. |
-
-## Capture
-
-```sh
-# Option A (two routers, both walked)
-./capture.sh <r1-mgmt-ip> <r2-mgmt-ip>
-
-# Option B (single router)
-./capture.sh <csr-mgmt-ip>
+**v2c**:
+```
+configure terminal
+snmp-server community public RO
+snmp-server view ALL 1.3.6.1.4.1.9.9.187 included
+snmp-server community public view ALL RO
+end
+write memory
 ```
 
-Produces `captures/<host-with-underscores>__<oid-with-underscores>.txt`,
-one file per (host, OID-root). Numeric OID form (`snmpwalk -On -Oe`) is
-mandatory — the fixture conversion step pastes these into
-`[]gosnmp.SnmpPDU` literals where OID *names* would be ambiguous.
+**v3 (authPriv with SHA + AES)**:
+```
+configure terminal
+snmp-server view ALL 1.3.6.1.4.1.9.9.187 included
+snmp-server group MONGRP v3 priv read ALL
+snmp-server user monitor MONGRP v3 auth sha 'authpw' priv aes 128 'privpw'
+end
+write memory
+```
 
-## Destroy
+Confirm BGP is up with at least one established peer (`show ip bgp summary`)
+before running the capture.
 
-CML reservation: stop the lab in the CML UI, end the reservation.
+## Run the capture
 
-Single-CSR reservation: end the reservation from the DevNet portal.
-The sandbox is reset between reservations, so no per-router cleanup
-is required.
+```bash
+cd lab/cisco-iosxe-bgp
+./colleague-capture.sh -h <router-ip> -c public
+# or v3:
+./colleague-capture.sh -h <router-ip> -V 3 -u monitor -a SHA -A 'authpw' -x AES -X 'privpw'
+```
 
-Disconnect VPN: `sudo killall openconnect`.
+Safety affordances:
 
-## Troubleshooting
+```bash
+./colleague-capture.sh -h <router-ip> -c public --dry-run
+./colleague-capture.sh -h <router-ip> -c public --preflight-only
+```
 
-### `openconnect` exits with "authentication failure" or hangs at a group prompt
+## What you'll get
 
-The DevNet sandbox VPN requires the `--authgroup` value from the reservation
-email. The example in step 3 of Option A shows the canonical form. If the
-group isn't in your email, log into the DevNet portal and re-open the
-reservation details.
+A file named `topology-capture-cisco-iosxe-<host>-<timestamp>.tar.gz`,
+about 5-50 KB, containing:
 
-### `snmpwalk` returns `Timeout` for every OID
+- `captures/` — raw `snmpwalk` text, one file per OID per host
+- `diagnostics.json` — structured summary of what happened
+- `wrapper.log` — sanitized execution log
+- `SHA256SUMS` — hashes of every file above
+- `SEND-ME-THIS.txt` — what to do with this tarball
 
-VPN reachability is broken or the SNMP community on the router differs from
-the script default (`public`).
+**This tarball contains real IP and MAC addresses from your network.**
+Send via direct email only.
 
-- `ip addr show tun0` — is the VPN interface up?
-- `ping <router-ip>` — does ICMP reach the router?
-- On the CSR/CML console, run `show snmp community` and confirm `public RO`
-  is configured. Sandbox routers usually do NOT pre-configure SNMP; you
-  must paste the relevant `snmp-server community public RO` line from the
-  `configs/iosxe-*.cfg` block before walking.
+## Where to send it
 
-### DevNet reservation expired mid-capture
+Email the tarball to **colin.wood@grafana.com** with subject
+`Capture for issue #58 — Cisco IOS-XE cbgpPeer2Table`. Include the sha256
+the wrapper printed in the green banner.
 
-Reservation windows are 4-8h, queue-based. If `snmpwalk` starts returning
-`Timeout` partway through a run, check the DevNet portal — your reservation
-may have ended. Re-reserve and resume; partial captures already on disk are
-still useful.
+## If something didn't work
 
-### BGP session never reaches `Established`
+| Banner verdict | What it means | What to do |
+|---|---|---|
+| `vendor_table_empty_view_restriction_likely` | SNMP view excludes the Cisco enterprise OID | Paste the `snmp-server view` block from the banner, save, re-run |
+| `bgp_mib_module_absent` | BGP MIB not loaded | Confirm BGP is configured and running |
+| `snmp_silent_likely_vrf` | Device doesn't reply on this VRF | Try `snmp-server vrf <your-mgmt-vrf>` |
+| `snmp_auth_failed_*` | Credentials wrong | Re-check the field named in the verdict |
+| `snmp_reachable_vendor_mismatch` | This device isn't a Cisco IOS-XE | Confirm you pointed at the right host |
 
-- Option A (CML two-router): `show ip route 10.0.0.0/30` on both r1 and r2.
-  Both should see the connected `/30`. If the interface is still in switching
-  mode (CML default for some images), `no switchport` may have been
-  rejected — re-paste the interface stanza and check `show interface Gi2`.
-- Option B (CSR + bird): on the CSR, `show ip bgp neighbors <peer-ip>` —
-  is the session `Active`/`OpenSent` rather than `Established`? Likeliest
-  cause is the `multihop;` directive missing from bird's config (eBGP TTL=1
-  cannot traverse the DevNet VPN's multi-hop path; CSR sets
-  `ebgp-multihop 4` and bird must match). On the Ubuntu host:
-  `sudo birdc show protocols csr_peer` and check the state.
+## Vendor-specific gotchas
 
-## Converting captures to fixtures
+- **VRF binding.** Non-default VRF mgmt? Add `snmp-server vrf <name>`.
+- **SNMPv3 engine ID change after image upgrade.** Newer IOS-XE images can
+  regenerate the engine ID — re-create the v3 user after upgrade.
+- **View ordering.** `snmp-server view ALL ... included` must be defined
+  before `snmp-server community ... view ALL RO`.
 
-Same flow as `lab/cisco-iol-bgp/` — see that lab's README for the
-text-output → `[]gosnmp.SnmpPDU` literal conversion pattern. Real-device
-fixtures land at `internal/snmptest/testdata/cisco_iosxe_real.*` and
-the synthetic `cbgpPeer2Table` cases in `bgp_vendor_test.go` get
-real-device siblings.
+## Maintainer notes (for Colin)
 
-If captures here disagree with `lab/cisco-iol-bgp/` on column numbers
-or index encoding, **IOS-XE wins** — the walker code must match
-production IOS-XE behavior, not IOL behavior. File a PR fixing
-`bgp_vendor.go` columns and reference both capture sources.
+On receipt:
+
+1. Verify sha256 against the value in the email.
+2. Extract: `tar xzf topology-capture-cisco-iosxe-*.tar.gz`.
+3. Read `diagnostics.json`'s verdict.
+4. Run redactor: `scripts/redact-snmp-capture.py --in captures-* --out captures-redacted`.
+5. Hand-convert `captures-redacted/.../r1_1_3_6_1_4_1_9_9_187_1_2_5.txt` into
+   `[]gosnmp.SnmpPDU` literals per `lab/cisco-iol-bgp/README.md` conventions.
+   Land as `buildCiscoCbgpPeer2IOSXERealPDUs` in
+   `internal/discovery/bgp/bgp_v2_iosxe_test.go`.
+6. Drop the `t.Skip` line in `bgp_v2_iosxe_test.go:79`.
+7. If captures match IOL byte-for-byte, note as cross-confirmation.
+
+## Alternate: DevNet self-serve
+
+If you (Colin) want to produce this capture yourself, the original
+DevNet-driven flow is preserved at `capture-devnet.sh` in this directory.
+See its inline comments for the openconnect + CML reservation walkthrough.
