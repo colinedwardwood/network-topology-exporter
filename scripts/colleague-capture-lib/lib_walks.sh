@@ -79,3 +79,43 @@ walk_all() {
     WALK_RESULTS+=("${oid}|${label}|${result}|${outfile}|primary")
   done
 }
+
+# walk_fallbacks HOST CAPTURES_DIR
+#   For each WALK_RESULTS entry classified noSuchObject|end-of-mib|ok-empty,
+#   look up FALLBACK_<safe-oid> in vendor.conf and walk it. Appended to
+#   WALK_RESULTS with role "fallback-for:<primary-oid>".
+walk_fallbacks() {
+  local host="${1:-}" dir="${2:-}"
+  [ -z "$host" ] || [ -z "$dir" ] && return 1
+
+  # Collect work first; walking inside a loop iterating WALK_RESULTS while
+  # appending to WALK_RESULTS is brittle in bash.
+  local -a fallbacks_to_run=()
+  local entry oid outcome fb_entry
+  for entry in "${WALK_RESULTS[@]:-}"; do
+    [ -z "$entry" ] && continue
+    oid="$(echo "$entry" | cut -d'|' -f1)"
+    outcome="$(echo "$entry" | cut -d'|' -f3)"
+    case "$outcome" in
+      noSuchObject|end-of-mib|ok-empty)
+        fb_entry="$(fallback_for "$oid")"
+        if [ -n "$fb_entry" ]; then
+          fallbacks_to_run+=("${oid}|${fb_entry}")
+        fi
+        ;;
+    esac
+  done
+
+  local primary primary_oid rest fb_oid fb_label safe outfile result
+  for primary in "${fallbacks_to_run[@]:-}"; do
+    [ -z "$primary" ] && continue
+    primary_oid="${primary%%|*}"
+    rest="${primary#*|}"
+    fb_oid="${rest%%|*}"
+    fb_label="${rest#*|}"
+    safe="$(echo "$fb_oid" | tr '.' '_')"
+    outfile="${dir}/r1_${safe}.txt"
+    result="$(do_walk "$host" "$fb_oid" "$outfile")"
+    WALK_RESULTS+=("${fb_oid}|${fb_label}|${result}|${outfile}|fallback-for:${primary_oid}")
+  done
+}
