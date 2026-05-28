@@ -103,7 +103,7 @@ v1.3.1 lands under this milestone instead, renamed to
 
 ### Added
 
-- Vendor lab capture toolkit at `scripts/colleague-capture.sh` and `scripts/redact-snmp-capture.py` — lets a colleague with vendor hardware produce a self-diagnosing snmpwalk tarball in one command, then redact the result before fixture conversion. Lab dirs `lab/cisco-iosxe-bgp/` (#58), with `lab/juniper-jnxbgp/` (#56) and `lab/nokia-srbgp/` (#57) to follow in subsequent PRs.
+- Vendor lab capture toolkit at `scripts/colleague-capture.sh` and `scripts/redact-snmp-capture.py` — lets a colleague with vendor hardware produce a self-diagnosing snmpwalk tarball in one command, then redact the result before fixture conversion. Lab dirs `lab/cisco-iosxe-bgp/` (#58), `lab/juniper-jnxbgp/` (#56), and `lab/nokia-srbgp/` (#57) all shipped with switch-side v2c + v3 prep and a thin shim into the shared wrapper.
 
 ## v1.3.1-rc1 — 2026-05-21
 

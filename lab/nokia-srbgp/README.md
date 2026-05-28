@@ -1,43 +1,43 @@
 # Lab — nokia-srbgp
 
-Real-device SNMP capture for the **`vendor_nokia`** walker
-(`internal/discovery/bgp/bgp_vendor.go`) on Nokia SR-OS (formerly Alcatel-Lucent
-7705/7750; pre-acquisition gear uses the same MIB).
-Closes [issue #57](https://github.com/colinedwardwood/network-topology-exporter/issues/57).
+Thanks for running this. We can't validate our Nokia BGP MIB walker
+without a real SR-OS device, so your snmpwalk against a live router is
+what gets this code out of "experimental" status.
 
-## What this lab is for
+**About 10 minutes:** 5 to paste an SNMP config on the router, 1 to run
+the capture script, then a quick email back with the tarball. The
+script self-diagnoses if anything's off and tells you what to fix.
 
-The walker walks `tBgpPeerTable` (OID `1.3.6.1.4.1.6527.3.1.2.13.2`) on
-Nokia / Alcatel-Lucent SR-OS devices. Column numbers and the index decoder
-were transcribed from `TIMETRA-BGP-MIB` documentation without real-device
-verification (walker currently ships with `verified: false`). This lab
-produces the capture that flips `verified` to `true`.
+Any SR-OS device with BGP up works (7705 SAR, 7750 SR, 7250 IXR). Old
+Alcatel-Lucent pre-acquisition gear runs the same MIB and works too.
 
-## Who runs this
+> **One gotcha up front:** if your device runs **SR Linux** (the newer
+> OS on some 7220 IXR platforms), this MIB isn't implemented there.
+> Capture against an SR-OS box. We've documented the SR Linux gap
+> separately in issue #46.
 
-- **You (the colleague with the Nokia / SR-OS device)** run
-  `./colleague-capture.sh` and send back the tarball.
-- **The maintainer (Colin)** receives the tarball, runs the redactor,
-  and converts the captures into Go fixtures.
+## Before you start
 
-SR-OS supports both **classic CLI** and **MD-CLI** modes; the prep
-section below covers both.
-
-## Prerequisites
+On the machine you'll run snmpwalk from:
 
 | Tool | How |
 |---|---|
 | `snmpwalk` (net-snmp) | Linux: `apt-get install snmp`. macOS: `brew install net-snmp`. |
-| `tar` | preinstalled |
-| `bash` 3.2+ | preinstalled |
-| `coreutils` on macOS (for `gtimeout`) | `brew install coreutils` |
+| `tar` | already there |
+| `bash` 3.2+ | already there |
+| `gtimeout` (macOS only) | `brew install coreutils` |
 
-## Switch-side prep (5 minutes)
+And on the router:
+- Reachable from wherever snmpwalk runs
+- BGP up with at least one established peer (`show router bgp summary`)
 
-Pick v2c or v3, paste the matching config in your operating mode, then
-save. Use whichever (classic CLI or MD-CLI) your device runs.
+## On your router
 
-**v2c, classic CLI**:
+SR-OS supports both **classic CLI** and **MD-CLI**. Use whichever your
+device is configured for. Pick **v2c** (simpler) or **v3** (auth+priv),
+paste the matching block, then save.
+
+**v2c, classic CLI:**
 ```
 /configure system security snmp view "all" subtree 1.3.6.1.4.1.6527 mask ff type included
 /configure system security snmp view "all" subtree 1.3.6.1.2.1 mask ff type included
@@ -47,7 +47,7 @@ save. Use whichever (classic CLI or MD-CLI) your device runs.
 admin save
 ```
 
-**v2c, MD-CLI**:
+**v2c, MD-CLI:**
 ```
 configure system security snmp view "all" subtree 1.3.6.1.4.1.6527 mask ff type included
 configure system security snmp view "all" subtree 1.3.6.1.2.1 mask ff type included
@@ -57,7 +57,7 @@ configure system security snmp community public access-permissions rwa version b
 commit
 ```
 
-**v3 (authPriv with SHA + AES), classic CLI**:
+**v3 (authPriv, SHA + AES), classic CLI:**
 ```
 /configure system security user "monitor" access snmp
 /configure system security user "monitor" snmp authentication hash hmac-sha priv aes-128
@@ -70,77 +70,89 @@ commit
 admin save
 ```
 
-**v3, MD-CLI**: the same shape but in `commit`-mode. See SR-OS docs;
-the wrapper's verdict will tell you which knobs to turn if the first
-attempt times out.
-
-Confirm BGP is up with at least one established peer (`show router bgp summary`)
-before running the capture.
+**v3 in MD-CLI** is the same shape but in `commit` mode — see the SR-OS
+docs. If your first attempt times out, the wrapper's verdict will tell
+you which knob to turn.
 
 ## Run the capture
 
+From this directory:
+
 ```bash
-cd lab/nokia-srbgp
 ./colleague-capture.sh -h <router-ip> -c public
 # or v3:
 ./colleague-capture.sh -h <router-ip> -V 3 -u monitor -a SHA -A 'authpw' -x AES -X 'privpw'
 ```
 
-Safety affordances:
+Want to see what it would do without sending any SNMP traffic?
 
 ```bash
 ./colleague-capture.sh -h <router-ip> -c public --dry-run
 ./colleague-capture.sh -h <router-ip> -c public --preflight-only
 ```
 
-## What you'll get
+When it finishes it prints a coloured banner with a verdict. **Green
+means good to send.** Yellow or red means the banner spells out
+exactly what to try next.
 
-A file named `topology-capture-nokia-<host>-<timestamp>.tar.gz`,
-about 5-50 KB, containing:
+## Send the tarball back
 
-- `captures/` — raw `snmpwalk` text, one file per OID per host
+You'll get a file like `topology-capture-nokia-<host>-<timestamp>.tar.gz`,
+usually 5-50 KB. Inside:
+
+- raw `snmpwalk` output (one file per OID)
 - `diagnostics.json` — structured summary of what happened
-- `wrapper.log` — sanitized execution log
-- `SHA256SUMS` — hashes of every file above
+- `wrapper.log` — execution log, passwords masked
+- `SHA256SUMS` — hashes of the above
 
-**This tarball contains real IP and MAC addresses from your network.**
-Send via direct email only.
+**Heads up:** this contains real IPs and MACs from your network. Send
+it over direct email, not Slack or anything public.
 
-## Where to send it
+Email to **colin.wood@grafana.com** with subject:
 
-Email the tarball to **colin.wood@grafana.com** with subject
-`Capture for issue #57 — Nokia tBgpPeerTable`. Include the sha256
-the wrapper printed in the green banner.
+> Capture for issue #57 — Nokia tBgpPeerTable
+
+Paste the sha256 from the green banner into the email so we can verify
+nothing got mangled in transit.
 
 ## If something didn't work
+
+The script picks one verdict and prints it in the banner. Here's what
+each one means and what to do:
 
 | Banner verdict | What it means | What to do |
 |---|---|---|
 | `vendor_table_empty_view_restriction_likely` | SNMP view excludes the Nokia enterprise OID | Paste the `snmp view "all" subtree 1.3.6.1.4.1.6527 ...` block from the banner, save/commit, re-run |
-| `bgp_mib_module_absent` | BGP MIB not loaded | Confirm BGP is configured (`show router bgp summary`) |
-| `snmp_silent_likely_vrf` | SNMP source-access policy or router instance blocking | See vendor-specific gotchas below |
-| `snmp_auth_failed_*` | Credentials wrong | Re-check the field named in the verdict |
-| `snmp_reachable_vendor_mismatch` | This device isn't a Nokia / SR-OS | Confirm you pointed at the right host |
+| `vendor_table_empty_mib_not_implemented` | This MIB isn't on this device | Are you on SR Linux instead of SR-OS? The walker targets SR-OS specifically. |
+| `bgp_mib_module_absent` | BGP MIB isn't loaded | Confirm BGP is configured (`show router bgp summary`) |
+| `snmp_silent_likely_vrf` | SNMP source-access policy or router-instance blocking | See gotchas below |
+| `snmp_auth_failed_*` | Credentials are wrong somewhere | The verdict names the field |
+| `snmp_reachable_vendor_mismatch` | This device isn't an SR-OS | Double-check the IP |
 
-## Vendor-specific gotchas
+## SR-OS-specific gotchas
 
-- **Classic CLI vs MD-CLI.** SR-OS supports both modes; the syntax is
-  different. Operators routinely run mixed. If a paste-able block doesn't
-  parse, try the other variant — both are shown in the prep section.
-- **SNMP source-access policy.** SR-OS lets you restrict which interfaces
-  can be SNMP-walked. If preflight times out but ICMP works, check
-  `show system security snmp` and look for a source-access policy that
+- **Classic CLI vs MD-CLI.** SR-OS supports both, syntax differs. If
+  one paste-able block doesn't parse, try the other variant — both
+  are above.
+- **SNMP source-access policy.** SR-OS lets you restrict which sources
+  can SNMP-walk the device. If preflight times out but ICMP works,
+  check `show system security snmp` for a source-access policy that
   excludes the address you're walking from.
-- **SR Linux versus SR-OS.** SR Linux (the modern OS for some 7220 IXR
-  platforms) has incomplete standard-MIB coverage — issue #46 in this
-  repo documents the LLDP gap. The `tBgpPeerTable` walker targets SR-OS
-  specifically; if your device runs SR Linux, the capture will likely
-  show `noSuchObject` and a verdict of `vendor_table_empty_mib_not_implemented`.
-- **Old Alcatel-Lucent platforms.** Pre-acquisition 7705/7750 gear runs
-  the same `TIMETRA-BGP-MIB` and will produce a valid capture. The
-  walker doesn't distinguish; that's fine.
+- **SR Linux ≠ SR-OS.** The walker targets `tBgpPeerTable` from
+  `TIMETRA-BGP-MIB`, which SR Linux doesn't implement. A capture from
+  SR Linux will come back with `vendor_table_empty_mib_not_implemented`.
+- **Pre-acquisition Alcatel-Lucent gear.** 7705/7750 from before the
+  Nokia acquisition runs the same MIB and produces a valid capture.
+
+---
 
 ## Maintainer notes (for Colin)
+
+This lab closes [issue #57](https://github.com/colinedwardwood/network-topology-exporter/issues/57)
+— real-device fixtures for the `nokiaTBgpPeerSpec` walker in
+`internal/discovery/bgp/bgp_vendor.go` (`tBgpPeerTable`,
+`1.3.6.1.4.1.6527.3.1.2.13.2`). Walker ships with `verified: false`
+until this lands.
 
 On receipt:
 
@@ -151,11 +163,11 @@ On receipt:
 5. Hand-convert `captures-redacted/.../r1_1_3_6_1_4_1_6527_3_1_2_13_2.txt` into
    `[]gosnmp.SnmpPDU` literals per `lab/cisco-iol-bgp/README.md` conventions.
    Land as `buildNokiaTBgpPeerRealPDUs` in `internal/discovery/bgp/bgp_v2_test.go`.
-6. Confirm the four `vendorTableSpec` fields for `nokiaTBgpPeerSpec` in
-   `bgp_vendor.go` (root, colState, colRemoteAs, decodeIndex) match the
-   real capture. Update any that diverge.
+6. Confirm the four `vendorTableSpec` fields for `nokiaTBgpPeerSpec`
+   (root, colState, colRemoteAs, decodeIndex) match the real capture.
+   Update any that diverge.
 7. Flip `verified: false` to `true` for `nokiaTBgpPeerSpec`.
 8. Update README BGP vendor-coverage table from Experimental → validated.
 9. Update `config/example.yaml` BGP block accordingly.
-10. If captures came from SR Linux instead of SR-OS, note in the closing
-    PR (relates to issue #46 LLDP gap context).
+10. If captures came from SR Linux instead of SR-OS, note in the
+    closing PR (relates to #46 LLDP gap context).
