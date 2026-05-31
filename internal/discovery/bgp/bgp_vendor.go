@@ -82,6 +82,13 @@ var (
 	// Cisco: real-device verified against vrnetlab/cisco_iol:L2-17.12.1
 	// (Cisco IOS-XE 17.12.1, ADVENTERPRISEK9-M) on 2026-05-16. Captures at
 	// lab/cisco-iol-bgp/captures/r{1,2}_cisco_cbgpPeer2Table.txt.
+	// Cross-confirmed against real Cisco IOS-XE hardware on 2026-05-30
+	// via a colleague-supplied snmpwalk over four BGP sessions (two IPv4,
+	// two IPv6, all in state established): column 3 returned INTEGER 6
+	// for all rows, column 11 returned Gauge32 values consistent with
+	// public AS numbers, and the index encoding (1.4.<v4> / 2.16.<v6>)
+	// matched IOL byte-for-byte. See PR closing #58 for the column-match
+	// table.
 	ciscoCbgpPeer2Spec = vendorTableSpec{
 		name:        "cisco-cbgpPeer2Table",
 		root:        "1.3.6.1.4.1.9.9.187.1.2.5",
