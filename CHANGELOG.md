@@ -72,6 +72,21 @@ v1.3.1 lands under this milestone instead, renamed to
   expected. The classic SR-OS family is unaffected. `troubleshooting.md`
   § 2 gains a Nokia-fleet note describing the limitation. Closes #46.
 
+- **Cisco IOS-XE cross-confirmation of `ciscoCbgpPeer2Spec` walker.** The
+  walker was already byte-level validated against Cisco IOL 17.12.1 on
+  2026-05-16 (see `TestWalkVendorCisco` in `bgp_v2_test.go`); this entry
+  records cross-confirmation against real Cisco IOS-XE hardware via a
+  colleague-supplied snmpwalk on 2026-05-30. Capture covered four BGP
+  sessions (two IPv4, two IPv6, all in state established) across columns
+  3-29 of `cbgpPeer2Table` at `1.3.6.1.4.1.9.9.187.1.2.5`. Column numbers
+  (3=state, 11=remoteAs) and index encoding (`1.4.<v4>` / `2.16.<v6>`)
+  matched IOL byte-for-byte — no walker drift between the IOL emulator
+  and real IOS-XE. The IOS-XE scaffold test (`bgp_v2_iosxe_test.go`)
+  was removed since the IOL fixture already provides CI-level regression
+  protection and a near-duplicate IOS-XE fixture would add maintenance
+  cost without coverage. README BGP vendor-coverage table updated to
+  describe what was validated where. Closes #58.
+
 ### Documentation
 
 - **Threat model document** — New `docs/operator/threat-model.md` with a

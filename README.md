@@ -180,7 +180,7 @@ modules:
 
 | Vendor | MIB / OID | Status |
 |--------|-----------|--------|
-| Cisco | `cbgpPeer2Table` (1.3.6.1.4.1.9.9.187.1.2.5) | Real-device validated (IOS / IOS-XE family via Cisco IOL 17.12.1) |
+| Cisco | `cbgpPeer2Table` (1.3.6.1.4.1.9.9.187.1.2.5) | Real-device validated against Cisco IOL 17.12.1 (2026-05-16) and cross-confirmed against IOS-XE hardware (2026-05-30) |
 | Arista | enterprise BGP4V2 (1.3.6.1.4.1.30065.4.1.1.2) | Real-device validated (cEOS 4.36) |
 | Juniper | `jnxBgpM2PeerTable` (1.3.6.1.4.1.2636.5.1.1.2.1.1) | **Experimental** — columns transcribed from MIB docs, not lab-verified |
 | Nokia | `tBgpPeerTable` (1.3.6.1.4.1.6527.3.1.2.13.2) | **Experimental** — same caveat as Juniper |

@@ -140,14 +140,27 @@ on IOS-XE.
 
 On receipt:
 
-1. Verify sha256 against the value in the email.
-2. Extract: `tar xzf topology-capture-cisco-iosxe-*.tar.gz`.
-3. Read `diagnostics.json`'s verdict.
-4. Run redactor: `scripts/redact-snmp-capture.py --in captures-* --out captures-redacted`.
-5. Hand-convert `captures-redacted/.../r1_1_3_6_1_4_1_9_9_187_1_2_5.txt` into
-   `[]gosnmp.SnmpPDU` literals per `lab/cisco-iol-bgp/README.md` conventions.
-   Land as `buildCiscoCbgpPeer2IOSXERealPDUs` in
-   `internal/discovery/bgp/bgp_v2_iosxe_test.go`.
-6. Drop the `t.Skip` line in `bgp_v2_iosxe_test.go:79`.
-7. If captures match IOL byte-for-byte, note that as cross-confirmation
-   in the PR.
+1. Verify sha256 against the value in the email (or, if the colleague
+   ran the raw `snmpwalk` path instead of the wrapper, just confirm the
+   file looks sane — same OID prefix, expected column range).
+2. Extract if it's a tarball: `tar xzf topology-capture-cisco-iosxe-*.tar.gz`.
+3. Cross-check the capture against the four `ciscoCbgpPeer2Spec` claims
+   in `internal/discovery/bgp/bgp_vendor.go`:
+   - Table root `1.3.6.1.4.1.9.9.187.1.2.5` on every row
+   - Index encoding: IPv4 rows `.1.4.<4 bytes>`, IPv6 rows `.2.16.<16 bytes>`
+   - Column 3 (state) returns INTEGER 6 for established peers
+   - Column 11 (remoteAs) returns Gauge32 values matching expected AS numbers
+4. **Do not commit the capture or convert it to a Go fixture.** The IOL
+   fixture in `bgp_v2_test.go` already provides byte-level regression
+   protection in CI; an IOS-XE-derived near-duplicate adds maintenance
+   cost without coverage. Per the #58 closing PR pattern (2026-05-30):
+   record cross-confirmation in the closing PR description as a
+   column-match table, add a CHANGELOG entry under Discovery, and update
+   the comment block above `ciscoCbgpPeer2Spec` with the validation date.
+5. Archive the original capture locally (outside the repo) in case anyone
+   ever wants to re-verify.
+
+Different shape for #56 (Juniper) and #57 (Nokia): those walkers have no
+IOL-equivalent in CI today, so when those captures arrive they **do**
+get redacted and committed as fixtures — see the maintainer notes in
+those labs.
