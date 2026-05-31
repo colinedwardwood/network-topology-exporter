@@ -57,7 +57,7 @@ emit_diagnostics() {
     echo '  ],'
 
     echo '  "aggregate": {'
-    printf '    "hosts_total": %s,\n' "${#HOSTS[@]:-0}"
+    printf '    "hosts_total": %s,\n' "$([ -n "${HOSTS+x}" ] && echo "${#HOSTS[@]}" || echo 0)"
     printf '    "hosts_preflight_ok": %s,\n' "${HOSTS_PREFLIGHT_OK:-0}"
     printf '    "hosts_with_vendor_table_rows": %s,\n' "${HOSTS_WITH_VENDOR_ROWS:-0}"
     printf '    "any_walk_timed_out": %s,\n' "$(json_bool "${ANY_WALK_TIMED_OUT:-0}")"
