@@ -2,11 +2,11 @@
 # Render the verdict-aware end-of-run banner.
 
 _color_enabled() { [ -t 1 ]; }
-_g() { _color_enabled && printf '\033[32m' || true; }
-_y() { _color_enabled && printf '\033[33m' || true; }
-_r() { _color_enabled && printf '\033[31m' || true; }
-_b() { _color_enabled && printf '\033[1m' || true; }
-_n() { _color_enabled && printf '\033[0m' || true; }
+_g() { if _color_enabled; then printf '\033[32m'; fi; }
+_y() { if _color_enabled; then printf '\033[33m'; fi; }
+_r() { if _color_enabled; then printf '\033[31m'; fi; }
+_b() { if _color_enabled; then printf '\033[1m'; fi; }
+_n() { if _color_enabled; then printf '\033[0m'; fi; }
 
 # print_banner VERDICT TARBALL SHA256 RECIPIENT VENDOR_DISPLAY SYSDESCR FIX_COMMAND
 print_banner() {

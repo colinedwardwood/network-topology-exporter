@@ -13,8 +13,11 @@ vendor_match() {
     esac
   fi
 
-  # 2. SYSDESCR_KEYWORDS substring, case-insensitive
-  if [ "${#SYSDESCR_KEYWORDS[@]:-0}" -gt 0 ]; then
+  # 2. SYSDESCR_KEYWORDS substring, case-insensitive.
+  # The +x form is the portable way to check array existence under bash 5
+  # (which rejects ${#arr[@]:-0} as bad substitution) while still being
+  # safe under set -u. Bash 3.2 silently accepts ${#arr[@]:-0}; bash 5 does not.
+  if [ -n "${SYSDESCR_KEYWORDS+x}" ] && [ "${#SYSDESCR_KEYWORDS[@]}" -gt 0 ]; then
     local descr_lc
     descr_lc="$(echo "$sysdescr" | tr '[:upper:]' '[:lower:]')"
     local kw kw_lc
