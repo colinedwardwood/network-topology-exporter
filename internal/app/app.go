@@ -19,7 +19,9 @@ import (
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/app/httpx"
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
+	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+	snmpwalk "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
 	"github.com/colinedwardwood/network-topology-exporter/internal/federation"
 	"github.com/colinedwardwood/network-topology-exporter/internal/loglimit"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
@@ -201,6 +203,23 @@ func Run(ctx context.Context, args []string) int {
 			otlpSem = make(chan struct{}, MaxOTLPPushConcurrency)
 		}
 
+		// Issue #73: admin out-of-cycle re-discovery. cycleMu serialises forced
+		// walks against the regular cycle (shared with LoopConfig.CycleMu). The
+		// Rediscoverer carries its own credential resolver built from the same
+		// config; access to either resolver is serialised by cycleMu, so the
+		// two paths never hit a device concurrently. The endpoint is privileged:
+		// it only runs when listen.web_config_file configures basic_auth/mTLS,
+		// otherwise the handler returns 403.
+		var cycleMu sync.Mutex
+		adminResolver, err := credentials.New(cfg.Credentials)
+		if err != nil {
+			logger.Error("building admin rediscover credential resolver", "error", err)
+			return 1
+		}
+		allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
+		rediscoverer := NewRediscoverer(cfg, m, logger, adminResolver, allowedNets, &cycleMu, cfg.Listen.WebConfigFile != "")
+		mux.HandleFunc("/admin/rediscover", httpx.NewRediscoverHandler(rediscoverer))
+
 		workerDone.Add(1)
 		go func() {
 			defer workerDone.Done()
@@ -217,6 +236,7 @@ func Run(ctx context.Context, args []string) int {
 				OtlpExp:       otlpExp,
 				OtlpSem:       otlpSem,
 				OtlpWg:        &otlpWg,
+				CycleMu:       &cycleMu,
 			})
 		}()
 	}
