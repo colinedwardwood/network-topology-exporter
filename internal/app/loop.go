@@ -59,6 +59,13 @@ type LoopConfig struct {
 	OtlpExp       *otlp.Exporter
 	OtlpSem       chan struct{}   // semaphore bounding concurrent OTLP pushes; nil when OTLP disabled
 	OtlpWg        *sync.WaitGroup // tracks in-flight OTLP push goroutines for clean shutdown
+	// CycleMu serialises each regular discovery cycle against forced
+	// out-of-cycle walks triggered via POST /admin/rediscover (issue #73).
+	// Held only for the duration of RunCycle's SNMP work; the Rediscoverer
+	// acquires the same mutex so the two paths never walk devices concurrently.
+	// May be nil (e.g. in unit tests that drive the loop without the admin
+	// endpoint); a nil mutex means "no serialisation needed".
+	CycleMu *sync.Mutex
 }
 
 // WarnSnapshot rate-limits chronic snapshot Warns via lc.WarnLimiter,
@@ -234,7 +241,16 @@ func RunDiscoveryLoop(ctx context.Context, lc LoopConfig) {
 		cycleNum++
 		lc.M.GoRoutines.Set(float64(runtime.NumGoroutine()))
 		start := time.Now()
+		// Serialise the cycle's SNMP work against forced out-of-cycle walks
+		// (issue #73): the Rediscoverer holds the same mutex, so a regular
+		// cycle and an admin rediscover never walk devices concurrently.
+		if lc.CycleMu != nil {
+			lc.CycleMu.Lock()
+		}
 		newGraph, newAges, conflicts, deviceErrors := RunCycle(ctx, lc.Logger, lc.Cfg, lc.M, lc.WalkerMetrics, lc.WarnLimiter, resolver, allowedNets, ages)
+		if lc.CycleMu != nil {
+			lc.CycleMu.Unlock()
+		}
 		if ctx.Err() != nil {
 			return
 		}

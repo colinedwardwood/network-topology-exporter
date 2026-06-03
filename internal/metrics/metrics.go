@@ -118,6 +118,14 @@ type Metrics struct {
 	// acquire the parallelism semaphore.
 	CycleBudgetSkipsTotal prometheus.Counter
 
+	// AdminRediscoveryTotal counts per-target outcomes of the admin
+	// out-of-cycle re-discovery endpoint (POST /admin/rediscover). Labelled by
+	// outcome ∈ {success, timeout, auth_failure, out_of_scope, error}. One
+	// increment per target per admin request; an audit trail of forced walks.
+	// Operators can alert on outcome="auth_failure" rate to spot a misconfigured
+	// rediscover client. Issue #73.
+	AdminRediscoveryTotal *prometheus.CounterVec
+
 	// BGPWalkerOutcomeTotal counts the outcome of each BGP walker pass.
 	// Labels:
 	//   walker  ∈ {vendor_cisco, vendor_arista, vendor_juniper, vendor_nokia, rfc4273}
@@ -277,6 +285,10 @@ func New(emitBoundaryObs bool) *Metrics {
 			Name: "network_topology_cycle_budget_skips_total",
 			Help: "Targets skipped in a discovery cycle because the cycle budget deadline expired before their goroutine could start.",
 		}),
+		AdminRediscoveryTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "network_topology_admin_rediscovery_total",
+			Help: "Per-target outcomes of forced out-of-cycle re-discovery via POST /admin/rediscover. outcome ∈ {success, timeout, auth_failure, out_of_scope, error}.",
+		}, []string{"outcome"}),
 		MetricsRenderDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name: "network_topology_metrics_render_duration_seconds",
 			Help: "Wall time to render one /metrics scrape response. Alert at p99 against the scraper's scrape_timeout.",
@@ -330,6 +342,7 @@ func New(emitBoundaryObs bool) *Metrics {
 		m.SnapshotQueueDepth,
 		m.SnapshotDropsTotal,
 		m.CycleBudgetSkipsTotal,
+		m.AdminRediscoveryTotal,
 		m.MetricsRenderDuration,
 		m.MetricsPayloadBytes,
 		m.BGPWalkerOutcomeTotal,

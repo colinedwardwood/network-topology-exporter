@@ -9,6 +9,8 @@ package httpx
 
 import (
 	"bufio"
+	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -17,6 +19,80 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 )
+
+// Rediscoverer is the admin-rediscover capability NewRediscoverHandler drives.
+// It is satisfied by *app.Rediscoverer; declared here as an interface so this
+// package does not import app (app already imports httpx).
+type Rediscoverer interface {
+	// AuthConfigured reports whether the listener is auth-gated. When false the
+	// handler fails closed with 403 — the endpoint is privileged and the
+	// default no-auth ground state must not expose it.
+	AuthConfigured() bool
+	// RediscoverResults runs forced out-of-cycle walks against the given target
+	// IPs and returns one result per target. The concrete element type is
+	// app.RediscoverResult; the handler only needs each element to be
+	// JSON-serialisable, so the interface returns []any to avoid an import edge
+	// (app already imports httpx).
+	RediscoverResults(ctx context.Context, targets []string) []any
+}
+
+// rediscoverRequest is the JSON body of POST /admin/rediscover.
+type rediscoverRequest struct {
+	Targets []string `json:"targets"`
+}
+
+// MaxRediscoverTargets caps the number of targets one admin request may force.
+// Keeps a single privileged call from monopolising the discovery mutex.
+const MaxRediscoverTargets = 256
+
+// NewRediscoverHandler returns the POST /admin/rediscover handler (issue #73).
+//
+// Auth model: the endpoint is privileged. When auth is configured
+// (listen.web_config_file set), the Prometheus exporter-toolkit has already
+// authenticated the request at the listener before it reaches this handler, so
+// reaching here means the caller is authorised. When NO auth is configured the
+// handler returns 403 — unlike /metrics, which is default-trust, this endpoint
+// refuses to run in an unauthenticated ground state so a forced SNMP walk can
+// never be triggered anonymously.
+func NewRediscoverHandler(rd Rediscoverer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed; use POST")
+			return
+		}
+		if !rd.AuthConfigured() {
+			writeJSONError(w, http.StatusForbidden,
+				"admin endpoint disabled: no auth configured. Set listen.web_config_file (basic_auth or mTLS) to enable /admin/rediscover.")
+			return
+		}
+		var req rediscoverRequest
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+			return
+		}
+		if len(req.Targets) == 0 {
+			writeJSONError(w, http.StatusBadRequest, `body must contain a non-empty "targets" array`)
+			return
+		}
+		if len(req.Targets) > MaxRediscoverTargets {
+			writeJSONError(w, http.StatusBadRequest,
+				fmt.Sprintf("too many targets: %d (max %d)", len(req.Targets), MaxRediscoverTargets))
+			return
+		}
+
+		results := rd.RediscoverResults(r.Context(), req.Targets)
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
+	}
+}
+
+func writeJSONError(w http.ResponseWriter, code int, msg string) {
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
 
 // CycleStatus is the most recent discovery cycle's outcome surfaced by
 // /healthz. It is written by the discovery loop after each cycle and

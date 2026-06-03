@@ -86,6 +86,41 @@ See [cold-start-credentials.md](cold-start-credentials.md) for guidance on initi
 
 ---
 
+## 4a. I just fixed a device's SNMP config — how do I re-poll it without waiting?
+
+**Situation:** You corrected a community string, opened an ACL, or restarted snmpd on a device, and you want the exporter to re-walk that device *now* instead of waiting up to a full `discovery.interval` for the next regular cycle.
+
+Use the admin re-discovery endpoint:
+
+```
+curl -sS -u admin:secret -X POST http://localhost:9100/admin/rediscover \
+  -H 'Content-Type: application/json' \
+  -d '{"targets":["10.0.0.1","10.0.0.2"]}'
+```
+
+The endpoint triggers an out-of-cycle SNMP walk against each listed IP and returns a per-target outcome plus the resulting edge count:
+
+```json
+{
+  "results": [
+    {"target":"10.0.0.1","outcome":"success","edges":4},
+    {"target":"10.0.0.2","outcome":"auth_failure","error":"..."}
+  ]
+}
+```
+
+Outcomes are `success`, `timeout`, `auth_failure`, `out_of_scope`, or `error`. Every call also increments `network_topology_admin_rediscovery_total{outcome="..."}` for auditing.
+
+**Important behaviour:**
+
+- **Auth is mandatory.** The endpoint is privileged and is only exposed when `listen.web_config_file` configures `basic_auth` and/or mTLS (the same Prometheus exporter-toolkit web-config you use to protect `/metrics`). If no auth is configured the endpoint returns **403** and runs nothing — unlike `/metrics`, the default no-auth ground state does **not** expose this endpoint.
+- **No scope expansion.** A target outside `discovery.scope.cidr_allow_list` is rejected with HTTP 400 / outcome `out_of_scope`. The admin call cannot poll anything the regular cycle wouldn't (LD-11).
+- **It does not corrupt a running cycle.** The forced walk is serialised against the regular discovery cycle, so the two never poll devices concurrently. The forced walk only *reports* its result to you; it does **not** publish into the live graph. The corrected device's edges appear in `/metrics` on the next regular cycle (which now succeeds because you fixed the config). Use the endpoint to *confirm the fix works* and to *audit* it — the visible topology still updates on the normal cycle boundary.
+
+If the outcome is `auth_failure` or `timeout`, the fix did not take — re-check the device against [§4 Credential failures](#4-credential-failures) and [§3 SNMP timeouts and walk failures](#3-snmp-timeouts-and-walk-failures).
+
+---
+
 ## 5. Discovery cycle too slow
 
 **Symptom:** `network_topology_discovery_cycle_duration_seconds` P99 exceeds `discovery.interval`.

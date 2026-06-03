@@ -123,6 +123,27 @@ v1.3.1 lands under this milestone instead, renamed to
   cost without coverage. README BGP vendor-coverage table updated to
   describe what was validated where. Closes #58.
 
+### Operability
+
+- **Admin endpoint for forced out-of-cycle re-discovery.** New
+  `POST /admin/rediscover` on the existing listen port accepts a JSON body
+  `{"targets":["10.0.0.1","10.0.0.2"]}` and triggers an immediate SNMP walk
+  against the listed IPs, so an operator who has just fixed a device's SNMP
+  config (community, ACL, snmpd) can confirm the fix without waiting up to a
+  full `discovery.interval`. The response reports a per-target outcome
+  (`success` / `timeout` / `auth_failure` / `out_of_scope` / `error`) and the
+  resulting edge count. The endpoint is **privileged**: it is only exposed when
+  `listen.web_config_file` configures `basic_auth`/mTLS, and returns **403**
+  otherwise — unlike `/metrics`, the default no-auth ground state does not
+  expose it. Targets outside `discovery.scope.cidr_allow_list` are rejected
+  with HTTP 400 (no scope expansion via the admin call, LD-11). The forced
+  walk is serialised against the regular discovery cycle (shared cycle mutex)
+  so it cannot race or corrupt a running cycle; it reports results to the
+  caller but does not itself publish into the live graph — the corrected
+  device's edges land in `/metrics` on the next regular cycle. New audit metric
+  `network_topology_admin_rediscovery_total{outcome}`. See
+  `docs/operator/troubleshooting.md` § 4a. Closes #73.
+
 ### Documentation
 
 - **Threat model document** — New `docs/operator/threat-model.md` with a
