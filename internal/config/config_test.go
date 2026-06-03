@@ -2397,3 +2397,14 @@ output:
 		t.Fatal("expected validation error for traces.sample_rate=1.5")
 	}
 }
+
+// TestExampleConfigLoadsCleanly verifies that config/example.yaml loads without
+// error under KnownFields mode. This is the schema-parity guard: any key in
+// example.yaml that is not a real struct tag causes a parse error here (#63).
+func TestExampleConfigLoadsCleanly(t *testing.T) {
+	// Resolve relative to this file's package directory.
+	path := filepath.Join("..", "..", "config", "example.yaml")
+	if _, err := Load(path); err != nil {
+		t.Fatalf("config/example.yaml failed to load: %v", err)
+	}
+}
