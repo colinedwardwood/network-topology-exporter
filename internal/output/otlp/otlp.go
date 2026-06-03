@@ -1,29 +1,39 @@
-// Package otlp implements an OTLP/HTTP push output for the network topology
+// Package otlp implements an OTLP push output for the network topology
 // exporter. It serialises topology graphs as OTLP metrics and change events as
-// OTLP log records, then POSTs them to a configurable endpoint (e.g. a Grafana
-// Alloy otelcol.receiver.otlp receiver).
+// OTLP log records, then exports them to a configurable endpoint (e.g. a
+// Grafana Alloy otelcol.receiver.otlp receiver).
 //
-// All serialisation is done with encoding/json against hand-written structs
-// that match the OTLP proto3 JSON mapping. No otel SDK is required.
+// Serialisation and transport are handled by the official OpenTelemetry Go
+// SDK: a metric.MeterProvider drives the topology gauges and a log.LoggerProvider
+// drives the change records. No hand-rolled OTLP/JSON wire encoding lives in
+// this package any more — the SDK owns the proto3 mapping, the schema URL, and
+// the HTTP/gRPC transport (including retry/backoff).
 package otlp
 
 import (
-	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/tls"
-	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"go.opentelemetry.io/otel/attribute"
+	otellog "go.opentelemetry.io/otel/log"
+	otelmetric "go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/sdk/log"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/resource"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
@@ -31,13 +41,33 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/version"
 )
 
+// Protocol selects the OTLP transport.
+type Protocol string
+
+// Protocol values. ProtocolHTTP (OTLP/HTTP) is the default and matches the
+// pre-SDK behaviour of POSTing to {endpoint}/v1/metrics and /v1/logs.
+const (
+	ProtocolHTTP Protocol = "http"
+	ProtocolGRPC Protocol = "grpc"
+)
+
+// Encoding selects the OTLP payload encoding.
+type Encoding string
+
+// Encoding values. EncodingProtobuf is the default and the only encoding the
+// OpenTelemetry Go SDK implements for export today; see the note on Config.Encoding.
+const (
+	EncodingProtobuf Encoding = "protobuf"
+	EncodingJSON     Encoding = "json"
+)
+
 // Config holds the settings for the OTLP exporter.
 type Config struct {
-	// Endpoint is the base URL of the OTLP receiver, e.g. "http://alloy:4318".
-	// Must have no trailing slash.
+	// Endpoint is the base URL of the OTLP receiver, e.g. "http://alloy:4318"
+	// for HTTP or "alloy:4317" (or "http://alloy:4317") for gRPC.
 	Endpoint string
 
-	// Timeout caps each individual POST. Defaults to 10s when zero.
+	// Timeout caps each individual export. Defaults to 10s when zero.
 	Timeout time.Duration
 
 	// InstanceID is the value emitted as the OTLP resource attribute
@@ -46,21 +76,76 @@ type Config struct {
 	// across pod restarts. Federation spoke deployments should pass the
 	// configured spoke_id here so the instance identity is stable.
 	InstanceID string
+
+	// Protocol selects the OTLP transport: ProtocolHTTP (default) or
+	// ProtocolGRPC. The empty value is treated as ProtocolHTTP for backward
+	// compatibility with deployments that only set Endpoint.
+	Protocol Protocol
+
+	// Encoding selects the OTLP payload encoding: EncodingProtobuf (default)
+	// or EncodingJSON. The empty value is treated as EncodingProtobuf.
+	//
+	// NOTE: The OpenTelemetry Go SDK's OTLP exporters only implement protobuf
+	// encoding (Content-Type application/x-protobuf for HTTP, protobuf framing
+	// for gRPC). There is no OTLP/JSON exporter upstream. Selecting
+	// EncodingJSON is therefore rejected by New until upstream adds it; the
+	// field exists so the config surface is stable and forward-compatible.
+	Encoding Encoding
 }
 
-// Exporter pushes topology data to an OTLP/HTTP endpoint.
+// Exporter pushes topology data to an OTLP endpoint via the OpenTelemetry SDK.
+// It owns a MeterProvider and a LoggerProvider and exposes PushGraph /
+// PushChanges helpers that record measurements / emit log records and then
+// force-flush them through the configured OTLP exporter.
 type Exporter struct {
-	cfg        Config
-	client     *http.Client
-	resourceID resource
+	meterProvider  *sdkmetric.MeterProvider
+	loggerProvider *log.LoggerProvider
+
+	edgeGauge   otelmetric.Float64Gauge
+	deviceGauge otelmetric.Float64Gauge
+	logger      otellog.Logger
 }
 
-// New returns an Exporter configured with cfg. A zero Timeout in cfg is
-// replaced with 10 seconds.
-func New(cfg Config) *Exporter {
+const (
+	serviceName        = "network-topology-exporter"
+	scopeName          = "github.com/colinedwardwood/network-topology-exporter"
+	metadataAttrPrefix = "network.topology."
+)
+
+// New constructs an Exporter from cfg, wiring an OTLP metric exporter into a
+// MeterProvider and an OTLP log exporter into a LoggerProvider. A zero Timeout
+// is replaced with 10 seconds; an empty Protocol defaults to HTTP and an empty
+// Encoding defaults to protobuf.
+//
+// New returns an error when the OTLP exporters cannot be constructed or when an
+// unsupported encoding (JSON) is requested.
+func New(ctx context.Context, cfg Config) (*Exporter, error) {
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 10 * time.Second
 	}
+	if cfg.Protocol == "" {
+		cfg.Protocol = ProtocolHTTP
+	}
+	if cfg.Encoding == "" {
+		cfg.Encoding = EncodingProtobuf
+	}
+
+	switch cfg.Protocol {
+	case ProtocolHTTP, ProtocolGRPC:
+	default:
+		return nil, fmt.Errorf("otlp: unsupported protocol %q (want http or grpc)", cfg.Protocol)
+	}
+	switch cfg.Encoding {
+	case EncodingProtobuf:
+		// supported
+	case EncodingJSON:
+		// The OpenTelemetry Go SDK does not ship an OTLP/JSON exporter. Rather
+		// than silently emit protobuf and mislead the operator, reject it.
+		return nil, fmt.Errorf("otlp: encoding %q is not supported by the OpenTelemetry Go SDK exporters (only %q); see output.otlp.encoding docs", EncodingJSON, EncodingProtobuf)
+	default:
+		return nil, fmt.Errorf("otlp: unsupported encoding %q (want protobuf or json)", cfg.Encoding)
+	}
+
 	instanceID := cfg.InstanceID
 	if instanceID == "" {
 		hostname, err := os.Hostname()
@@ -71,109 +156,155 @@ func New(cfg Config) *Exporter {
 		}
 		instanceID = hostname
 	}
+
+	res, err := resource.New(ctx,
+		resource.WithAttributes(
+			semconv.ServiceName(serviceName),
+			semconv.ServiceVersion(version.Version),
+			semconv.ServiceInstanceID(instanceID),
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("otlp: build resource: %w", err)
+	}
+
+	metricExp, err := newMetricExporter(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("otlp: build metric exporter: %w", err)
+	}
+	logExp, err := newLogExporter(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("otlp: build log exporter: %w", err)
+	}
+
+	// A periodic reader wraps the OTLP metric exporter; we flush explicitly from
+	// PushGraph so the export cadence stays driven by the discovery loop (the
+	// heartbeat_cycles semantics in app.go), exactly as the hand-rolled
+	// implementation did.
+	reader := sdkmetric.NewPeriodicReader(metricExp)
+	return assemble(res, reader, log.NewSimpleProcessor(logExp))
+}
+
+// assemble builds an Exporter from an already-constructed resource, metric
+// Reader, and log Processor. It is the shared seam between the production
+// constructor New and the in-memory test constructor (see export_test.go), so
+// tests can drive the exact same PushGraph/PushChanges code paths against
+// in-memory readers/exporters without any OTLP transport.
+func assemble(res *resource.Resource, reader sdkmetric.Reader, proc log.Processor) (*Exporter, error) {
+	mp := sdkmetric.NewMeterProvider(
+		sdkmetric.WithResource(res),
+		sdkmetric.WithReader(reader),
+	)
+	lp := log.NewLoggerProvider(
+		log.WithResource(res),
+		log.WithProcessor(proc),
+	)
+
+	meter := mp.Meter(scopeName)
+	edgeGauge, err := meter.Float64Gauge("network_topology_edge_info",
+		otelmetric.WithDescription("Topology edge presence; value 1 with edge attributes."))
+	if err != nil {
+		return nil, fmt.Errorf("otlp: create edge gauge: %w", err)
+	}
+	deviceGauge, err := meter.Float64Gauge("network_topology_device_info",
+		otelmetric.WithDescription("Discovered device presence; value 1 with device attributes."))
+	if err != nil {
+		return nil, fmt.Errorf("otlp: create device gauge: %w", err)
+	}
+
 	return &Exporter{
-		cfg:    cfg,
-		client: &http.Client{Timeout: cfg.Timeout},
-		resourceID: resource{
-			Attributes: []kv{
-				{Key: "service.name", Value: kvValue{StringValue: serviceName}},
-				{Key: "service.version", Value: kvValue{StringValue: version.Version}},
-				{Key: "service.instance.id", Value: kvValue{StringValue: instanceID}},
-			},
-		},
+		meterProvider:  mp,
+		loggerProvider: lp,
+		edgeGauge:      edgeGauge,
+		deviceGauge:    deviceGauge,
+		logger:         lp.Logger(scopeName),
+	}, nil
+}
+
+// newMetricExporter builds the OTLP metric exporter for the configured
+// protocol. Encoding is always protobuf (validated in New).
+func newMetricExporter(ctx context.Context, cfg Config) (sdkmetric.Exporter, error) {
+	switch cfg.Protocol {
+	case ProtocolGRPC:
+		opts := []otlpmetricgrpc.Option{otlpmetricgrpc.WithTimeout(cfg.Timeout)}
+		host, insecure := endpointHostInsecure(cfg.Endpoint)
+		if host != "" {
+			opts = append(opts, otlpmetricgrpc.WithEndpoint(host))
+		}
+		if insecure {
+			opts = append(opts, otlpmetricgrpc.WithInsecure())
+		}
+		return otlpmetricgrpc.New(ctx, opts...)
+	default: // ProtocolHTTP
+		opts := []otlpmetrichttp.Option{otlpmetrichttp.WithTimeout(cfg.Timeout)}
+		if u, insecure, ok := endpointURL(cfg.Endpoint); ok {
+			opts = append(opts, otlpmetrichttp.WithEndpointURL(u))
+			if insecure {
+				opts = append(opts, otlpmetrichttp.WithInsecure())
+			}
+		}
+		return otlpmetrichttp.New(ctx, opts...)
 	}
 }
 
-// The structs below are a minimal faithful encoding of the OTLP proto3 JSON
-// mapping for metrics and logs. uint64 timestamps are encoded as strings per
-// the proto3 spec (avoids JSON number precision loss).
-
-type kvValue struct {
-	StringValue string `json:"stringValue"`
+// newLogExporter builds the OTLP log exporter for the configured protocol.
+func newLogExporter(ctx context.Context, cfg Config) (log.Exporter, error) {
+	switch cfg.Protocol {
+	case ProtocolGRPC:
+		opts := []otlploggrpc.Option{otlploggrpc.WithTimeout(cfg.Timeout)}
+		host, insecure := endpointHostInsecure(cfg.Endpoint)
+		if host != "" {
+			opts = append(opts, otlploggrpc.WithEndpoint(host))
+		}
+		if insecure {
+			opts = append(opts, otlploggrpc.WithInsecure())
+		}
+		return otlploggrpc.New(ctx, opts...)
+	default: // ProtocolHTTP
+		opts := []otlploghttp.Option{otlploghttp.WithTimeout(cfg.Timeout)}
+		if u, insecure, ok := endpointURL(cfg.Endpoint); ok {
+			opts = append(opts, otlploghttp.WithEndpointURL(u))
+			if insecure {
+				opts = append(opts, otlploghttp.WithInsecure())
+			}
+		}
+		return otlploghttp.New(ctx, opts...)
+	}
 }
 
-type kv struct {
-	Key   string  `json:"key"`
-	Value kvValue `json:"value"`
+// endpointURL normalises an HTTP base endpoint (e.g. "http://alloy:4318") into
+// the per-signal URL the SDK's WithEndpointURL expects. The SDK appends the
+// signal path itself when WithEndpoint is used, but WithEndpointURL takes the
+// full base; we pass the base verbatim and report whether the scheme is plain
+// http so the caller can add WithInsecure. ok is false when endpoint is empty.
+func endpointURL(endpoint string) (rawURL string, insecure bool, ok bool) {
+	if endpoint == "" {
+		return "", false, false
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return endpoint, false, true
+	}
+	return endpoint, u.Scheme == "http", true
 }
 
-type resource struct {
-	Attributes []kv `json:"attributes"`
+// endpointHostInsecure extracts host:port and the insecure flag for the gRPC
+// exporters, which take a bare authority rather than a URL.
+func endpointHostInsecure(endpoint string) (host string, insecure bool) {
+	if endpoint == "" {
+		return "", false
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Host == "" {
+		// Treat as a bare host:port; assume plaintext (no scheme to imply TLS).
+		return endpoint, true
+	}
+	return u.Host, u.Scheme == "http"
 }
-
-type scope struct {
-	Name string `json:"name"`
-}
-
-type dataPoint struct {
-	Attributes   []kv    `json:"attributes"`
-	AsDouble     float64 `json:"asDouble"`
-	TimeUnixNano string  `json:"timeUnixNano"`
-}
-
-type gauge struct {
-	DataPoints []dataPoint `json:"dataPoints"`
-}
-
-type metric struct {
-	Name  string `json:"name"`
-	Gauge gauge  `json:"gauge"`
-}
-
-type scopeMetrics struct {
-	Scope   scope    `json:"scope"`
-	Metrics []metric `json:"metrics"`
-}
-
-type resourceMetrics struct {
-	SchemaUrl    string         `json:"schemaUrl,omitempty"`
-	Resource     resource       `json:"resource"`
-	ScopeMetrics []scopeMetrics `json:"scopeMetrics"`
-}
-
-type metricsPayload struct {
-	ResourceMetrics []resourceMetrics `json:"resourceMetrics"`
-}
-
-type logBody struct {
-	StringValue string `json:"stringValue"`
-}
-
-type logRecord struct {
-	TimeUnixNano   string  `json:"timeUnixNano"`
-	SeverityNumber int     `json:"severityNumber"`
-	SeverityText   string  `json:"severityText"`
-	Body           logBody `json:"body"`
-	Attributes     []kv    `json:"attributes"`
-}
-
-type scopeLogs struct {
-	Scope      scope       `json:"scope"`
-	LogRecords []logRecord `json:"logRecords"`
-}
-
-type resourceLogs struct {
-	SchemaUrl string      `json:"schemaUrl,omitempty"`
-	Resource  resource    `json:"resource"`
-	ScopeLogs []scopeLogs `json:"scopeLogs"`
-}
-
-type logsPayload struct {
-	ResourceLogs []resourceLogs `json:"resourceLogs"`
-}
-
-const (
-	serviceName        = "network-topology-exporter"
-	scopeName          = "github.com/colinedwardwood/network-topology-exporter"
-	severityInfo       = 9
-	severityWarn       = 13
-	otlpSchemaURL      = "https://opentelemetry.io/schemas/1.21.0"
-	metadataAttrPrefix = "network.topology."
-)
 
 // sanitizeUTF8 replaces sequences of invalid UTF-8 bytes with the Unicode
-// replacement character so that JSON serialization never fails on SNMP strings
-// sourced from device sysName/ifDescr which may contain arbitrary bytes.
+// replacement character so that attribute values never carry invalid UTF-8
+// from SNMP strings sourced from device sysName/ifDescr.
 func sanitizeUTF8(s string) string {
 	if utf8.ValidString(s) {
 		return s
@@ -181,95 +312,61 @@ func sanitizeUTF8(s string) string {
 	return strings.ToValidUTF8(s, "�")
 }
 
-// PushGraph serialises graph.Edges and graph.Devices as OTLP gauge metrics and
-// POSTs them to {endpoint}/v1/metrics.
+// PushGraph records graph.Edges and graph.Devices as OTLP gauge measurements
+// and force-flushes them through the MeterProvider's OTLP exporter.
 func (e *Exporter) PushGraph(ctx context.Context, g discovery.Graph) error {
-	now := strconv.FormatInt(time.Now().UnixNano(), 10)
-
-	edgePoints := make([]dataPoint, 0, len(g.Edges))
 	for _, edge := range g.Edges {
-		attrs := []kv{
-			{Key: "src_device", Value: kvValue{StringValue: sanitizeUTF8(edge.SrcDevice)}},
-			{Key: "src_port", Value: kvValue{StringValue: sanitizeUTF8(edge.SrcPort)}},
-			{Key: "dst_device", Value: kvValue{StringValue: sanitizeUTF8(edge.DstDevice)}},
-			{Key: "dst_port", Value: kvValue{StringValue: sanitizeUTF8(edge.DstPort)}},
-			{Key: "proto", Value: kvValue{StringValue: sanitizeUTF8(string(edge.DiscoveryProto))}},
-			{Key: "link_kind", Value: kvValue{StringValue: sanitizeUTF8(string(edge.LinkKind))}},
-			{Key: "direction", Value: kvValue{StringValue: sanitizeUTF8(string(edge.Direction))}},
-			{Key: "confidence", Value: kvValue{StringValue: sanitizeUTF8(string(edge.Confidence))}},
-			{Key: "adjacency", Value: kvValue{StringValue: sanitizeUTF8(string(edge.Adjacency))}},
-			{Key: "precedence_rank", Value: kvValue{StringValue: strconv.Itoa(edge.PrecedenceRank)}},
+		attrs := []attribute.KeyValue{
+			attribute.String("src_device", sanitizeUTF8(edge.SrcDevice)),
+			attribute.String("src_port", sanitizeUTF8(edge.SrcPort)),
+			attribute.String("dst_device", sanitizeUTF8(edge.DstDevice)),
+			attribute.String("dst_port", sanitizeUTF8(edge.DstPort)),
+			attribute.String("proto", sanitizeUTF8(string(edge.DiscoveryProto))),
+			attribute.String("link_kind", sanitizeUTF8(string(edge.LinkKind))),
+			attribute.String("direction", sanitizeUTF8(string(edge.Direction))),
+			attribute.String("confidence", sanitizeUTF8(string(edge.Confidence))),
+			attribute.String("adjacency", sanitizeUTF8(string(edge.Adjacency))),
+			attribute.String("precedence_rank", strconv.Itoa(edge.PrecedenceRank)),
 		}
 		for k, v := range edge.Metadata {
-			attrs = append(attrs, kv{Key: metadataAttrPrefix + k, Value: kvValue{StringValue: sanitizeUTF8(v)}})
+			attrs = append(attrs, attribute.String(metadataAttrPrefix+k, sanitizeUTF8(v)))
 		}
-		edgePoints = append(edgePoints, dataPoint{
-			Attributes:   attrs,
-			AsDouble:     1.0,
-			TimeUnixNano: now,
-		})
+		e.edgeGauge.Record(ctx, 1.0, otelmetric.WithAttributes(attrs...))
 	}
 
-	devicePoints := make([]dataPoint, 0, len(g.Devices))
 	for _, dev := range g.Devices {
-		attrs := []kv{
-			{Key: "device", Value: kvValue{StringValue: sanitizeUTF8(dev.ID)}},
+		attrs := []attribute.KeyValue{
+			attribute.String("device", sanitizeUTF8(dev.ID)),
 		}
 		if dev.Vendor != "" {
-			attrs = append(attrs, kv{Key: "vendor", Value: kvValue{StringValue: sanitizeUTF8(dev.Vendor)}})
+			attrs = append(attrs, attribute.String("vendor", sanitizeUTF8(dev.Vendor)))
 		}
 		if dev.Model != "" {
-			attrs = append(attrs, kv{Key: "model", Value: kvValue{StringValue: sanitizeUTF8(dev.Model)}})
+			attrs = append(attrs, attribute.String("model", sanitizeUTF8(dev.Model)))
 		}
 		if dev.OSVersion != "" {
-			attrs = append(attrs, kv{Key: "os_version", Value: kvValue{StringValue: sanitizeUTF8(dev.OSVersion)}})
+			attrs = append(attrs, attribute.String("os_version", sanitizeUTF8(dev.OSVersion)))
 		}
 		if dev.Site != "" {
-			attrs = append(attrs, kv{Key: "site", Value: kvValue{StringValue: sanitizeUTF8(dev.Site)}})
+			attrs = append(attrs, attribute.String("site", sanitizeUTF8(dev.Site)))
 		}
-		devicePoints = append(devicePoints, dataPoint{
-			Attributes:   attrs,
-			AsDouble:     1.0,
-			TimeUnixNano: now,
-		})
+		e.deviceGauge.Record(ctx, 1.0, otelmetric.WithAttributes(attrs...))
 	}
 
-	payload := metricsPayload{
-		ResourceMetrics: []resourceMetrics{
-			{
-				SchemaUrl: otlpSchemaURL,
-				Resource:  e.resourceID,
-				ScopeMetrics: []scopeMetrics{
-					{
-						Scope: scope{Name: scopeName},
-						Metrics: []metric{
-							{
-								Name:  "network_topology_edge_info",
-								Gauge: gauge{DataPoints: edgePoints},
-							},
-							{
-								Name:  "network_topology_device_info",
-								Gauge: gauge{DataPoints: devicePoints},
-							},
-						},
-					},
-				},
-			},
-		},
+	if err := e.meterProvider.ForceFlush(ctx); err != nil {
+		return fmt.Errorf("otlp: flush metrics: %w", err)
 	}
-
-	return e.post(ctx, "/v1/metrics", payload)
+	return nil
 }
 
-// PushChanges serialises changes as OTLP log records and POSTs them to
-// {endpoint}/v1/logs. Each EdgeChange becomes one log record.
+// PushChanges emits each graph.EdgeChange as an OTLP log record and
+// force-flushes them through the LoggerProvider's OTLP exporter.
 func (e *Exporter) PushChanges(ctx context.Context, changes []graph.EdgeChange) error {
-	records := make([]logRecord, 0, len(changes))
 	for _, c := range changes {
-		sevNum := severityInfo
+		sev := otellog.SeverityInfo
 		sevText := "INFO"
 		if c.Kind == graph.ChangeRemoved {
-			sevNum = severityWarn
+			sev = otellog.SeverityWarn
 			sevText = "WARN"
 		}
 
@@ -302,83 +399,58 @@ func (e *Exporter) PushChanges(ctx context.Context, changes []graph.EdgeChange) 
 			ts = time.Now()
 		}
 
-		records = append(records, logRecord{
-			TimeUnixNano:   strconv.FormatInt(ts.UnixNano(), 10),
-			SeverityNumber: sevNum,
-			SeverityText:   sevText,
-			Body:           logBody{StringValue: "topology change: " + string(c.Kind)},
-			Attributes: []kv{
-				{Key: "change_kind", Value: kvValue{StringValue: string(c.Kind)}},
-				{Key: "src_device", Value: kvValue{StringValue: sanitizeUTF8(srcDevice)}},
-				{Key: "src_port", Value: kvValue{StringValue: sanitizeUTF8(srcPort)}},
-				{Key: "dst_device", Value: kvValue{StringValue: sanitizeUTF8(dstDevice)}},
-				{Key: "dst_port", Value: kvValue{StringValue: sanitizeUTF8(dstPort)}},
-				{Key: "proto", Value: kvValue{StringValue: sanitizeUTF8(proto)}},
-				{Key: "link_kind", Value: kvValue{StringValue: sanitizeUTF8(linkKind)}},
-			},
-		})
+		var rec otellog.Record
+		rec.SetTimestamp(ts)
+		rec.SetObservedTimestamp(time.Now())
+		rec.SetSeverity(sev)
+		rec.SetSeverityText(sevText)
+		rec.SetBody(otellog.StringValue("topology change: " + string(c.Kind)))
+		rec.AddAttributes(
+			otellog.String("change_kind", string(c.Kind)),
+			otellog.String("src_device", sanitizeUTF8(srcDevice)),
+			otellog.String("src_port", sanitizeUTF8(srcPort)),
+			otellog.String("dst_device", sanitizeUTF8(dstDevice)),
+			otellog.String("dst_port", sanitizeUTF8(dstPort)),
+			otellog.String("proto", sanitizeUTF8(proto)),
+			otellog.String("link_kind", sanitizeUTF8(linkKind)),
+		)
+		e.logger.Emit(ctx, rec)
 	}
 
-	payload := logsPayload{
-		ResourceLogs: []resourceLogs{
-			{
-				SchemaUrl: otlpSchemaURL,
-				Resource:  e.resourceID,
-				ScopeLogs: []scopeLogs{
-					{
-						Scope:      scope{Name: scopeName},
-						LogRecords: records,
-					},
-				},
-			},
-		},
+	if err := e.loggerProvider.ForceFlush(ctx); err != nil {
+		return fmt.Errorf("otlp: flush logs: %w", err)
 	}
-
-	return e.post(ctx, "/v1/logs", payload)
+	return nil
 }
 
-const (
-	postMaxAttempts   = 3
-	postBaseDelay     = 100 * time.Millisecond
-	postMaxJitter     = 50 * time.Millisecond
-	postMaxRetryAfter = 10 * time.Second
-)
-
-// httpStatusError carries the receiver's HTTP status code so the caller's
-// metric classifier can partition 4xx vs 5xx without parsing error text.
-// Issue #20: network_topology_otlp_push_total{reason=...}.
-type httpStatusError struct {
-	statusCode int
-	path       string
+// Shutdown flushes and releases the underlying providers. Safe to call once at
+// process shutdown.
+func (e *Exporter) Shutdown(ctx context.Context) error {
+	var errs []error
+	if err := e.meterProvider.Shutdown(ctx); err != nil {
+		errs = append(errs, fmt.Errorf("otlp: shutdown meter provider: %w", err))
+	}
+	if err := e.loggerProvider.Shutdown(ctx); err != nil {
+		errs = append(errs, fmt.Errorf("otlp: shutdown logger provider: %w", err))
+	}
+	return errors.Join(errs...)
 }
 
-func (e *httpStatusError) Error() string {
-	return fmt.Sprintf("otlp: post %s: server returned %d", e.path, e.statusCode)
-}
-
-// StatusCode returns the HTTP status code that produced this error. Used
-// by ClassifyPushError; exported for callers that build their own
-// classifier.
-func (e *httpStatusError) StatusCode() int { return e.statusCode }
-
-// ClassifyPushError maps a non-nil error returned by PushGraph or
-// PushChanges to a metrics.PushReason for use as the `reason` label on
+// ClassifyPushError maps a non-nil error returned by PushGraph or PushChanges
+// to a metrics.PushReason for use as the `reason` label on
 // network_topology_otlp_push_total{status="error"}. err must be non-nil;
 // passing nil panics — call sites should use metrics.ReasonNA for the
 // status="ok" path. The returned value is guaranteed to satisfy
 // metrics.PushReason.Valid().
 //
-// Categorisation:
-//   - context.DeadlineExceeded                     → PushReasonTimeout
-//   - *tls.CertificateVerificationError or wrapped → PushReasonTLSError
-//     "tls:" prefix from net/http
-//   - *httpStatusError, 4xx                        → PushReasonHTTP4xx
-//   - *httpStatusError, 5xx                        → PushReasonHTTP5xx
-//   - everything else                              → PushReasonNetwork
-//
-// The catch-all PushReasonNetwork covers DNS failures, connection
-// refused, EOF, and other transport-layer faults. Operators alerting on
-// "collector is down" should match on PushReasonNetwork.
+// Because the OpenTelemetry Go SDK OTLP exporters surface transport failures as
+// formatted error strings (there is no exported status-code type), this
+// classifier inspects the error text. Categorisation:
+//   - context.DeadlineExceeded / "timeout"      → PushReasonTimeout
+//   - "tls:" / "x509:" in the message           → PushReasonTLSError
+//   - an HTTP 4xx status token in the message    → PushReasonHTTP4xx
+//   - an HTTP 5xx status token in the message    → PushReasonHTTP5xx
+//   - everything else                            → PushReasonNetwork
 func ClassifyPushError(err error) metrics.PushReason {
 	if err == nil {
 		panic("otlp: ClassifyPushError called with nil error")
@@ -386,109 +458,55 @@ func ClassifyPushError(err error) metrics.PushReason {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return metrics.PushReasonTimeout
 	}
-	// TLS verification errors surface as *tls.CertificateVerificationError
-	// from crypto/tls; older Go versions and some wrap paths surface them
-	// as a plain error containing "tls:". Match both shapes.
-	var certErr *tls.CertificateVerificationError
-	if errors.As(err, &certErr) {
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+
+	if strings.Contains(lower, "tls:") || strings.Contains(lower, "x509:") ||
+		strings.Contains(lower, "certificate") {
 		return metrics.PushReasonTLSError
 	}
-	if msg := err.Error(); strings.Contains(msg, "tls:") || strings.Contains(msg, "x509:") {
-		return metrics.PushReasonTLSError
+	if strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded") {
+		return metrics.PushReasonTimeout
 	}
-	var httpErr *httpStatusError
-	if errors.As(err, &httpErr) {
-		switch {
-		case httpErr.statusCode >= 400 && httpErr.statusCode < 500:
-			return metrics.PushReasonHTTP4xx
-		case httpErr.statusCode >= 500 && httpErr.statusCode < 600:
-			return metrics.PushReasonHTTP5xx
-		}
+	switch classifyHTTPStatus(msg) {
+	case statusClass4xx:
+		return metrics.PushReasonHTTP4xx
+	case statusClass5xx:
+		return metrics.PushReasonHTTP5xx
 	}
 	return metrics.PushReasonNetwork
 }
 
-// cryptoJitter returns a random duration in [0, max) using crypto/rand so the
-// retry jitter is not flagged as a weak-random-number-generator lint issue.
-func cryptoJitter(max time.Duration) time.Duration {
-	var b [4]byte
-	_, _ = rand.Read(b[:])
-	n := int64(binary.LittleEndian.Uint32(b[:]))
-	return time.Duration(n % int64(max))
-}
+type statusClass int
 
-// post marshals payload to JSON and POSTs it to e.cfg.Endpoint+path.
-// It retries on transient network errors and on HTTP 429, 502, 503, and 504
-// with exponential backoff (up to 3 attempts total). On 429 it honours a
-// Retry-After header (integer seconds, ≤ 10s).
-// Returns an error only after all attempts are exhausted.
-func (e *Exporter) post(ctx context.Context, path string, payload any) error {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("otlp: marshal payload: %w", err)
-	}
+const (
+	statusClassNone statusClass = iota
+	statusClass4xx
+	statusClass5xx
+)
 
-	var lastErr error
-	delay := postBaseDelay
-	for attempt := range postMaxAttempts {
-		if attempt > 0 {
-			jitter := cryptoJitter(postMaxJitter)
-			select {
-			case <-time.After(delay + jitter):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			delay *= 2
-			if delay > postMaxRetryAfter {
-				delay = postMaxRetryAfter
-			}
-		}
-
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.cfg.Endpoint+path, bytes.NewReader(body))
-		if err != nil {
-			return fmt.Errorf("otlp: build request: %w", err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := e.client.Do(req)
-		if err != nil {
-			lastErr = fmt.Errorf("otlp: post %s: %w", path, err)
+// classifyHTTPStatus scans msg for a three-digit HTTP status token (as emitted
+// by the SDK via http.Response.Status, e.g. "400 Bad Request") and returns its
+// class. It only matches standalone 4xx/5xx tokens to avoid false positives on
+// arbitrary numbers (ports, byte counts) in the message.
+func classifyHTTPStatus(msg string) statusClass {
+	fields := strings.FieldsFunc(msg, func(r rune) bool {
+		return r < '0' || r > '9'
+	})
+	for _, f := range fields {
+		if len(f) != 3 {
 			continue
 		}
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
-
-		if resp.StatusCode < 400 {
-			return nil
+		code, err := strconv.Atoi(f)
+		if err != nil {
+			continue
 		}
-
-		// Wrap status-code failures in *httpStatusError so the metric
-		// classifier (ClassifyPushError) can partition 4xx vs 5xx without
-		// parsing the error text. Issue #20.
-		lastErr = &httpStatusError{statusCode: resp.StatusCode, path: path}
-
-		// Only retry on transient errors: 429, 502, 503, 504.
-		switch resp.StatusCode {
-		case http.StatusTooManyRequests, // 429
-			http.StatusBadGateway,         // 502
-			http.StatusServiceUnavailable, // 503
-			http.StatusGatewayTimeout:     // 504
-			// retryable — fall through to retry loop
-		default:
-			return lastErr
-		}
-
-		// On 429, honour Retry-After if present and within our cap.
-		if resp.StatusCode == http.StatusTooManyRequests {
-			if ra := resp.Header.Get("Retry-After"); ra != "" {
-				if secs, err := strconv.ParseInt(ra, 10, 64); err == nil {
-					d := time.Duration(secs) * time.Second
-					if d <= postMaxRetryAfter {
-						delay = d
-					}
-				}
-			}
+		switch {
+		case code >= 400 && code < 500:
+			return statusClass4xx
+		case code >= 500 && code < 600:
+			return statusClass5xx
 		}
 	}
-	return lastErr
+	return statusClassNone
 }

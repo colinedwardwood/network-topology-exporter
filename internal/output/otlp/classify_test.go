@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -13,89 +11,60 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
 )
 
-// TestClassifyPushError_Timeout confirms that a context-deadline-exceeded
-// error from a real PushGraph call is classified as PushReasonTimeout.
-// Issue #20.
-func TestClassifyPushError_Timeout(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
-		time.Sleep(200 * time.Millisecond)
-	}))
-	defer srv.Close()
-
-	exp := New(Config{Endpoint: srv.URL, Timeout: 50 * time.Millisecond})
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-
-	err := exp.PushGraph(ctx, discovery.Graph{})
-	if err == nil {
-		t.Fatal("PushGraph: want timeout error, got nil")
-	}
-	got := ClassifyPushError(err)
-	if got != metrics.PushReasonTimeout && got != metrics.PushReasonNetwork {
-		// The Go http stack sometimes surfaces the client.Timeout as a
-		// generic net error; accept both for robustness. The point of
-		// the test is that Valid() holds.
-		t.Errorf("ClassifyPushError(timeout) = %q, want timeout or network", got)
-	}
-	if !got.Valid() {
-		t.Errorf("ClassifyPushError returned non-enum value %q", got)
-	}
-}
-
-// TestClassifyPushError_HTTP5xx confirms 5xx responses (after retry
-// exhaustion) classify as PushReasonHTTP5xx. Uses a non-retryable 500
-// status to avoid waiting for the full backoff schedule.
-func TestClassifyPushError_HTTP5xx(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError) // 500 — not in the retry set
-	}))
-	defer srv.Close()
-
-	exp := New(Config{Endpoint: srv.URL})
-	err := exp.PushGraph(context.Background(), discovery.Graph{})
-	if err == nil {
-		t.Fatal("PushGraph: want 500 error, got nil")
-	}
-	if got := ClassifyPushError(err); got != metrics.PushReasonHTTP5xx {
-		t.Errorf("ClassifyPushError(500) = %q, want %q", got, metrics.PushReasonHTTP5xx)
-	}
-}
-
-// TestClassifyPushError_HTTP4xx confirms 4xx responses classify as
-// PushReasonHTTP4xx. 400 is in the non-retryable set so the first
-// attempt's error is returned immediately.
+// TestClassifyPushError_HTTP4xx confirms an SDK-style 4xx transport error
+// classifies as PushReasonHTTP4xx. The OpenTelemetry HTTP exporter formats
+// non-retryable failures as "failed to send ... <status> ...", embedding the
+// HTTP status text (e.g. "400 Bad Request").
 func TestClassifyPushError_HTTP4xx(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusBadRequest)
-	}))
-	defer srv.Close()
-
-	exp := New(Config{Endpoint: srv.URL})
-	err := exp.PushGraph(context.Background(), discovery.Graph{})
-	if err == nil {
-		t.Fatal("PushGraph: want 400 error, got nil")
-	}
+	err := fmt.Errorf("failed to send metrics to http://collector:4318/v1/metrics: 400 Bad Request (body: bad)")
 	if got := ClassifyPushError(err); got != metrics.PushReasonHTTP4xx {
-		t.Errorf("ClassifyPushError(400) = %q, want %q", got, metrics.PushReasonHTTP4xx)
+		t.Errorf("ClassifyPushError(4xx) = %q, want %q", got, metrics.PushReasonHTTP4xx)
 	}
 }
 
-// TestClassifyPushError_Network confirms a bare network failure (the
-// classic "endpoint unreachable" case from issue #20's body) classifies
-// as PushReasonNetwork.
+// TestClassifyPushError_HTTP5xx confirms an SDK-style 5xx transport error
+// classifies as PushReasonHTTP5xx.
+func TestClassifyPushError_HTTP5xx(t *testing.T) {
+	err := fmt.Errorf("failed to send metrics to http://collector:4318/v1/metrics: 500 Internal Server Error (body: boom)")
+	if got := ClassifyPushError(err); got != metrics.PushReasonHTTP5xx {
+		t.Errorf("ClassifyPushError(5xx) = %q, want %q", got, metrics.PushReasonHTTP5xx)
+	}
+}
+
+// TestClassifyPushError_Timeout confirms that the two timeout shapes the SDK
+// surfaces — a wrapped context.DeadlineExceeded and a transport "i/o timeout"
+// string — both classify as PushReasonTimeout.
+func TestClassifyPushError_Timeout(t *testing.T) {
+	cases := []error{
+		fmt.Errorf("otlp: flush metrics: %w", context.DeadlineExceeded),
+		errors.New(`Post "http://collector:4318/v1/metrics": context deadline exceeded`),
+		errors.New(`dial tcp 10.0.0.1:4318: i/o timeout`),
+	}
+	for _, err := range cases {
+		if got := ClassifyPushError(err); got != metrics.PushReasonTimeout {
+			t.Errorf("ClassifyPushError(%q) = %q, want %q", err, got, metrics.PushReasonTimeout)
+		}
+	}
+}
+
+// TestClassifyPushError_Network confirms a bare connection-refused failure from
+// a real PushGraph classifies to a valid non-TLS, non-HTTP reason.
 func TestClassifyPushError_Network(t *testing.T) {
-	// Use an endpoint that will refuse connections — port 1 on the
-	// loopback is reserved-low and not listening.
-	exp := New(Config{Endpoint: "http://127.0.0.1:1", Timeout: 100 * time.Millisecond})
-	err := exp.PushGraph(context.Background(), discovery.Graph{})
-	if err == nil {
+	exp, err := New(context.Background(), Config{
+		Endpoint: "http://127.0.0.1:1", // reserved-low port, not listening
+		Timeout:  500 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = exp.Shutdown(context.Background()) }()
+
+	pushErr := exp.PushGraph(context.Background(), discovery.Graph{Devices: []discovery.Device{{ID: "d"}}})
+	if pushErr == nil {
 		t.Fatal("PushGraph: want connection-refused error, got nil")
 	}
-	got := ClassifyPushError(err)
+	got := ClassifyPushError(pushErr)
 	if got != metrics.PushReasonNetwork && got != metrics.PushReasonTimeout {
-		// Either is operationally fine; both are non-TLS, non-HTTP
-		// failures. The invariant is that we don't leak an
-		// unrecognised label value.
 		t.Errorf("ClassifyPushError(refused) = %q, want network or timeout", got)
 	}
 	if !got.Valid() {
@@ -103,10 +72,8 @@ func TestClassifyPushError_Network(t *testing.T) {
 	}
 }
 
-// TestClassifyPushError_TLS confirms TLS-related error strings route
-// to PushReasonTLSError. The test fabricates an error string matching
-// the net/http surface format because exercising real TLS-cert failures
-// in an httptest server requires fixtures out of scope for this unit.
+// TestClassifyPushError_TLS confirms TLS-related error strings route to
+// PushReasonTLSError.
 func TestClassifyPushError_TLS(t *testing.T) {
 	for _, msg := range []string{
 		`Post "https://example": tls: handshake failure`,
@@ -119,8 +86,7 @@ func TestClassifyPushError_TLS(t *testing.T) {
 	}
 }
 
-// TestClassifyPushError_NilPanics confirms the documented contract:
-// ClassifyPushError must only be called on a non-nil error.
+// TestClassifyPushError_NilPanics confirms the documented contract.
 func TestClassifyPushError_NilPanics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
@@ -130,20 +96,19 @@ func TestClassifyPushError_NilPanics(t *testing.T) {
 	_ = ClassifyPushError(nil)
 }
 
-// TestClassifyPushError_AllReturnsAreValidEnum walks the public surface
-// — every classification path must yield a PushReason that satisfies
-// PushReason.Valid(). Pins the cardinality budget invariant from issue
-// #20: no unbounded label-value leakage.
+// TestClassifyPushError_AllReturnsAreValidEnum walks the public surface — every
+// classification path must yield a PushReason that satisfies Valid(), pinning
+// the cardinality-budget invariant from issue #20.
 func TestClassifyPushError_AllReturnsAreValidEnum(t *testing.T) {
 	cases := []error{
 		context.DeadlineExceeded,
 		fmt.Errorf("wrap: %w", context.DeadlineExceeded),
 		errors.New("tls: handshake failed"),
 		errors.New("x509: bad cert"),
-		&httpStatusError{statusCode: 400, path: "/v1/metrics"},
-		&httpStatusError{statusCode: 404, path: "/v1/metrics"},
-		&httpStatusError{statusCode: 500, path: "/v1/metrics"},
-		&httpStatusError{statusCode: 503, path: "/v1/metrics"},
+		errors.New("failed to send metrics to http://c/v1/metrics: 400 Bad Request"),
+		errors.New("failed to send logs to http://c/v1/logs: 404 Not Found"),
+		errors.New("failed to send metrics to http://c/v1/metrics: 500 Internal Server Error"),
+		errors.New("retry-able request failure: 503 Service Unavailable"),
 		errors.New("dial tcp: connection refused"),
 		errors.New("unexpected EOF"),
 	}

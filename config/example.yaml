@@ -169,8 +169,18 @@ snapshot:
 # output:
 #   otlp:
 #     enabled: false
+#     # For protocol: http use a full URL base (paths /v1/metrics and /v1/logs
+#     # are appended by the OpenTelemetry SDK). For protocol: grpc use a bare
+#     # host:port authority (e.g. "alloy:4317").
 #     endpoint: "http://alloy:4318"
 #     timeout: 10s
+#     heartbeat_cycles: 10
+#     # protocol selects the OTLP transport: http (default) or grpc.
+#     protocol: http
+#     # encoding selects the OTLP payload encoding: protobuf (default) or json.
+#     # NOTE: the OpenTelemetry Go SDK only implements protobuf; selecting json
+#     # is rejected at startup until upstream OTLP/JSON export support lands.
+#     encoding: protobuf
 
 # ─── Per-device enrichment ─────────────────────────────────────────────────
 # Targets attach enrichment metadata (SNMP port, site label, custom labels)

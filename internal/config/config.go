@@ -48,12 +48,24 @@ type OutputConfig struct {
 	OTLP OTLPOutputConfig `yaml:"otlp"`
 }
 
-// OTLPOutputConfig configures the OTLP/HTTP push output.
+// OTLPOutputConfig configures the OTLP push output.
 type OTLPOutputConfig struct {
 	Enabled         bool          `yaml:"enabled"`
 	Endpoint        string        `yaml:"endpoint"`
 	Timeout         time.Duration `yaml:"timeout"`
 	HeartbeatCycles int           `yaml:"heartbeat_cycles"`
+
+	// Protocol selects the OTLP transport: "http" (default) or "grpc".
+	// Empty preserves the pre-SDK behaviour (OTLP/HTTP).
+	Protocol string `yaml:"protocol"`
+
+	// Encoding selects the OTLP payload encoding: "protobuf" (default) or
+	// "json". Empty defaults to "protobuf" for OpenTelemetry SDK parity.
+	//
+	// NOTE: the OpenTelemetry Go SDK only implements protobuf encoding for its
+	// OTLP exporters; "json" is accepted by config validation but rejected at
+	// exporter construction until upstream support exists.
+	Encoding string `yaml:"encoding"`
 }
 
 // FederationConfig is the LD-15–LD-20 multi-instance coordination config.
@@ -375,6 +387,12 @@ func (c *Config) applyDefaults() {
 	if c.Output.OTLP.Timeout == 0 {
 		c.Output.OTLP.Timeout = 10 * time.Second
 	}
+	if c.Output.OTLP.Protocol == "" {
+		c.Output.OTLP.Protocol = "http"
+	}
+	if c.Output.OTLP.Encoding == "" {
+		c.Output.OTLP.Encoding = "protobuf"
+	}
 }
 
 func (c *Config) validateListen() error {
@@ -445,8 +463,24 @@ func (c *Config) validate() error {
 	if c.Output.OTLP.HeartbeatCycles < 1 {
 		return errors.New("output.otlp.heartbeat_cycles must be >= 1")
 	}
+	switch c.Output.OTLP.Protocol {
+	case "", "http", "grpc":
+	default:
+		return fmt.Errorf("output.otlp.protocol must be http or grpc, got %q", c.Output.OTLP.Protocol)
+	}
+	switch c.Output.OTLP.Encoding {
+	case "", "protobuf", "json":
+	default:
+		return fmt.Errorf("output.otlp.encoding must be protobuf or json, got %q", c.Output.OTLP.Encoding)
+	}
 	if c.Output.OTLP.Enabled {
-		if err := validateHTTPEndpoint(c.Output.OTLP.Endpoint); err != nil {
+		// gRPC endpoints are bare host:port authorities (or a URL); HTTP
+		// endpoints must be a full http/https URL as before.
+		if c.Output.OTLP.Protocol == "grpc" {
+			if c.Output.OTLP.Endpoint == "" {
+				return errors.New("output.otlp.endpoint: endpoint is required")
+			}
+		} else if err := validateHTTPEndpoint(c.Output.OTLP.Endpoint); err != nil {
 			return fmt.Errorf("output.otlp.endpoint: %w", err)
 		}
 	}
