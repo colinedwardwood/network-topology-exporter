@@ -22,6 +22,8 @@ By default there is no bespoke control-plane API and the exporter does not push 
 
 The Prometheus / Grafana stack already covers storage, query, alerting, and visualisation. What it doesn't cover is a network-discovery surface that produces topology data in formats that stack already understands. Think `snmp_exporter` for the topology problem: a Grafana panel renders the network graph by querying Mimir directly, with no bespoke graph endpoint sitting in front of the data.
 
+For a side-by-side feature comparison with LibreNMS, SuzieQ, Nautobot, OpenNMS, and SolarWinds NPM, see [`docs/comparisons/matrix.md`](docs/comparisons/matrix.md).
+
 ## Status
 
 **Functionally complete, public surface intentionally unstable.** SNMP / LLDP / CDP / BGP / OSPF / FDB / IS-IS / MPLS-TE discovery, graph reconciliation, credential management, snapshot persistence, multi-instance federation, and optional OTLP push are all implemented and covered by unit, integration, and end-to-end tests. The project ships against test deployments and welcomes adversarial feedback — see the pre-release notice at the top of this README.
@@ -291,6 +293,14 @@ Curated dashboards for both harnesses live in [`dashboards/test-harness/`](dashb
 ## Architecture
 
 See [`docs/architecture.md`](docs/architecture.md) for the module layout and discovery cycle. Clean-room development rules: [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+## Stability and security
+
+Vendor platform support: [`docs/supported-platforms.md`](docs/supported-platforms.md).
+
+Stability promises and GA criteria: [`docs/operator/stability.md`](docs/operator/stability.md).
+
+To report a vulnerability privately: [`SECURITY.md`](SECURITY.md).
 
 ## License
 

@@ -146,6 +146,18 @@ v1.3.1 lands under this milestone instead, renamed to
   the Getting Started dashboard to stop confusing first-time testers
   with a path the harness doesn't actually exercise.
 
+### Documentation
+
+- **SECURITY.md** (closes #76) — New top-level `SECURITY.md` with: supported-version matrix (current minor + previous minor best-effort), private reporting via GitHub Security Advisories, 72 h acknowledge / 7 day status-update SLA, and coordinated disclosure and credit policy. Cross-referenced from `README.md`, `docs/operator/security.md`, and `docs/operator/threat-model.md`. Note for maintainer: Private Vulnerability Reporting must be enabled in repo **Settings → Security → Code security and analysis** before the "Report a vulnerability" button is active.
+
+- **GitHub issue templates** (closes #77) — Three YAML-form templates in `.github/ISSUE_TEMPLATE/`: `bug.yml` (version dropdown, deploy-mode dropdown, config snippet, observed/expected, logs, repro steps), `feature.yml` (problem, proposed solution, alternatives, acceptance criteria), and `config.yml` (`blank_issues_enabled: false` + contact link to the Security Advisory form for vulnerability reports).
+
+- **Supported-platforms matrix** (closes #80) — New `docs/supported-platforms.md` recording per-vendor/OS real-device validation status for each discovery module. Covers Cisco IOS (IOL 17.12.1), Cisco IOS-XE (cross-confirmation via #58), Arista cEOS 4.36, Nokia SR Linux 24.7.2 (LLDP-via-SNMP not supported, #46 caveat documented), Nokia SR-OS (#57 pending), and Juniper (#56 pending). Experimental walkers are clearly marked. Cross-referenced from `README.md` and `docs/standards.md`.
+
+- **Vendor comparison matrix** (closes #81) — New `docs/comparisons/matrix.md` with rows per feature and columns for network-topology-exporter, LibreNMS, SuzieQ, Nautobot, OpenNMS, and SolarWinds NPM. Includes a note on what is needed alongside the exporter for a complete operational stack (NCM, IPSLA, alert correlation). The existing `docs/comparisons/librenms.md` deep bilateral read is linked from the matrix. Matrix linked from README "Why this exists" section.
+
+- **Stability matrix / GA criteria** (closes #66) — New `docs/operator/stability.md` enumerating the five frozen surfaces (config schema, metric names, CLI flags, snapshot format v3, federation API), the semver contract per surface, and measurable acceptance criteria for each structural v1.0 commitment (real-device walker validation, no silent failure modes, operator runbook sufficiency). Documents the deprecation policy (≥1 minor overlap, startup WARN, CHANGELOG note). Cross-referenced from `README.md`, `ROADMAP.md`, and `CONTRIBUTING.md`.
+
 ### Added
 
 - Vendor lab capture toolkit at `scripts/colleague-capture.sh` and `scripts/redact-snmp-capture.py` — lets a colleague with vendor hardware produce a self-diagnosing snmpwalk tarball in one command, then redact the result before fixture conversion. Lab dirs `lab/cisco-iosxe-bgp/` (#58), `lab/juniper-jnxbgp/` (#56), and `lab/nokia-srbgp/` (#57) all shipped with switch-side v2c + v3 prep and a thin shim into the shared wrapper.

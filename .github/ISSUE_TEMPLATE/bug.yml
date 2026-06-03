@@ -1,0 +1,129 @@
+name: Bug report
+description: Report a defect in discovery, metrics emission, federation, or any other area.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. The more detail you provide, the faster we can triage it.
+
+        **Security issue?** Do not use this form — see [SECURITY.md](../../SECURITY.md) for private reporting.
+
+  - type: dropdown
+    id: version
+    attributes:
+      label: Exporter version
+      description: Run `./topology-exporter --version` or check the OCI image tag.
+      options:
+        - v1.4.0-rc.1
+        - v1.3.1-rc1
+        - v1.3.0
+        - v1.2.0
+        - v1.1.0
+        - v1.0.0
+        - Other (specify in description)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deploy-mode
+    attributes:
+      label: Deploy mode
+      description: How is the exporter running?
+      options:
+        - standalone (single instance, no federation)
+        - spoke (pushes to a hub)
+        - hub (receives spoke pushes, no local SNMP)
+        - uncoordinated (boundary metrics only)
+    validations:
+      required: true
+
+  - type: textarea
+    id: config-snippet
+    attributes:
+      label: Relevant config snippet
+      description: >
+        Paste the section of `config.yaml` that is relevant to the bug.
+        Redact all credential values — leave only the profile structure and key names.
+        Do not paste community strings, auth keys, or priv keys.
+      placeholder: |
+        modules:
+          bgp:
+            enabled: true
+            disable_v2_mib: false
+        credentials:
+          profiles:
+            - name: core-v3
+              type: snmp_v3
+              # (credential values omitted)
+      render: yaml
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behaviour
+      description: What actually happens — metric values, log output, error messages.
+      placeholder: |
+        network_topology_bgp_walker_outcome_total{walker="vendor_cisco",outcome="walker_drift"} 14
+
+        Log line (redact IPs if needed):
+        {"time":"...","level":"ERROR","msg":"bgp vendor walk","walker":"vendor_cisco","outcome":"walker_drift","device":"core-rtr-01"}
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What should happen instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines or metric values
+      description: >
+        Paste structured JSON log lines from stderr, or the output of
+        `curl -s http://localhost:9100/metrics | grep network_topology`.
+        Redact IP addresses to RFC 5737 documentation ranges (198.51.100.x) if needed.
+      render: text
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Minimal steps to reproduce the behaviour.
+      placeholder: |
+        1. Deploy with the config snippet above.
+        2. Wait for one full discovery cycle (check `network_topology_discovery_cycle_duration_seconds`).
+        3. Observe `network_topology_bgp_walker_outcome_total` — `walker_drift` count rises each cycle.
+    validations:
+      required: true
+
+  - type: textarea
+    id: vendor-context
+    attributes:
+      label: Vendor / platform context (if relevant)
+      description: >
+        If the bug is in a specific discovery module, include the vendor and platform.
+        See the supported-platforms matrix at `docs/supported-platforms.md`.
+      placeholder: |
+        Vendor: Cisco
+        Platform family: IOS-XE
+        OS version: 17.09.03a
+        Module affected: BGP (vendor_cisco walker)
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: I confirmed this is not a security vulnerability (which would go to SECURITY.md).
+          required: true
+        - label: Credential values have been removed from the config snippet and logs above.
+          required: true

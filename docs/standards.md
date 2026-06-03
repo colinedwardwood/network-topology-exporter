@@ -1,5 +1,7 @@
 # Standards Compliance Matrix
 
+For per-vendor real-device validation status (which walkers have been tested against which platforms), see [`docs/supported-platforms.md`](supported-platforms.md).
+
 ## Implemented Standards
 
 | Standard | Scope in this exporter | Notes |
