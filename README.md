@@ -9,7 +9,7 @@
 > next: `v1.4.0-rc.1`. Pin exact versions in anything you care about,
 > and please file issues for anything you can break.
 
-A standalone, Apache 2.0 Go exporter that discovers network topology over SNMP, LLDP, CDP, BGP, OSPF, FDB, IS-IS, and MPLS-TE, and emits four signals:
+A standalone, AGPL-3.0-licensed Go exporter that discovers network topology over SNMP, LLDP, CDP, BGP, OSPF, FDB, IS-IS, and MPLS-TE, and emits four signals:
 
 - **Prometheus metrics** for device inventory and topology edges, scraped via `/metrics`.
 - **Structured log lines** (JSON to stderr) for topology change events and operational state.
@@ -294,7 +294,7 @@ See [`docs/architecture.md`](docs/architecture.md) for the module layout and dis
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE).
+GNU Affero General Public License v3.0 (AGPL-3.0). See [LICENSE](LICENSE).
 
 ## Related
 

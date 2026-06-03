@@ -24,7 +24,7 @@ topology-discovery code path in each.
 | Vendor dispatch | Canonical-vendor switch with shared MIB walker (`internal/discovery/bgp/bgp_vendor.go:137`); falls back to vendor-neutral RFC walker | `if/elseif ($device['os'])` chain per module (`includes/discovery/discovery-protocols.inc.php`) |
 | Reconciliation | Edge-diff + 2-source conflict detection + stale-edge aging (`internal/graph/graph.go`) | Hard-delete rows not seen in current run; no cross-protocol conflict surfacing |
 | Federation | mTLS spoke/hub with payload validation (`internal/federation/`) | Shared MySQL + Redis + per-device `poller_group`; no inter-instance sync |
-| License | Apache 2.0 | GPL v3 |
+| License | AGPL-3.0 | GPL v3 |
 | Topology LOC | ~5,000 (excl. tests) | ~3,000 (xdp + supporting code) |
 | Tests | ~20,000 LOC, ~1.8× the implementation | Some, mostly integration via fixture-driven `tests/` |
 
@@ -347,7 +347,7 @@ failures fan out as unbounded SNMP retries.
 | Panic recovery | per-device `recover()` with metric counter | n/a — PHP exception model |
 | Audit history | `docs/audits/2026-05-architectural-review.md` + REMEDIATION.md tracking | issue tracker driven |
 | Supply chain | `go.sum`, no vendored deps, `make sbom` target | composer.lock + composer audit; PHP ecosystem larger and noisier |
-| License | Apache 2.0 (permissive) | GPL v3 (copyleft, downstream caution required) |
+| License | AGPL-3.0 (copyleft, incl. network/SaaS use) | GPL v3 (copyleft) |
 
 The exporter is post-audit code: the May 2026 review
 (`docs/audits/2026-05-architectural-review.md`) drove 28 numbered
@@ -373,7 +373,7 @@ audit publicly.
 - Vendor proprietary protocols (Mikrotik LLDP variants, TIMETRA-LLDP,
   JetStream) are not in your fleet
 - You need MPLS-TE topology (LibreNMS doesn't do it)
-- Apache 2.0 matters
+- AGPL-3.0 (strong network-use copyleft) is acceptable in your environment
 
 ## 14. What each would steal from the other
 

@@ -8,6 +8,21 @@ the README. The lab-fixture-capture work previously slotted for
 v1.3.1 lands under this milestone instead, renamed to
 [v1.4.0-rc.1 — Lab Fixture Capture](https://github.com/colinedwardwood/network-topology-exporter/milestones).
 
+### Licensing
+
+- **Relicensed from Apache-2.0 to AGPL-3.0.** The project is now distributed
+  under the GNU Affero General Public License v3.0 (`LICENSE` replaced with the
+  full AGPL-3.0 text). README, `CONTRIBUTING.md`, the OCI image label
+  (`org.opencontainers.image.licenses`), and the LibreNMS comparison were
+  updated to match. Note the consequences of moving to a strong network-use
+  copyleft: operators who modify the exporter and offer it over a network must
+  make their modified source available (AGPL §13). The clean-room contribution
+  rule is unchanged, but its rationale was corrected — AGPL-3.0 *is*
+  GPLv3-compatible, so the policy now rests on avoiding derivative-work
+  entanglement (incl. GPLv2-only sources) rather than blanket GPL
+  incompatibility. References to `snmp_exporter`/`kentik` (Apache-2.0) describe
+  those upstream projects and are unchanged.
+
 ### Features
 
 - **Long-running validation lab** — Added `deploy/long-running-test/`, a

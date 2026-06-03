@@ -4,7 +4,7 @@ Thanks for your interest. This document covers the standard contribution flow an
 
 ## Clean-room development
 
-The exporter is Apache 2.0 and targets feature parity with the discovery surface of mature GPL-licensed projects (LibreNMS, Netdisco, NAV, OpenNMS, Observium, Cacti). Apache 2.0 cannot legally accept GPL contributions, and line-by-line translation of GPL source into Go creates derivative-work exposure. The project's working rule: GPL source may be read to extract behavioural specifications, but the implementation is written from the spec, not from the source.
+The exporter is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0) and targets feature parity with the discovery surface of mature copyleft monitoring projects (LibreNMS, Netdisco, NAV, OpenNMS, Observium, Cacti). Some of those projects are GPLv2-only and remain license-incompatible with AGPL-3.0, and in every case line-by-line translation of third-party source into Go creates derivative-work exposure. The project's working rule: such source may be read to extract behavioural specifications, but the implementation is written from the spec, not from the source.
 
 By contributing you agree to the following four rules.
 
@@ -95,4 +95,4 @@ Open an issue describing the change before sending a large PR. Branch from `main
 
 ## License
 
-By contributing you agree your contributions are licensed under the Apache License 2.0, the same license as the project.
+By contributing you agree your contributions are licensed under the GNU Affero General Public License v3.0 (AGPL-3.0), the same license as the project.
