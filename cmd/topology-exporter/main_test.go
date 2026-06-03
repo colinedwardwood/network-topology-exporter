@@ -2254,20 +2254,13 @@ func TestGraphSizeAdmissionControl(t *testing.T) {
 	}
 }
 
-// TestRunTLSMetrics verifies that when listen.tls_cert_file and
-// listen.tls_key_file are configured, the /metrics endpoint is reachable over
-// HTTPS and returns HTTP 200.
-func TestRunTLSMetrics(t *testing.T) {
+// TestRunTLSMetricsRemovedKeys verifies that a config using the removed
+// listen.tls_cert_file / listen.tls_key_file keys causes the process to exit
+// non-zero (config load fails at startup). Removed in v1.5.0; use
+// listen.web_config_file instead.
+func TestRunTLSMetricsRemovedKeys(t *testing.T) {
 	dir := t.TempDir()
 	certFile, keyFile := generateSelfSignedCert(t, dir)
-
-	// Pick a random free port for the TLS listener.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	listenAddr := ln.Addr().String()
-	_ = ln.Close()
 
 	cfgPath := filepath.Join(dir, "config.yaml")
 	cfgContent := fmt.Sprintf(`
@@ -2281,56 +2274,28 @@ modules:
 snapshot:
   path: %s/snapshot.json
 listen:
-  addr: %s
+  addr: 127.0.0.1:0
   tls_cert_file: %s
   tls_key_file: %s
-`, dir, listenAddr, certFile, keyFile)
+`, dir, certFile, keyFile)
 	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan int, 1)
 	go func() {
 		done <- app.Run(ctx, []string{"--config.file=" + cfgPath})
 	}()
 
-	// Wait for the TLS server to become ready.
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
-		},
-		Timeout: 5 * time.Second,
-	}
-	url := "https://" + listenAddr + "/metrics"
-	deadline := time.Now().Add(10 * time.Second)
-	var resp *http.Response
-	for time.Now().Before(deadline) {
-		resp, err = client.Get(url) //nolint:noctx
-		if err == nil {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if err != nil {
-		cancel()
-		t.Fatalf("TLS /metrics not reachable within deadline: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	cancel()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("GET /metrics over TLS: status = %d, want 200", resp.StatusCode)
-	}
-
 	select {
 	case code := <-done:
-		if code != 0 {
-			t.Errorf("run() exit code = %d, want 0", code)
+		if code == 0 {
+			t.Error("run() exit code = 0; expected non-zero (config with removed tls_cert_file/tls_key_file should fail)")
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("run() did not return within 10s after cancel")
+		t.Fatal("run() did not return within 10s; expected immediate failure on bad config")
 	}
 }
 

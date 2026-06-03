@@ -30,28 +30,17 @@ type Config struct {
 }
 
 // ListenConfig holds the HTTP/HTTPS listen address and optional auth config.
-// The recommended way to enable TLS and/or authentication is WebConfigFile,
-// which points at a Prometheus exporter-toolkit web-config YAML — the same
-// schema operators know from snmp_exporter, node_exporter, blackbox_exporter,
-// etc. (see https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md).
+// WebConfigFile points at a Prometheus exporter-toolkit web-config YAML — the
+// same schema operators know from snmp_exporter, node_exporter,
+// blackbox_exporter, etc. (see
+// https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md).
 // The toolkit handles basic_auth, server TLS, and full mTLS in one file.
 //
-// TLSCertFile / TLSKeyFile remain accepted for one minor release as a
-// transitional path; they configure server-side TLS only (no client auth)
-// and are equivalent to a web-config with just tls_server_config.cert_file
-// and key_file set. Operators using these fields receive a startup
-// deprecation warning. New deployments should use WebConfigFile.
-//
-// When all three are empty the server uses plain HTTP — the default and the
+// When both fields are empty the server uses plain HTTP — the default and the
 // canonical Prometheus convention of "scrape from a private network".
 type ListenConfig struct {
 	Addr          string `yaml:"addr"`            // default ":9100"
-	WebConfigFile string `yaml:"web_config_file"` // exporter-toolkit web-config YAML; recommended
-
-	// Deprecated: use WebConfigFile.
-	TLSCertFile string `yaml:"tls_cert_file"`
-	// Deprecated: use WebConfigFile.
-	TLSKeyFile string `yaml:"tls_key_file"`
+	WebConfigFile string `yaml:"web_config_file"` // exporter-toolkit web-config YAML
 }
 
 // OutputConfig holds optional push-mode output paths.
@@ -114,10 +103,6 @@ type FederationHubConfig struct {
 	// distinct. Set to true to restore the pre-v1.3.0 behaviour for single-site
 	// deployments where short and FQDN forms of the same device must reconcile
 	// to one node — both forms normalise to "core-sw".
-	//
-	// Replaces the v1.3.0 `strict_device_name_matching` (*bool) field. The old
-	// YAML key is still accepted for one minor release with a deprecation
-	// warning; see UnmarshalYAML below.
 	LooseDeviceNameMatching bool `yaml:"loose_device_name_matching"`
 	// MinPushInterval rejects per-spoke pushes received sooner than this
 	// duration after the previous accepted push from the same spoke_id, with
@@ -127,41 +112,6 @@ type FederationHubConfig struct {
 	// check; set to roughly half the spoke's discovery_interval for a sane
 	// floor. Must be strictly less than spoke_timeout.
 	MinPushInterval time.Duration `yaml:"min_push_interval"`
-
-	// strictDeviceNameMatchingDeprecated records whether the operator set the
-	// legacy `strict_device_name_matching` YAML key. Set by UnmarshalYAML, read
-	// by EmitDeprecationWarnings on startup. Remove in v1.5.0 along with the
-	// transitional unmarshal path.
-	strictDeviceNameMatchingDeprecated *bool `yaml:"-"`
-}
-
-// UnmarshalYAML accepts the legacy `strict_device_name_matching` key for one
-// minor release after the v1.3.0 rename to `loose_device_name_matching`.
-// Translation: an explicit `strict_device_name_matching: false` sets
-// `LooseDeviceNameMatching = true`; an explicit `true` (or omission) leaves
-// `LooseDeviceNameMatching` at its zero-value default (false = strict).
-// EmitDeprecationWarnings logs a warning if the deprecated key was used.
-//
-// Remove this UnmarshalYAML, the deprecated alias field, and the
-// strictDeviceNameMatchingDeprecated tracking field in v1.5.0.
-func (c *FederationHubConfig) UnmarshalYAML(value *yaml.Node) error {
-	type alias FederationHubConfig // break recursion
-	aux := struct {
-		*alias           `yaml:",inline"`
-		StrictDeprecated *bool `yaml:"strict_device_name_matching"`
-	}{alias: (*alias)(c)}
-	if err := value.Decode(&aux); err != nil {
-		return err
-	}
-	if aux.StrictDeprecated != nil {
-		// Operator set the old key. Translate: old=false means loose, so flip
-		// LooseDeviceNameMatching on (unless the new key already set it).
-		if !*aux.StrictDeprecated && !c.LooseDeviceNameMatching {
-			c.LooseDeviceNameMatching = true
-		}
-		c.strictDeviceNameMatchingDeprecated = aux.StrictDeprecated
-	}
-	return nil
 }
 
 // FederationSpokeConfig holds the spoke's settings.
@@ -244,47 +194,9 @@ type FDBConfig struct {
 // BGP adjacencies; RFC 4273 BGP4-MIB is IPv4-only. The zero value (false) is
 // the safe default since v1.3.0: v2 walkers run. Set to true to fall back to
 // RFC 4273-only behaviour if a vendor regression appears.
-//
-// Replaces the v1.3.0 `UseV2MIB` (*bool) field. The old YAML key
-// `use_v2_mib` is still accepted for one minor release with a deprecation
-// warning; see UnmarshalYAML below.
 type BGPConfig struct {
 	Enabled      bool `yaml:"enabled"`
 	DisableV2MIB bool `yaml:"disable_v2_mib"`
-
-	// useV2MIBDeprecated records whether the operator set the legacy
-	// `use_v2_mib` YAML key. Set by UnmarshalYAML, read by
-	// EmitDeprecationWarnings on startup. Remove in v1.5.0.
-	useV2MIBDeprecated *bool `yaml:"-"`
-}
-
-// UnmarshalYAML accepts the legacy `use_v2_mib` key for one minor release
-// after the v1.3.0 rename to `disable_v2_mib`. Translation: an explicit
-// `use_v2_mib: false` sets `DisableV2MIB = true`; an explicit `true` (or
-// omission) leaves `DisableV2MIB` at its zero-value default (false = v2
-// enabled). EmitDeprecationWarnings logs a warning if the deprecated key was
-// used.
-//
-// Remove this UnmarshalYAML, the deprecated alias field, and the
-// useV2MIBDeprecated tracking field in v1.5.0.
-func (c *BGPConfig) UnmarshalYAML(value *yaml.Node) error {
-	type alias BGPConfig // break recursion
-	aux := struct {
-		*alias             `yaml:",inline"`
-		UseV2MIBDeprecated *bool `yaml:"use_v2_mib"`
-	}{alias: (*alias)(c)}
-	if err := value.Decode(&aux); err != nil {
-		return err
-	}
-	if aux.UseV2MIBDeprecated != nil {
-		// Operator set the old key. Translate: old=false means "disable v2",
-		// so flip DisableV2MIB on (unless the new key already set it).
-		if !*aux.UseV2MIBDeprecated && !c.DisableV2MIB {
-			c.DisableV2MIB = true
-		}
-		c.useV2MIBDeprecated = aux.UseV2MIBDeprecated
-	}
-	return nil
 }
 
 // ModulesConfig toggles individual discovery modules. Each module's spec
@@ -386,13 +298,18 @@ type TargetConfig struct {
 }
 
 // Load parses the configuration file at path and applies defaults.
+// Unknown YAML keys are rejected (KnownFields mode) so that removed
+// deprecated keys produce a clear parse error rather than being silently
+// ignored.
 func Load(path string) (*Config, error) {
 	b, err := os.ReadFile(path) //nolint:gosec
 	if err != nil {
 		return nil, fmt.Errorf("read config %q: %w", path, err)
 	}
 	var c Config
-	if err := yaml.Unmarshal(b, &c); err != nil {
+	dec := yaml.NewDecoder(strings.NewReader(string(b)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&c); err != nil {
 		return nil, fmt.Errorf("parse config %q: %w", path, err)
 	}
 	c.applyDefaults()
@@ -461,28 +378,9 @@ func (c *Config) applyDefaults() {
 }
 
 func (c *Config) validateListen() error {
-	webCfgSet := c.Listen.WebConfigFile != ""
-	certSet := c.Listen.TLSCertFile != ""
-	keySet := c.Listen.TLSKeyFile != ""
-
-	if webCfgSet && (certSet || keySet) {
-		return errors.New("listen.web_config_file conflicts with deprecated listen.tls_cert_file/listen.tls_key_file — set web_config_file only")
-	}
-	if webCfgSet {
+	if c.Listen.WebConfigFile != "" {
 		if _, err := os.Stat(c.Listen.WebConfigFile); err != nil {
 			return fmt.Errorf("listen.web_config_file %q: %w", c.Listen.WebConfigFile, err)
-		}
-		return nil
-	}
-	if certSet != keySet {
-		return errors.New("listen.tls_cert_file and listen.tls_key_file must both be set or both be empty")
-	}
-	if certSet {
-		if _, err := os.Stat(c.Listen.TLSCertFile); err != nil {
-			return fmt.Errorf("listen.tls_cert_file %q: %w", c.Listen.TLSCertFile, err)
-		}
-		if _, err := os.Stat(c.Listen.TLSKeyFile); err != nil {
-			return fmt.Errorf("listen.tls_key_file %q: %w", c.Listen.TLSKeyFile, err)
 		}
 	}
 	return nil
@@ -847,61 +745,13 @@ func (c *Config) validateFDB() error {
 	return nil
 }
 
-// EmitDeprecationWarnings logs a slog.Warn for each legacy YAML key the
-// operator set during Load. Call once at startup after Load. Returns true if
-// any deprecation warning was emitted (handy for tests).
-//
-// Remove this function in v1.5.0 along with the transitional UnmarshalYAML
-// methods on FederationHubConfig and BGPConfig.
-func (c *Config) EmitDeprecationWarnings(logger *slog.Logger) bool {
-	if logger == nil {
-		logger = slog.Default()
-	}
-	emitted := false
-	if c.Federation.Hub.strictDeviceNameMatchingDeprecated != nil {
-		logger.Warn("config: federation.hub.strict_device_name_matching is deprecated and will be removed in v1.5.0; use loose_device_name_matching (default false = strict; set to true to enable domain-suffix stripping)",
-			"deprecated_key", "strict_device_name_matching",
-			"replacement_key", "loose_device_name_matching",
-			"deprecated_value", *c.Federation.Hub.strictDeviceNameMatchingDeprecated,
-			"effective_loose_device_name_matching", c.Federation.Hub.LooseDeviceNameMatching,
-		)
-		emitted = true
-	}
-	if c.Modules.BGP.useV2MIBDeprecated != nil {
-		logger.Warn("config: modules.bgp.use_v2_mib is deprecated and will be removed in v1.5.0; use disable_v2_mib (default false = v2 enabled; set to true to disable v2 walkers)",
-			"deprecated_key", "use_v2_mib",
-			"replacement_key", "disable_v2_mib",
-			"deprecated_value", *c.Modules.BGP.useV2MIBDeprecated,
-			"effective_disable_v2_mib", c.Modules.BGP.DisableV2MIB,
-		)
-		emitted = true
-	}
-	if c.Listen.TLSCertFile != "" || c.Listen.TLSKeyFile != "" {
-		logger.Warn("config: listen.tls_cert_file / listen.tls_key_file are deprecated and will be removed in v1.5.0; migrate to listen.web_config_file (Prometheus exporter-toolkit web-config YAML) which adds basic_auth and mTLS support — see docs/operator/security.md",
-			"deprecated_keys", "tls_cert_file,tls_key_file",
-			"replacement_key", "web_config_file",
-		)
-		emitted = true
-	}
-	return emitted
-}
-
-// HasDeprecatedListenTLS reports whether the operator set the legacy
-// `listen.tls_cert_file` or `listen.tls_key_file` keys. Test helper.
-func (c *Config) HasDeprecatedListenTLS() bool {
-	return c.Listen.TLSCertFile != "" || c.Listen.TLSKeyFile != ""
-}
-
-// HasDeprecatedFederationHubStrict reports whether the operator set the
-// legacy `strict_device_name_matching` YAML key. Test helper.
-func (c *Config) HasDeprecatedFederationHubStrict() bool {
-	return c.Federation.Hub.strictDeviceNameMatchingDeprecated != nil
-}
-
-// HasDeprecatedBGPUseV2MIB reports whether the operator set the legacy
-// `use_v2_mib` YAML key. Test helper.
-func (c *Config) HasDeprecatedBGPUseV2MIB() bool {
-	return c.Modules.BGP.useV2MIBDeprecated != nil
+// EmitDeprecationWarnings is a no-op stub retained so call-sites in main
+// continue to compile without modification. All three deprecated config keys
+// (use_v2_mib, strict_device_name_matching, tls_cert_file/tls_key_file) were
+// removed in v1.5.0; the YAML loader now rejects them with a parse error.
+// Returns false always.
+func (c *Config) EmitDeprecationWarnings(_ *slog.Logger) bool {
+	return false
 }
 
 func cidrContainsAny(nets []*net.IPNet, ip net.IP) bool {

@@ -66,13 +66,13 @@ Unreleased section.
 
 ### `v1.5.0` — Config schema freeze
 
-Remove the deprecated keys carried for one minor release of overlap:
+Remove the deprecated keys carried for one minor release of overlap (done):
 
-- `modules.bgp.use_v2_mib` (replaced by `disable_v2_mib` in v1.3.0)
+- `modules.bgp.use_v2_mib` (replaced by `disable_v2_mib` in v1.3.0) — removed
 - `federation.hub.strict_device_name_matching` (replaced by
-  `loose_device_name_matching` in v1.3.0)
+  `loose_device_name_matching` in v1.3.0) — removed
 - `listen.tls_cert_file` / `listen.tls_key_file` (replaced by
-  `listen.web_config_file` in v1.3.0)
+  `listen.web_config_file` in v1.3.0) — removed
 
 Audit `config/example.yaml` against `internal/config/config.go` so the
 example file is the authoritative schema document. Declare the config schema
