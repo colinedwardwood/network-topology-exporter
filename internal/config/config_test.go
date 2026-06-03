@@ -2331,3 +2331,69 @@ func TestEmitDeprecationWarningsNoopWhenNeitherKeySet(t *testing.T) {
 		t.Errorf("expected silent no-op; got log output:\n%s", buf.String())
 	}
 }
+
+// TestTracesDefaultSampleRate verifies output.otlp.traces defaults: disabled
+// with a 0.1 sample rate when the block is omitted (issue #68).
+func TestTracesDefaultSampleRate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("targets: []\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if c.Output.OTLP.Traces.Enabled {
+		t.Error("traces.enabled default = true, want false")
+	}
+	if c.Output.OTLP.Traces.SampleRate == nil || *c.Output.OTLP.Traces.SampleRate != 0.1 {
+		t.Errorf("traces.sample_rate default = %v, want 0.1", c.Output.OTLP.Traces.SampleRate)
+	}
+}
+
+// TestTracesExplicitZeroSampleRateHonoured verifies an explicit sample_rate of
+// 0.0 is preserved rather than overridden by the 0.1 default (the reason the
+// field is a pointer).
+func TestTracesExplicitZeroSampleRateHonoured(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+targets: []
+output:
+  otlp:
+    traces:
+      enabled: true
+      sample_rate: 0.0
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if c.Output.OTLP.Traces.SampleRate == nil || *c.Output.OTLP.Traces.SampleRate != 0.0 {
+		t.Errorf("traces.sample_rate = %v, want explicit 0.0", c.Output.OTLP.Traces.SampleRate)
+	}
+}
+
+// TestTracesSampleRateOutOfRangeRejected verifies sample_rate outside [0,1] is
+// a validation error.
+func TestTracesSampleRateOutOfRangeRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+targets: []
+output:
+  otlp:
+    traces:
+      sample_rate: 1.5
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected validation error for traces.sample_rate=1.5")
+	}
+}
