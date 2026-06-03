@@ -18,44 +18,99 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
+  "id": null,
   "liveNow": false,
   "panels": [
     {
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 99,
+      "options": {
+        "content": "# Network Topology — test-harness view\n\nThis panel renders the live topology discovered by **network-topology-exporter**, built entirely from two Prometheus metrics it emits — `network_topology_device_info` and `network_topology_edge_info` (reshaped in-panel with PromQL + a SQL expression).\n\n**How to read it**\n- **Node** = a discovered device. Title = hostname; subtitle = vendor (model appended when available).\n- **Ring** = the mix of discovery protocols that found this device's links (LLDP, CDP, BGP, OSPF, IS-IS, FDB, MPLS-TE), as proportions that sum to 1. A solid single-colour ring means the device is seen by only one protocol; a multi-colour ring shows the split. Isolated devices (no links) have no ring.\n- **Number inside the node** = its link count (degree), counted across both endpoints.\n- **Edge** = a discovered link. Label is `src_port → dst_port`; hover for discovery protocol, link kind, and direction (bidirectional = confirmed from both ends).\n\n**What richer SNMP data could add here** *(not collected today — illustrative)*\n- **Link speed / bandwidth** (IF-MIB `ifHighSpeed`) → edge **thickness**\n- **Interface utilisation / errors / discards** → edge colour or width\n- **Device health** (CPU, memory, temperature, uptime) → node colour or stat\n- **Admin / oper status** → dashed vs solid edges\n\n> **Note:** This dashboard exists only to **validate the topology exporter** against the long-running test lab — it is not an operational NOC view. The enrichments listed above show what the SNMP data model *could* drive; they are not part of what the exporter emits today.\n",
+        "mode": "markdown"
+      },
+      "title": "About this dashboard",
+      "transparent": false,
+      "type": "text"
+    },
+    {
       "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
+        "type": "mixed",
+        "uid": "-- Mixed --"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
       },
       "gridPos": {
         "h": 16,
         "w": 24,
         "x": 0,
-        "y": 0
+        "y": 12
       },
       "id": 1,
       "options": {
         "edges": {
-          "mainStatUnit": "short",
-          "secondaryStatUnit": "short"
+          "mainStatUnit": "",
+          "secondaryStatUnit": ""
         },
         "layoutAlgorithm": "layered",
         "nodes": {
-          "arcs": [],
-          "mainStatUnit": "short",
+          "arcs": [
+            {
+              "color": "blue",
+              "field": "arc__lldp"
+            },
+            {
+              "color": "light-blue",
+              "field": "arc__cdp"
+            },
+            {
+              "color": "green",
+              "field": "arc__bgp"
+            },
+            {
+              "color": "light-green",
+              "field": "arc__ospf"
+            },
+            {
+              "color": "orange",
+              "field": "arc__fdb"
+            },
+            {
+              "color": "dark-green",
+              "field": "arc__isis"
+            },
+            {
+              "color": "purple",
+              "field": "arc__mpls_te"
+            },
+            {
+              "color": "yellow",
+              "field": "arc__configured"
+            }
+          ],
           "nodeRadius": 40,
-          "secondaryStatUnit": "short"
+          "secondaryStatUnit": ""
         },
         "zoomMode": "cooperative"
       },
-      "pluginVersion": "13.1.0-25668120414",
+      "pluginVersion": "13.1.0-26564065169",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "label_replace(label_replace(label_replace(label_replace(network_topology_device_info{tester_id=\"$tester_id\"}, \"id\", \"$1\", \"device_id\", \"(.*)\"), \"mainStat\", \"$1\", \"device_id\", \"(.*)\"), \"title\", \"$1\", \"vendor\", \"(.*)\"), \"subTitle\", \"$1\", \"site\", \"(.*)\")",
+          "expr": "label_join(label_join(label_join(network_topology_device_info{tester_id=\"$tester_id\"}, \"id\", \"\", \"device_id\"), \"title\", \"\", \"device_id\"), \"subTitle\", \" \", \"vendor\", \"model\")",
           "format": "table",
+          "hide": true,
           "instant": true,
+          "queryType": "instant",
           "refId": "Nodes"
         },
         {
@@ -63,44 +118,58 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "label_replace(label_replace(label_replace(label_replace(label_replace(network_topology_edge_info{tester_id=\"$tester_id\"}, \"id\", \"$1\", \"src_port\", \"(.*)\"), \"source\", \"$1\", \"src_device\", \"(.*)\"), \"target\", \"$1\", \"dst_device\", \"(.*)\"), \"mainStat\", \"$1\", \"discovery_proto\", \"(.*)\"), \"secondaryStat\", \"$1\", \"link_kind\", \"(.*)\")",
+          "expr": "label_join(label_join(label_join(label_join(label_join(label_join(label_join(network_topology_edge_info{tester_id=\"$tester_id\"}, \"id\", \"\", \"src_port\"), \"source\", \"\", \"src_device\"), \"target\", \"\", \"dst_device\"), \"mainStat\", \" → \", \"src_port\", \"dst_port\"), \"secondaryStat\", \"\", \"link_kind\"), \"detail__protocol\", \"\", \"discovery_proto\"), \"detail__direction\", \"\", \"direction\")",
           "format": "table",
+          "hide": true,
           "instant": true,
+          "queryType": "instant",
           "refId": "Edges"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "count by (node_id, discovery_proto) (label_replace(network_topology_edge_info{tester_id=\"$tester_id\"}, \"node_id\", \"$1\", \"src_device\", \"(.*)\") or label_replace(network_topology_edge_info{tester_id=\"$tester_id\"}, \"node_id\", \"$1\", \"dst_device\", \"(.*)\")) / on (node_id) group_left() count by (node_id) (label_replace(network_topology_edge_info{tester_id=\"$tester_id\"}, \"node_id\", \"$1\", \"src_device\", \"(.*)\") or label_replace(network_topology_edge_info{tester_id=\"$tester_id\"}, \"node_id\", \"$1\", \"dst_device\", \"(.*)\"))",
+          "format": "table",
+          "hide": true,
+          "instant": true,
+          "queryType": "instant",
+          "refId": "ArcData"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "count by (node_id) (label_replace(network_topology_edge_info{tester_id=\"$tester_id\"}, \"node_id\", \"$1\", \"src_device\", \"(.*)\") or label_replace(network_topology_edge_info{tester_id=\"$tester_id\"}, \"node_id\", \"$1\", \"dst_device\", \"(.*)\")) or count by (node_id) (label_replace(network_topology_device_info{tester_id=\"$tester_id\"}, \"node_id\", \"$1\", \"device_id\", \"(.*)\")) * 0",
+          "format": "table",
+          "hide": true,
+          "instant": true,
+          "queryType": "instant",
+          "refId": "Degree"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "SELECT n.id, n.title, n.subTitle,\n  CAST(CAST(MAX(d.__value__) AS SIGNED) AS CHAR) AS secondaryStat,\n  SUM(CASE WHEN a.discovery_proto = 'lldp' THEN a.__value__ ELSE 0 END) AS arc__lldp,\n  SUM(CASE WHEN a.discovery_proto = 'cdp' THEN a.__value__ ELSE 0 END) AS arc__cdp,\n  SUM(CASE WHEN a.discovery_proto = 'bgp' THEN a.__value__ ELSE 0 END) AS arc__bgp,\n  SUM(CASE WHEN a.discovery_proto = 'ospf' THEN a.__value__ ELSE 0 END) AS arc__ospf,\n  SUM(CASE WHEN a.discovery_proto = 'fdb' THEN a.__value__ ELSE 0 END) AS arc__fdb,\n  SUM(CASE WHEN a.discovery_proto = 'isis' THEN a.__value__ ELSE 0 END) AS arc__isis,\n  SUM(CASE WHEN a.discovery_proto = 'mpls_te' THEN a.__value__ ELSE 0 END) AS arc__mpls_te,\n  SUM(CASE WHEN a.discovery_proto = 'configured' THEN a.__value__ ELSE 0 END) AS arc__configured\nFROM Nodes n\nLEFT JOIN ArcData a ON n.id = a.node_id\nLEFT JOIN Degree d ON n.id = d.node_id\nGROUP BY n.id, n.title, n.subTitle\nLIMIT 500",
+          "refId": "NodesFull",
+          "type": "sql"
+        },
+        {
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "SELECT id, source, target, mainStat, secondaryStat, detail__protocol, detail__direction FROM Edges LIMIT 2000",
+          "refId": "EdgesFull",
+          "type": "sql"
         }
       ],
       "title": "Network Topology Graph",
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "Value #Edges": true,
-              "Value #Nodes": true,
-              "__name__": true,
-              "device_id": true,
-              "direction": true,
-              "discovery_proto": true,
-              "dst_device": true,
-              "dst_port": true,
-              "env": true,
-              "instance": true,
-              "job": true,
-              "link_kind": true,
-              "model": true,
-              "os_version": true,
-              "site": true,
-              "src_device": true,
-              "src_port": true,
-              "tester_id": true,
-              "vendor": true
-            },
-            "indexByName": {},
-            "renameByName": {}
-          }
-        }
-      ],
+      "transformations": [],
       "type": "nodeGraph"
     },
     {
@@ -139,14 +208,14 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 16
+        "y": 28
       },
       "id": 2,
       "options": {
         "cellHeight": "sm",
         "showHeader": true
       },
-      "pluginVersion": "13.1.0-25668120414",
+      "pluginVersion": "13.1.0-26564065169",
       "targets": [
         {
           "datasource": {
@@ -240,6 +309,5 @@
   },
   "timezone": "browser",
   "title": "02. Network Topology",
-  "uid": "topology-graph",
-  "version": 5
+  "uid": "topology-graph"
 }
