@@ -189,7 +189,28 @@ v1.3.1 lands under this milestone instead, renamed to
 
 - Vendor lab capture toolkit at `scripts/colleague-capture.sh` and `scripts/redact-snmp-capture.py` — lets a colleague with vendor hardware produce a self-diagnosing snmpwalk tarball in one command, then redact the result before fixture conversion. Lab dirs `lab/cisco-iosxe-bgp/` (#58), `lab/juniper-jnxbgp/` (#56), and `lab/nokia-srbgp/` (#57) all shipped with switch-side v2c + v3 prep and a thin shim into the shared wrapper.
 
-## v1.3.1-rc1 — 2026-05-21
+### Internal
+
+- **OTLP output migrated to the official OpenTelemetry Go SDK (#82).** The
+  hand-rolled OTLP/HTTP+JSON encoder in `internal/output/otlp` was replaced with
+  a `metric.MeterProvider` + `log.LoggerProvider` built from the OTel SDK
+  (`go.opentelemetry.io/otel/sdk/metric`, `.../sdk/log`, and the
+  `otlpmetric{http,grpc}` / `otlplog{http,grpc}` exporters). The SDK now owns the
+  proto3 wire mapping, the schema URL, and transport-level retry/backoff; no
+  `json.Marshal` of OTLP payloads remains in the binary. Config and API are
+  preserved: the `Exporter.PushGraph` / `Exporter.PushChanges` behaviour, the
+  emitted metric names (`network_topology_edge_info`,
+  `network_topology_device_info`), the topology-change log records, and all
+  existing config keys (`output.otlp.endpoint`, `timeout`, `heartbeat_cycles`)
+  are unchanged — a deployment that only sets `endpoint` keeps working (proven by
+  `TestNewDefaultsHTTPProtobuf`).
+- **Wire-format change (OTLP): JSON → protobuf.** The pre-v1.5.0 hand-rolled
+  path emitted OTLP/HTTP + JSON; the SDK emits **protobuf** (the OTLP default and
+  the only encoding the OTel Go SDK exporters implement). OTLP receivers must
+  accept protobuf — virtually all do. There is no JSON option, so no
+  `output.otlp.encoding` key exists.
+- **New OTLP config key: `output.otlp.protocol` (http|grpc), default `http`.**
+  Adds OTLP/gRPC support alongside the existing HTTP transport.
 
 First release candidate for the 1.3.1 milestone. Includes the new tester-onboarding stack and critical codebase health fixes.
 

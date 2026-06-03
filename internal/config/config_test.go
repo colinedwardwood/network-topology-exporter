@@ -1234,6 +1234,90 @@ func TestOTLPHeartbeatCyclesDefault(t *testing.T) {
 	}
 }
 
+// TestOTLPProtocolDefault verifies the #82 backward-compatible default: an OTLP
+// block with only endpoint set defaults protocol=http (payload encoding is
+// always protobuf — there is no encoding config key).
+func TestOTLPProtocolDefault(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+output:
+  otlp:
+    enabled: true
+    endpoint: http://collector:4318
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if c.Output.OTLP.Protocol != "http" {
+		t.Errorf("Protocol default = %q, want http", c.Output.OTLP.Protocol)
+	}
+}
+
+// TestOTLPValidationRejectsBadProtocol verifies an unknown protocol is rejected.
+func TestOTLPValidationRejectsBadProtocol(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+output:
+  otlp:
+    enabled: true
+    endpoint: http://collector:4318
+    protocol: ftp
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for unknown otlp protocol, got nil")
+	}
+}
+
+// TestOTLPRejectsRemovedEncodingKey verifies the removed `encoding` key is now
+// rejected as an unknown field (the SDK is protobuf-only; there is no encoding
+// option). This guards against the key silently reappearing.
+func TestOTLPRejectsRemovedEncodingKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+output:
+  otlp:
+    enabled: true
+    endpoint: http://collector:4318
+    encoding: protobuf
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected parse error for removed otlp encoding key, got nil")
+	}
+}
+
+// TestOTLPGRPCEndpointAcceptsBareAuthority verifies that a grpc protocol allows
+// a bare host:port endpoint (no http/https scheme required).
+func TestOTLPGRPCEndpointAcceptsBareAuthority(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+output:
+  otlp:
+    enabled: true
+    protocol: grpc
+    endpoint: collector:4317
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Fatalf("load with grpc bare authority: %v", err)
+	}
+}
+
 // TestOTLPValidationRejectsEnabledWithoutEndpoint verifies that enabling OTLP
 // without an endpoint causes Load to return an error.
 func TestOTLPValidationRejectsEnabledWithoutEndpoint(t *testing.T) {

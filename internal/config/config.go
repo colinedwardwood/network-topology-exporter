@@ -48,12 +48,19 @@ type OutputConfig struct {
 	OTLP OTLPOutputConfig `yaml:"otlp"`
 }
 
-// OTLPOutputConfig configures the OTLP/HTTP push output.
+// OTLPOutputConfig configures the OTLP push output.
 type OTLPOutputConfig struct {
 	Enabled         bool          `yaml:"enabled"`
 	Endpoint        string        `yaml:"endpoint"`
 	Timeout         time.Duration `yaml:"timeout"`
 	HeartbeatCycles int           `yaml:"heartbeat_cycles"`
+
+	// Protocol selects the OTLP transport: "http" (default) or "grpc".
+	// Empty preserves the pre-SDK behaviour (OTLP/HTTP). The payload encoding
+	// is always protobuf — the OpenTelemetry Go SDK exporters do not implement
+	// OTLP/JSON. This is a wire-format change from the pre-v1.5.0 hand-rolled
+	// JSON path; OTLP receivers must accept protobuf (the OTLP default).
+	Protocol string `yaml:"protocol"`
 }
 
 // FederationConfig is the LD-15–LD-20 multi-instance coordination config.
@@ -375,6 +382,9 @@ func (c *Config) applyDefaults() {
 	if c.Output.OTLP.Timeout == 0 {
 		c.Output.OTLP.Timeout = 10 * time.Second
 	}
+	if c.Output.OTLP.Protocol == "" {
+		c.Output.OTLP.Protocol = "http"
+	}
 }
 
 func (c *Config) validateListen() error {
@@ -445,8 +455,19 @@ func (c *Config) validate() error {
 	if c.Output.OTLP.HeartbeatCycles < 1 {
 		return errors.New("output.otlp.heartbeat_cycles must be >= 1")
 	}
+	switch c.Output.OTLP.Protocol {
+	case "", "http", "grpc":
+	default:
+		return fmt.Errorf("output.otlp.protocol must be http or grpc, got %q", c.Output.OTLP.Protocol)
+	}
 	if c.Output.OTLP.Enabled {
-		if err := validateHTTPEndpoint(c.Output.OTLP.Endpoint); err != nil {
+		// gRPC endpoints are bare host:port authorities (or a URL); HTTP
+		// endpoints must be a full http/https URL as before.
+		if c.Output.OTLP.Protocol == "grpc" {
+			if c.Output.OTLP.Endpoint == "" {
+				return errors.New("output.otlp.endpoint: endpoint is required")
+			}
+		} else if err := validateHTTPEndpoint(c.Output.OTLP.Endpoint); err != nil {
 			return fmt.Errorf("output.otlp.endpoint: %w", err)
 		}
 	}

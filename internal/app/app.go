@@ -191,11 +191,17 @@ func Run(ctx context.Context, args []string) int {
 
 		var otlpExp *otlp.Exporter
 		if cfg.Output.OTLP.Enabled {
-			otlpExp = otlp.New(otlp.Config{
+			var err error
+			otlpExp, err = otlp.New(ctx, otlp.Config{
 				Endpoint:   cfg.Output.OTLP.Endpoint,
 				Timeout:    cfg.Output.OTLP.Timeout,
 				InstanceID: cfg.Federation.Spoke.SpokeID, // empty in non-spoke roles → falls back to hostname
+				Protocol:   otlp.Protocol(cfg.Output.OTLP.Protocol),
 			})
+			if err != nil {
+				logger.Error("building OTLP exporter", "error", err)
+				return 1
+			}
 		}
 
 		var otlpSem chan struct{}

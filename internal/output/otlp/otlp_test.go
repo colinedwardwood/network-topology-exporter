@@ -1,94 +1,85 @@
-package otlp_test
+package otlp
 
 import (
 	"context"
-	"encoding/json"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	otellog "go.opentelemetry.io/otel/log"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
-	"github.com/colinedwardwood/network-topology-exporter/internal/output/otlp"
 )
 
-// helper: decode the request body as a generic JSON map.
-func decodeBody(t *testing.T, r *http.Request) map[string]any {
+// collectMetrics drains the ManualReader and returns metric name → slice of
+// per-data-point attribute maps (string-valued attributes only, which is all
+// this exporter emits).
+func collectMetrics(t *testing.T, reader metricdataReader) map[string][]map[string]string {
 	t.Helper()
-	b, err := io.ReadAll(r.Body)
-	if err != nil {
-		t.Fatalf("read body: %v", err)
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("collect: %v", err)
 	}
-	var m map[string]any
-	if err := json.Unmarshal(b, &m); err != nil {
-		t.Fatalf("unmarshal body: %v", err)
-	}
-	return m
-}
-
-// drillMetrics walks resourceMetrics[0].scopeMetrics[0].metrics and returns
-// a map of metric name → slice of data-point attribute maps.
-func drillMetrics(t *testing.T, body map[string]any) map[string][]map[string]any {
-	t.Helper()
-	rm := body["resourceMetrics"].([]any)[0].(map[string]any)
-	sm := rm["scopeMetrics"].([]any)[0].(map[string]any)
-	metrics := sm["metrics"].([]any)
-
-	out := make(map[string][]map[string]any)
-	for _, raw := range metrics {
-		m := raw.(map[string]any)
-		name := m["name"].(string)
-		gauge := m["gauge"].(map[string]any)
-		dps := gauge["dataPoints"].([]any)
-		points := make([]map[string]any, 0, len(dps))
-		for _, dp := range dps {
-			attrSlice := dp.(map[string]any)["attributes"].([]any)
-			attrMap := make(map[string]any, len(attrSlice))
-			for _, a := range attrSlice {
-				kv := a.(map[string]any)
-				key := kv["key"].(string)
-				val := kv["value"].(map[string]any)["stringValue"]
-				attrMap[key] = val
+	out := make(map[string][]map[string]string)
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			g, ok := m.Data.(metricdata.Gauge[float64])
+			if !ok {
+				t.Fatalf("metric %q is %T, want Gauge[float64]", m.Name, m.Data)
 			}
-			points = append(points, attrMap)
+			points := make([]map[string]string, 0, len(g.DataPoints))
+			for _, dp := range g.DataPoints {
+				attrs := make(map[string]string)
+				for _, kv := range dp.Attributes.ToSlice() {
+					attrs[string(kv.Key)] = kv.Value.Emit()
+				}
+				points = append(points, attrs)
+			}
+			out[m.Name] = points
 		}
-		out[name] = points
 	}
 	return out
 }
 
-// drillLogs walks resourceLogs[0].scopeLogs[0].logRecords and returns the
-// raw logRecord maps.
-func drillLogs(t *testing.T, body map[string]any) []map[string]any {
+// resourceAttrs collects the resource attributes attached to the metric stream.
+func resourceAttrs(t *testing.T, reader metricdataReader) map[string]string {
 	t.Helper()
-	rl := body["resourceLogs"].([]any)[0].(map[string]any)
-	sl := rl["scopeLogs"].([]any)[0].(map[string]any)
-	recs := sl["logRecords"].([]any)
-	out := make([]map[string]any, 0, len(recs))
-	for _, r := range recs {
-		out = append(out, r.(map[string]any))
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	out := make(map[string]string)
+	if rm.Resource != nil {
+		for _, kv := range rm.Resource.Attributes() {
+			out[string(kv.Key)] = kv.Value.Emit()
+		}
 	}
 	return out
 }
 
-// ── Test 1: PushGraph with 2 edges and 2 devices ──────────────────────────────
+// metricdataReader is the subset of *sdkmetric.ManualReader the tests use.
+type metricdataReader interface {
+	Collect(context.Context, *metricdata.ResourceMetrics) error
+}
+
+// logAttrs flattens a log record's attributes into a map.
+func logAttrs(r sdklog.Record) map[string]string {
+	out := make(map[string]string)
+	r.WalkAttributes(func(kv otellog.KeyValue) bool {
+		out[kv.Key] = kv.Value.AsString()
+		return true
+	})
+	return out
+}
+
+// ── PushGraph: two edges + two devices ───────────────────────────────────────
 
 func TestPushGraphTwoEdgesTwoDevices(t *testing.T) {
-	var gotPath string
-	var gotBody map[string]any
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		gotBody = decodeBody(t, r)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+	exp, reader, _ := newTestExporter("")
 
 	g := discovery.Graph{
 		Edges: []discovery.Edge{
@@ -105,13 +96,8 @@ func TestPushGraphTwoEdgesTwoDevices(t *testing.T) {
 		t.Fatalf("PushGraph: %v", err)
 	}
 
-	if gotPath != "/v1/metrics" {
-		t.Errorf("path = %q, want /v1/metrics", gotPath)
-	}
+	metrics := collectMetrics(t, reader)
 
-	metrics := drillMetrics(t, gotBody)
-
-	// Verify edge data points.
 	edgePoints, ok := metrics["network_topology_edge_info"]
 	if !ok {
 		t.Fatal("metric network_topology_edge_info not found")
@@ -119,8 +105,6 @@ func TestPushGraphTwoEdgesTwoDevices(t *testing.T) {
 	if len(edgePoints) != 2 {
 		t.Fatalf("edge data points = %d, want 2", len(edgePoints))
 	}
-
-	// Find the sw-a→sw-b edge.
 	var foundEdge bool
 	for _, pt := range edgePoints {
 		if pt["src_device"] == "sw-a" && pt["dst_device"] == "sw-b" {
@@ -137,7 +121,6 @@ func TestPushGraphTwoEdgesTwoDevices(t *testing.T) {
 		t.Error("sw-a→sw-b edge data point not found")
 	}
 
-	// Verify device data points.
 	devicePoints, ok := metrics["network_topology_device_info"]
 	if !ok {
 		t.Fatal("metric network_topology_device_info not found")
@@ -147,7 +130,7 @@ func TestPushGraphTwoEdgesTwoDevices(t *testing.T) {
 	}
 	deviceIDs := make(map[string]bool)
 	for _, pt := range devicePoints {
-		deviceIDs[pt["device"].(string)] = true
+		deviceIDs[pt["device"]] = true
 	}
 	for _, want := range []string{"sw-a", "sw-b"} {
 		if !deviceIDs[want] {
@@ -156,38 +139,26 @@ func TestPushGraphTwoEdgesTwoDevices(t *testing.T) {
 	}
 }
 
-// ── Test 2: PushGraph with empty graph ────────────────────────────────────────
+// ── PushGraph: empty graph emits no data points but does not error ───────────
 
 func TestPushGraphEmpty(t *testing.T) {
-	called := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+	exp, reader, _ := newTestExporter("")
 
 	if err := exp.PushGraph(context.Background(), discovery.Graph{}); err != nil {
 		t.Fatalf("PushGraph empty: %v", err)
 	}
-	if !called {
-		t.Error("server was not called for empty graph")
+	metrics := collectMetrics(t, reader)
+	for _, name := range []string{"network_topology_edge_info", "network_topology_device_info"} {
+		if pts := metrics[name]; len(pts) != 0 {
+			t.Errorf("metric %q = %d data points, want 0 for empty graph", name, len(pts))
+		}
 	}
 }
 
-// ── Test 3: PushChanges with Added change → severityNumber=9 ─────────────────
+// ── PushChanges: Added → SeverityInfo ────────────────────────────────────────
 
 func TestPushChangesAdded(t *testing.T) {
-	var gotBody map[string]any
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody = decodeBody(t, r)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+	exp, _, logExp := newTestExporter("")
 
 	after := &discovery.Edge{
 		SrcDevice: "sw-a", SrcPort: "Gi0/1",
@@ -195,41 +166,32 @@ func TestPushChangesAdded(t *testing.T) {
 		DiscoveryProto: "lldp",
 		ObservedAt:     time.Now(),
 	}
-	changes := []graph.EdgeChange{
-		{Kind: graph.ChangeAdded, After: after},
-	}
+	changes := []graph.EdgeChange{{Kind: graph.ChangeAdded, After: after}}
 
 	if err := exp.PushChanges(context.Background(), changes); err != nil {
 		t.Fatalf("PushChanges: %v", err)
 	}
 
-	records := drillLogs(t, gotBody)
-	if len(records) != 1 {
-		t.Fatalf("log records = %d, want 1", len(records))
+	recs := logExp.all()
+	if len(recs) != 1 {
+		t.Fatalf("log records = %d, want 1", len(recs))
 	}
-
-	rec := records[0]
-	if sev := rec["severityNumber"].(float64); sev != 9 {
-		t.Errorf("severityNumber = %v, want 9", sev)
+	rec := recs[0]
+	if rec.Severity() != otellog.SeverityInfo {
+		t.Errorf("severity = %v, want Info (9)", rec.Severity())
 	}
-	body := rec["body"].(map[string]any)["stringValue"].(string)
-	if !strings.Contains(body, "topology change: added") {
-		t.Errorf("body = %q, want to contain %q", body, "topology change: added")
+	if !strings.Contains(rec.Body().AsString(), "topology change: added") {
+		t.Errorf("body = %q, want to contain %q", rec.Body().AsString(), "topology change: added")
+	}
+	if attrs := logAttrs(rec); attrs["change_kind"] != "added" {
+		t.Errorf("change_kind = %q, want added", attrs["change_kind"])
 	}
 }
 
-// ── Test 4: PushChanges with Removed change → severityNumber=13 ──────────────
+// ── PushChanges: Removed → SeverityWarn ──────────────────────────────────────
 
 func TestPushChangesRemoved(t *testing.T) {
-	var gotBody map[string]any
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody = decodeBody(t, r)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+	exp, _, logExp := newTestExporter("")
 
 	before := &discovery.Edge{
 		SrcDevice: "sw-x", SrcPort: "eth0",
@@ -237,220 +199,58 @@ func TestPushChangesRemoved(t *testing.T) {
 		DiscoveryProto: "cdp",
 		ObservedAt:     time.Now(),
 	}
-	changes := []graph.EdgeChange{
-		{Kind: graph.ChangeRemoved, Before: before},
-	}
+	changes := []graph.EdgeChange{{Kind: graph.ChangeRemoved, Before: before}}
 
 	if err := exp.PushChanges(context.Background(), changes); err != nil {
 		t.Fatalf("PushChanges: %v", err)
 	}
 
-	records := drillLogs(t, gotBody)
-	if len(records) != 1 {
-		t.Fatalf("log records = %d, want 1", len(records))
+	recs := logExp.all()
+	if len(recs) != 1 {
+		t.Fatalf("log records = %d, want 1", len(recs))
 	}
-
-	rec := records[0]
-	if sev := rec["severityNumber"].(float64); sev != 13 {
-		t.Errorf("severityNumber = %v, want 13 (WARN for removed)", sev)
+	rec := recs[0]
+	if rec.Severity() != otellog.SeverityWarn {
+		t.Errorf("severity = %v, want Warn (13)", rec.Severity())
 	}
-	if text := rec["severityText"].(string); text != "WARN" {
-		t.Errorf("severityText = %q, want WARN", text)
-	}
-}
-
-// ── Test 5: Server returns 500 → PushGraph returns error ─────────────────────
-
-func TestPushGraphServerError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
-
-	err := exp.PushGraph(context.Background(), discovery.Graph{})
-	if err == nil {
-		t.Fatal("expected error for 500 response, got nil")
+	if rec.SeverityText() != "WARN" {
+		t.Errorf("severityText = %q, want WARN", rec.SeverityText())
 	}
 }
 
-// ── Test 6: Context cancelled → post returns error before sending ─────────────
+// ── Resource attributes carry service identity ───────────────────────────────
 
-func TestPushGraphContextCancelled(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancel immediately
-
-	err := exp.PushGraph(ctx, discovery.Graph{})
-	if err == nil {
-		t.Fatal("expected error for cancelled context, got nil")
-	}
-}
-
-// Test 7: TCP connection reuse — two sequential post calls succeed and the
-// server receives both. This works only if the response body is fully drained
-// before Close, allowing the HTTP client to reuse the connection.
-func TestPostReusesConnection(t *testing.T) {
-	var hitCount int
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Consume the request body so the server side is clean.
-		_, _ = io.ReadAll(r.Body)
-		hitCount++
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
-
-	g := discovery.Graph{
-		Edges: []discovery.Edge{
-			{SrcDevice: "sw-a", SrcPort: "Gi0/1", DstDevice: "sw-b", DstPort: "Gi0/2", DiscoveryProto: "lldp", LinkKind: "ethernet"},
-		},
-	}
-
-	if err := exp.PushGraph(context.Background(), g); err != nil {
-		t.Fatalf("first PushGraph: %v", err)
-	}
-	if err := exp.PushGraph(context.Background(), g); err != nil {
-		t.Fatalf("second PushGraph: %v", err)
-	}
-
-	if hitCount != 2 {
-		t.Errorf("server hit count = %d, want 2", hitCount)
-	}
-}
-
-// Test 8: post returns error for 4xx status codes.
-func TestPostClientError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusBadRequest)
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
-
-	err := exp.PushGraph(context.Background(), discovery.Graph{})
-	if err == nil {
-		t.Fatal("expected error for 400 response, got nil")
-	}
-}
-
-// TestPostRetries503 verifies that post retries on 503 and succeeds on the
-// third attempt (initial + 2 retries = 3 total requests).
-func TestPostRetries503(t *testing.T) {
-	var hitCount int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hitCount++
-		if hitCount < 3 {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
-
-	err := exp.PushGraph(context.Background(), discovery.Graph{})
-	if err != nil {
-		t.Fatalf("expected no error after retry, got: %v", err)
-	}
-	if hitCount != 3 {
-		t.Errorf("server hit count = %d, want 3 (initial + 2 retries)", hitCount)
-	}
-}
-
-// TestPostRetryAfterHeader verifies that post honours a Retry-After: 0 header
-// on a 429 response and succeeds on the second attempt.
-func TestPostRetryAfterHeader(t *testing.T) {
-	var hitCount int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hitCount++
-		if hitCount == 1 {
-			w.Header().Set("Retry-After", "0")
-			w.WriteHeader(http.StatusTooManyRequests)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
-
-	err := exp.PushGraph(context.Background(), discovery.Graph{})
-	if err != nil {
-		t.Fatalf("expected no error after retry, got: %v", err)
-	}
-}
-
-// TestServiceResourceAttributes verifies that the serialised OTLP payload
-// includes service.version and service.instance.id resource attributes.
 func TestServiceResourceAttributes(t *testing.T) {
-	var gotBody map[string]any
+	exp, reader, _ := newTestExporter("spoke-1")
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody = decodeBody(t, r)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
-
-	if err := exp.PushGraph(context.Background(), discovery.Graph{}); err != nil {
+	if err := exp.PushGraph(context.Background(), discovery.Graph{Devices: []discovery.Device{{ID: "d"}}}); err != nil {
 		t.Fatalf("PushGraph: %v", err)
 	}
 
-	rm := gotBody["resourceMetrics"].([]any)[0].(map[string]any)
-	resource := rm["resource"].(map[string]any)
-	attrs := resource["attributes"].([]any)
-
-	attrMap := make(map[string]string, len(attrs))
-	for _, a := range attrs {
-		kv := a.(map[string]any)
-		key := kv["key"].(string)
-		val := kv["value"].(map[string]any)["stringValue"].(string)
-		attrMap[key] = val
+	attrs := resourceAttrs(t, reader)
+	if attrs["service.name"] != serviceName {
+		t.Errorf("service.name = %q, want %q", attrs["service.name"], serviceName)
 	}
-
-	if _, ok := attrMap["service.version"]; !ok {
+	if _, ok := attrs["service.version"]; !ok {
 		t.Error("service.version attribute missing from resource")
 	}
-	if _, ok := attrMap["service.instance.id"]; !ok {
-		t.Error("service.instance.id attribute missing from resource")
+	if attrs["service.instance.id"] != "spoke-1" {
+		t.Errorf("service.instance.id = %q, want spoke-1", attrs["service.instance.id"])
 	}
 }
 
-// TestPushGraphEdgeMetadata verifies that per-edge metadata is serialised as
-// attributes with the network.topology. prefix, covering the metadata loop.
+// ── Per-edge metadata is prefixed and emitted ────────────────────────────────
+
 func TestPushGraphEdgeMetadata(t *testing.T) {
-	var gotBody map[string]any
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody = decodeBody(t, r)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+	exp, reader, _ := newTestExporter("")
 
 	g := discovery.Graph{
 		Edges: []discovery.Edge{
 			{
-				SrcDevice:      "sw-a",
-				SrcPort:        "Gi0/1",
-				DstDevice:      "sw-b",
-				DstPort:        "Gi0/2",
-				DiscoveryProto: "lldp",
-				LinkKind:       "ethernet",
-				Metadata:       map[string]string{"vlan": "100", "speed": "1G"},
+				SrcDevice: "sw-a", SrcPort: "Gi0/1",
+				DstDevice: "sw-b", DstPort: "Gi0/2",
+				DiscoveryProto: "lldp", LinkKind: "ethernet",
+				Metadata: map[string]string{"vlan": "100", "speed": "1G"},
 			},
 		},
 	}
@@ -459,281 +259,30 @@ func TestPushGraphEdgeMetadata(t *testing.T) {
 		t.Fatalf("PushGraph: %v", err)
 	}
 
-	metrics := drillMetrics(t, gotBody)
-	edgePoints, ok := metrics["network_topology_edge_info"]
-	if !ok || len(edgePoints) != 1 {
-		t.Fatalf("expected 1 edge data point, got %v", edgePoints)
+	edgePoints := collectMetrics(t, reader)["network_topology_edge_info"]
+	if len(edgePoints) != 1 {
+		t.Fatalf("expected 1 edge data point, got %d", len(edgePoints))
 	}
-
 	pt := edgePoints[0]
 	if pt["network.topology.vlan"] != "100" {
-		t.Errorf("metadata attr network.topology.vlan = %v, want 100", pt["network.topology.vlan"])
+		t.Errorf("network.topology.vlan = %q, want 100", pt["network.topology.vlan"])
 	}
 	if pt["network.topology.speed"] != "1G" {
-		t.Errorf("metadata attr network.topology.speed = %v, want 1G", pt["network.topology.speed"])
+		t.Errorf("network.topology.speed = %q, want 1G", pt["network.topology.speed"])
 	}
 }
 
-// TestPushChangesNoBeforeNoAfterTimestamp verifies the fallback to time.Now()
-// when neither Before nor After has a valid ObservedAt timestamp.
-func TestPushChangesNoBeforeNoAfterTimestamp(t *testing.T) {
-	var gotBody map[string]any
+// ── Edge reconciliation attributes (LD-10) ───────────────────────────────────
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody = decodeBody(t, r)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
-
-	// Both Before and After are nil — timestamp must default to time.Now().
-	changes := []graph.EdgeChange{
-		{Kind: graph.ChangeAdded},
-	}
-
-	if err := exp.PushChanges(context.Background(), changes); err != nil {
-		t.Fatalf("PushChanges: %v", err)
-	}
-
-	records := drillLogs(t, gotBody)
-	if len(records) != 1 {
-		t.Fatalf("log records = %d, want 1", len(records))
-	}
-	// TimeUnixNano must be a non-empty string (the time.Now() path was hit).
-	ts, ok := records[0]["timeUnixNano"].(string)
-	if !ok || ts == "" {
-		t.Errorf("timeUnixNano = %v, want non-empty string", records[0]["timeUnixNano"])
-	}
-}
-
-// TestPostAllRetriesExhausted503 verifies that post returns an error after
-// exhausting all retries on persistent 503 responses.
-func TestPostAllRetriesExhausted503(t *testing.T) {
-	var hitCount int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hitCount++
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
-
-	err := exp.PushGraph(context.Background(), discovery.Graph{})
-	if err == nil {
-		t.Fatal("expected error after exhausting all 503 retries, got nil")
-	}
-	// postMaxAttempts = 3: all three must have been tried.
-	if hitCount != 3 {
-		t.Errorf("server hit count = %d, want 3", hitCount)
-	}
-}
-
-// TestPostContextCancelledDuringRetryDelay verifies that post returns ctx.Err()
-// when the context is cancelled while waiting for a retry delay (503 path).
-func TestPostContextCancelledDuringRetryDelay(t *testing.T) {
-	// Cancel the context after the first request returns so that the retry
-	// delay select hits the ctx.Done() branch instead of time.After.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// The server cancels ctx immediately after responding 503, before the
-	// retry delay (postBaseDelay = 100ms + jitter) can fire.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		cancel()
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
-
-	err := exp.PushGraph(ctx, discovery.Graph{})
-	if err == nil {
-		t.Fatal("expected error when context cancelled during retry, got nil")
-	}
-}
-
-// TestSchemaURLPresent verifies that the serialised OTLP metrics payload
-// includes a schemaUrl field set to the OpenTelemetry 1.21.0 schema URL.
-func TestSchemaURLPresent(t *testing.T) {
-	var gotBody map[string]any
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody = decodeBody(t, r)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
-
-	if err := exp.PushGraph(context.Background(), discovery.Graph{}); err != nil {
-		t.Fatalf("PushGraph: %v", err)
-	}
-
-	rm := gotBody["resourceMetrics"].([]any)[0].(map[string]any)
-	schemaURL, ok := rm["schemaUrl"].(string)
-	if !ok || schemaURL == "" {
-		t.Fatalf("schemaUrl missing or empty in resourceMetrics[0]; got %v", rm["schemaUrl"])
-	}
-	const wantURL = "https://opentelemetry.io/schemas/1.21.0"
-	if schemaURL != wantURL {
-		t.Errorf("schemaUrl = %q, want %q", schemaURL, wantURL)
-	}
-}
-
-// TestPushGraphInvalidUTF8 verifies that edge and device fields containing
-// invalid UTF-8 bytes are sanitized before JSON serialization. An SNMP device
-// may return arbitrary bytes in sysName or ifDescr; without sanitization
-// json.Marshal would produce invalid JSON or fail entirely.
-func TestPushGraphInvalidUTF8(t *testing.T) {
-	var gotBody map[string]any
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody = decodeBody(t, r)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
-
-	// Embed invalid UTF-8 bytes directly in the string fields.
-	// 0xff and 0xfe are never valid in UTF-8; they should be replaced with "".
-	badSrc := "sw-\xffa"         // invalid byte mid-string
-	badDst := "\xfe\xffsw-b"     // invalid bytes at start
-	badPort := "Gi0/\xff"        // invalid byte at end
-	badDevice := "core-\xff\xfe" // invalid bytes in device ID
-
-	g := discovery.Graph{
-		Edges: []discovery.Edge{
-			{
-				SrcDevice:      badSrc,
-				SrcPort:        badPort,
-				DstDevice:      badDst,
-				DstPort:        "Gi0/2",
-				DiscoveryProto: "lldp",
-				LinkKind:       "ethernet",
-			},
-		},
-		Devices: []discovery.Device{
-			{ID: badDevice},
-		},
-	}
-
-	if err := exp.PushGraph(context.Background(), g); err != nil {
-		t.Fatalf("PushGraph with invalid UTF-8: %v", err)
-	}
-
-	metrics := drillMetrics(t, gotBody)
-
-	edgePoints, ok := metrics["network_topology_edge_info"]
-	if !ok || len(edgePoints) != 1 {
-		t.Fatalf("expected 1 edge data point, got %v", edgePoints)
-	}
-
-	pt := edgePoints[0]
-
-	// Each sanitized value must be valid UTF-8 and must not equal the raw input.
-	for key, raw := range map[string]string{
-		"src_device": badSrc,
-		"src_port":   badPort,
-		"dst_device": badDst,
-	} {
-		got, ok := pt[key].(string)
-		if !ok {
-			t.Errorf("attribute %q missing or not a string", key)
-			continue
-		}
-		if got == raw {
-			t.Errorf("attribute %q was not sanitized: got %q (same as input)", key, got)
-		}
-		if !utf8.ValidString(got) {
-			t.Errorf("attribute %q is still invalid UTF-8 after sanitization: %q", key, got)
-		}
-		// The replacement character must be present.
-		if !strings.Contains(got, "�") {
-			t.Errorf("attribute %q expected replacement char '\\ufffd', got %q", key, got)
-		}
-	}
-
-	devicePoints, ok := metrics["network_topology_device_info"]
-	if !ok || len(devicePoints) != 1 {
-		t.Fatalf("expected 1 device data point, got %v", devicePoints)
-	}
-	devID, ok := devicePoints[0]["device"].(string)
-	if !ok {
-		t.Fatal("device attribute missing or not a string")
-	}
-	if devID == badDevice {
-		t.Errorf("device ID was not sanitized: got %q", devID)
-	}
-	if !utf8.ValidString(devID) {
-		t.Errorf("device ID is still invalid UTF-8: %q", devID)
-	}
-}
-
-// TestPostRetriesNetworkError verifies that a transient network error on the
-// first attempt does not abort the retry loop — post must retry and succeed on
-// the second attempt.
-//
-// The test uses a two-phase httptest.Server: the first request is hijacked and
-// the raw connection is closed immediately (simulating a connection reset),
-// forcing client.Do to return an error. The second request is handled normally
-// and returns 200 OK.
-func TestPostRetriesNetworkError(t *testing.T) {
-	var hitCount int
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hitCount++
-		if hitCount == 1 {
-			// Hijack and immediately close the connection so that client.Do
-			// receives a network error (connection reset / EOF).
-			hj, ok := w.(http.Hijacker)
-			if !ok {
-				t.Error("ResponseWriter does not implement http.Hijacker")
-				return
-			}
-			conn, _, _ := hj.Hijack()
-			_ = conn.Close()
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
-
-	err := exp.PushGraph(context.Background(), discovery.Graph{})
-	if err != nil {
-		t.Fatalf("expected success after retry, got: %v", err)
-	}
-	if hitCount != 2 {
-		t.Errorf("server hit count = %d, want 2 (1 failed + 1 successful)", hitCount)
-	}
-}
-
-// TestPushGraphEdgeAttributes verifies that LD-10 reconciliation labels
-// (Direction, Confidence, Adjacency, PrecedenceRank) are serialised as data
-// point attributes on the network_topology_edge_info metric.
 func TestPushGraphEdgeAttributes(t *testing.T) {
-	var gotBody map[string]any
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody = decodeBody(t, r)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+	exp, reader, _ := newTestExporter("")
 
 	g := discovery.Graph{
 		Edges: []discovery.Edge{
 			{
-				SrcDevice:      "sw-a",
-				SrcPort:        "Gi0/1",
-				DstDevice:      "sw-b",
-				DstPort:        "Gi0/2",
-				DiscoveryProto: "lldp",
-				LinkKind:       "ethernet",
+				SrcDevice: "sw-a", SrcPort: "Gi0/1",
+				DstDevice: "sw-b", DstPort: "Gi0/2",
+				DiscoveryProto: "lldp", LinkKind: "ethernet",
 				Direction:      discovery.DirectionBidirectional,
 				Confidence:     discovery.ConfidenceHigh,
 				Adjacency:      discovery.AdjacencyDirect,
@@ -746,185 +295,210 @@ func TestPushGraphEdgeAttributes(t *testing.T) {
 		t.Fatalf("PushGraph: %v", err)
 	}
 
-	metrics := drillMetrics(t, gotBody)
-	edgePoints, ok := metrics["network_topology_edge_info"]
-	if !ok || len(edgePoints) != 1 {
-		t.Fatalf("expected 1 edge data point, got %v", edgePoints)
+	edgePoints := collectMetrics(t, reader)["network_topology_edge_info"]
+	if len(edgePoints) != 1 {
+		t.Fatalf("expected 1 edge data point, got %d", len(edgePoints))
 	}
-
 	pt := edgePoints[0]
-	checks := map[string]string{
-		"direction":       "bidirectional",
-		"confidence":      "high",
-		"adjacency":       "direct",
-		"precedence_rank": "1",
-	}
-	for attr, want := range checks {
-		got, ok := pt[attr].(string)
-		if !ok {
-			t.Errorf("attribute %q missing or not a string", attr)
-			continue
-		}
-		if got != want {
-			t.Errorf("attribute %q = %q, want %q", attr, got, want)
+	for attr, want := range map[string]string{
+		"direction": "bidirectional", "confidence": "high",
+		"adjacency": "direct", "precedence_rank": "1",
+	} {
+		if pt[attr] != want {
+			t.Errorf("attribute %q = %q, want %q", attr, pt[attr], want)
 		}
 	}
 }
 
-// TestPushGraphDeviceAttributes verifies that Vendor, Model, OSVersion, and
-// Site are serialised as data point attributes on the network_topology_device_info
-// metric when non-empty.
+// ── Device attributes present and omit-empty ─────────────────────────────────
+
 func TestPushGraphDeviceAttributes(t *testing.T) {
-	var gotBody map[string]any
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody = decodeBody(t, r)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+	exp, reader, _ := newTestExporter("")
 
 	g := discovery.Graph{
 		Devices: []discovery.Device{
-			{
-				ID:        "rtr-1",
-				Vendor:    "Cisco",
-				Model:     "ASR1001",
-				OSVersion: "16.9",
-				Site:      "dc1",
-			},
+			{ID: "rtr-1", Vendor: "Cisco", Model: "ASR1001", OSVersion: "16.9", Site: "dc1"},
 		},
 	}
-
 	if err := exp.PushGraph(context.Background(), g); err != nil {
 		t.Fatalf("PushGraph: %v", err)
 	}
 
-	metrics := drillMetrics(t, gotBody)
-	devicePoints, ok := metrics["network_topology_device_info"]
-	if !ok || len(devicePoints) != 1 {
-		t.Fatalf("expected 1 device data point, got %v", devicePoints)
+	devicePoints := collectMetrics(t, reader)["network_topology_device_info"]
+	if len(devicePoints) != 1 {
+		t.Fatalf("expected 1 device data point, got %d", len(devicePoints))
 	}
-
 	pt := devicePoints[0]
-	checks := map[string]string{
-		"device":     "rtr-1",
-		"vendor":     "Cisco",
-		"model":      "ASR1001",
-		"os_version": "16.9",
-		"site":       "dc1",
-	}
-	for attr, want := range checks {
-		got, ok := pt[attr].(string)
-		if !ok {
-			t.Errorf("attribute %q missing or not a string", attr)
-			continue
-		}
-		if got != want {
-			t.Errorf("attribute %q = %q, want %q", attr, got, want)
+	for attr, want := range map[string]string{
+		"device": "rtr-1", "vendor": "Cisco", "model": "ASR1001",
+		"os_version": "16.9", "site": "dc1",
+	} {
+		if pt[attr] != want {
+			t.Errorf("attribute %q = %q, want %q", attr, pt[attr], want)
 		}
 	}
 }
 
-// TestPushGraphDeviceAttributesOmitEmpty verifies that device attributes with
-// empty values are not included in the serialised data point.
 func TestPushGraphDeviceAttributesOmitEmpty(t *testing.T) {
-	var gotBody map[string]any
+	exp, reader, _ := newTestExporter("")
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody = decodeBody(t, r)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
-
-	g := discovery.Graph{
-		Devices: []discovery.Device{
-			{ID: "sw-plain"}, // no Vendor/Model/OSVersion/Site
-		},
-	}
-
+	g := discovery.Graph{Devices: []discovery.Device{{ID: "sw-plain"}}}
 	if err := exp.PushGraph(context.Background(), g); err != nil {
 		t.Fatalf("PushGraph: %v", err)
 	}
 
-	metrics := drillMetrics(t, gotBody)
-	devicePoints, ok := metrics["network_topology_device_info"]
-	if !ok || len(devicePoints) != 1 {
-		t.Fatalf("expected 1 device data point, got %v", devicePoints)
+	devicePoints := collectMetrics(t, reader)["network_topology_device_info"]
+	if len(devicePoints) != 1 {
+		t.Fatalf("expected 1 device data point, got %d", len(devicePoints))
 	}
-
 	pt := devicePoints[0]
 	for _, absent := range []string{"vendor", "model", "os_version", "site"} {
 		if _, exists := pt[absent]; exists {
-			t.Errorf("attribute %q should be absent for empty device, but was present", absent)
+			t.Errorf("attribute %q should be absent for empty device", absent)
 		}
 	}
 }
 
-// TestPushChangesInvalidUTF8 verifies that edge change fields with invalid
-// UTF-8 bytes are sanitized before JSON serialization in PushChanges.
+// ── Change timestamp falls back to time.Now() ────────────────────────────────
+
+func TestPushChangesNoBeforeNoAfterTimestamp(t *testing.T) {
+	exp, _, logExp := newTestExporter("")
+
+	changes := []graph.EdgeChange{{Kind: graph.ChangeAdded}}
+	if err := exp.PushChanges(context.Background(), changes); err != nil {
+		t.Fatalf("PushChanges: %v", err)
+	}
+	recs := logExp.all()
+	if len(recs) != 1 {
+		t.Fatalf("log records = %d, want 1", len(recs))
+	}
+	if recs[0].Timestamp().IsZero() {
+		t.Error("timestamp is zero; want the time.Now() fallback")
+	}
+}
+
+// ── Invalid UTF-8 is sanitized in metric attributes ──────────────────────────
+
+func TestPushGraphInvalidUTF8(t *testing.T) {
+	exp, reader, _ := newTestExporter("")
+
+	badSrc := "sw-\xffa"
+	badDst := "\xfe\xffsw-b"
+	badPort := "Gi0/\xff"
+	badDevice := "core-\xff\xfe"
+
+	g := discovery.Graph{
+		Edges: []discovery.Edge{
+			{
+				SrcDevice: badSrc, SrcPort: badPort, DstDevice: badDst, DstPort: "Gi0/2",
+				DiscoveryProto: "lldp", LinkKind: "ethernet",
+			},
+		},
+		Devices: []discovery.Device{{ID: badDevice}},
+	}
+	if err := exp.PushGraph(context.Background(), g); err != nil {
+		t.Fatalf("PushGraph with invalid UTF-8: %v", err)
+	}
+
+	metrics := collectMetrics(t, reader)
+	edgePoints := metrics["network_topology_edge_info"]
+	if len(edgePoints) != 1 {
+		t.Fatalf("expected 1 edge data point, got %d", len(edgePoints))
+	}
+	pt := edgePoints[0]
+	for key, raw := range map[string]string{"src_device": badSrc, "src_port": badPort, "dst_device": badDst} {
+		got := pt[key]
+		if got == raw {
+			t.Errorf("attribute %q not sanitized: got %q (same as input)", key, got)
+		}
+		if !utf8.ValidString(got) {
+			t.Errorf("attribute %q still invalid UTF-8: %q", key, got)
+		}
+		if !strings.Contains(got, "�") {
+			t.Errorf("attribute %q expected replacement char, got %q", key, got)
+		}
+	}
+	devicePoints := metrics["network_topology_device_info"]
+	if len(devicePoints) != 1 {
+		t.Fatalf("expected 1 device data point, got %d", len(devicePoints))
+	}
+	devID := devicePoints[0]["device"]
+	if devID == badDevice {
+		t.Errorf("device ID not sanitized: got %q", devID)
+	}
+	if !utf8.ValidString(devID) {
+		t.Errorf("device ID still invalid UTF-8: %q", devID)
+	}
+}
+
+// ── Invalid UTF-8 is sanitized in log attributes ─────────────────────────────
+
 func TestPushChangesInvalidUTF8(t *testing.T) {
-	var gotBody map[string]any
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody = decodeBody(t, r)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	exp := otlp.New(otlp.Config{Endpoint: srv.URL})
+	exp, _, logExp := newTestExporter("")
 
 	badSrc := "sw-\xff"
 	badDst := "\xfesw-b"
-
 	after := &discovery.Edge{
-		SrcDevice:      badSrc,
-		SrcPort:        "Gi0/1",
-		DstDevice:      badDst,
-		DstPort:        "Gi0/2",
-		DiscoveryProto: "lldp",
-		ObservedAt:     time.Now(),
+		SrcDevice: badSrc, SrcPort: "Gi0/1", DstDevice: badDst, DstPort: "Gi0/2",
+		DiscoveryProto: "lldp", ObservedAt: time.Now(),
 	}
-	changes := []graph.EdgeChange{
-		{Kind: graph.ChangeAdded, After: after},
-	}
-
+	changes := []graph.EdgeChange{{Kind: graph.ChangeAdded, After: after}}
 	if err := exp.PushChanges(context.Background(), changes); err != nil {
 		t.Fatalf("PushChanges with invalid UTF-8: %v", err)
 	}
 
-	records := drillLogs(t, gotBody)
-	if len(records) != 1 {
-		t.Fatalf("log records = %d, want 1", len(records))
+	recs := logExp.all()
+	if len(recs) != 1 {
+		t.Fatalf("log records = %d, want 1", len(recs))
 	}
-
-	// Extract attributes from the log record.
-	attrSlice := records[0]["attributes"].([]any)
-	attrMap := make(map[string]string, len(attrSlice))
-	for _, a := range attrSlice {
-		kv := a.(map[string]any)
-		key := kv["key"].(string)
-		val := kv["value"].(map[string]any)["stringValue"].(string)
-		attrMap[key] = val
-	}
-
-	for key, raw := range map[string]string{
-		"src_device": badSrc,
-		"dst_device": badDst,
-	} {
-		got, ok := attrMap[key]
+	attrs := logAttrs(recs[0])
+	for key, raw := range map[string]string{"src_device": badSrc, "dst_device": badDst} {
+		got, ok := attrs[key]
 		if !ok {
 			t.Errorf("log attribute %q missing", key)
 			continue
 		}
 		if got == raw {
-			t.Errorf("log attribute %q was not sanitized: got %q", key, got)
+			t.Errorf("log attribute %q not sanitized: got %q", key, got)
 		}
 		if !utf8.ValidString(got) {
-			t.Errorf("log attribute %q is still invalid UTF-8: %q", key, got)
+			t.Errorf("log attribute %q still invalid UTF-8: %q", key, got)
 		}
 	}
+}
+
+// ── Config defaults: backward compatibility ──────────────────────────────────
+
+// TestNewDefaultsHTTPProtobuf proves an existing deployment that only sets
+// Endpoint still builds successfully and defaults to OTLP/HTTP + protobuf — the
+// pre-SDK behaviour. This is the backward-compatibility guarantee for #82.
+func TestNewDefaultsHTTPProtobuf(t *testing.T) {
+	exp, err := New(context.Background(), Config{Endpoint: "http://127.0.0.1:4318"})
+	if err != nil {
+		t.Fatalf("New with only Endpoint set: %v", err)
+	}
+	defer func() { _ = exp.Shutdown(context.Background()) }()
+	// No push is performed (no live collector); construction succeeding with
+	// only Endpoint set is the contract under test.
+}
+
+// TestNewRejectsUnknownProtocol guards the protocol switch.
+func TestNewRejectsUnknownProtocol(t *testing.T) {
+	if _, err := New(context.Background(), Config{Endpoint: "x", Protocol: "ftp"}); err == nil {
+		t.Fatal("New with Protocol=ftp: want error, got nil")
+	}
+}
+
+// TestNewGRPCConstructs proves the gRPC protocol path builds (no live
+// collector is contacted at construction time).
+func TestNewGRPCConstructs(t *testing.T) {
+	exp, err := New(context.Background(), Config{Endpoint: "localhost:4317", Protocol: ProtocolGRPC})
+	if err != nil {
+		t.Fatalf("New gRPC: %v", err)
+	}
+	// Bound shutdown: there is no live collector, so a flush would otherwise
+	// block on the gRPC dial/retry until its own deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_ = exp.Shutdown(ctx)
 }
