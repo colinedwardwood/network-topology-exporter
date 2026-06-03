@@ -1,5 +1,9 @@
 # Operator Troubleshooting Guide
 
+For upgrade-specific troubleshooting (snapshot version mismatch, config parse errors after a minor-version upgrade), see [`docs/operator/upgrades.md`](upgrades.md).
+
+For SLO guidance and the recommended alert rules that fire before these symptoms appear, see [`docs/operator/slos.md`](slos.md).
+
 ## 1. No edges in /metrics
 
 **Check `network_topology_graph_stale`.**
