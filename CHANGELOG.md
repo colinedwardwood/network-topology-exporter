@@ -146,6 +146,13 @@ v1.3.1 lands under this milestone instead, renamed to
 
 ### Documentation
 
+- **RFC 8345 YANG topology mapping (design reference for #75).** New
+  `docs/operator/yang-topology.md` defines how the reconciled graph maps onto
+  the RFC 8345 / RFC 8346 YANG models (Device → `node` + termination-points,
+  Edge → unidirectional `link`s, exporter provenance via an `ntx-topology`
+  augmentation), with a worked example and the known gaps (no router-id/prefix
+  collection yet). The YANG output path + `pyang`/`yanglint` CI remain v2.0.0
+  work; this is the mapping contract that implementation will follow.
 - **Threat model document** — New `docs/operator/threat-model.md` with a
   STRIDE matrix scoped to the binary's role on the management plane. Names
   assets, threats, mitigations shipping today (including the new PDU fuzz
