@@ -25,6 +25,21 @@ v1.3.1 lands under this milestone instead, renamed to
 
 ### Features
 
+- **Enriched topology Node Graph dashboard.** Reworked the "02. Network
+  Topology" dashboard (`dashboards/test-harness/topology-graph.json`) so each
+  node carries protocol and connectivity context drawn entirely from the
+  exporter's existing `network_topology_device_info` / `edge_info` metrics:
+  the node ring is split into proportional, per-discovery-protocol arcs (LLDP,
+  CDP, BGP, OSPF, IS-IS, FDB, MPLS-TE, configured) that sum to 1; the secondary
+  stat shows the device's link count (degree, counted across both endpoints);
+  edges label the `src_port → dst_port` cabling with discovery protocol,
+  link kind, and direction in the hover tooltip. Per-device protocol ratios are
+  assembled with a SQL Expression (`__expr__`) that pivots a single per-protocol
+  ratio query into the `arc__*` columns the Node Graph colours — so the panel
+  needs no new metrics. An "About this dashboard" panel explains how to read the
+  graph and what richer SNMP data could add (e.g. link speed → edge thickness).
+  Note: the panel relies on Grafana **SQL Expressions**.
+
 - **Long-running validation lab** — Added `deploy/long-running-test/`, a
   continuously-running harness. Six containerlab nodes (`spine1, spine2,
   leaf1..leaf4`) deploy once with pinned management IPs in a dedicated
