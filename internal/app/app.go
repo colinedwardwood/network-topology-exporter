@@ -27,6 +27,7 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
 	"github.com/colinedwardwood/network-topology-exporter/internal/output/otlp"
 	"github.com/colinedwardwood/network-topology-exporter/internal/snapshot"
+	"github.com/colinedwardwood/network-topology-exporter/internal/tracing"
 	"github.com/colinedwardwood/network-topology-exporter/internal/version"
 )
 
@@ -137,6 +138,34 @@ func Run(ctx context.Context, args []string) int {
 
 	var workerDone sync.WaitGroup
 	var otlpWg sync.WaitGroup
+
+	// Issue #68: opt-in OpenTelemetry tracing of the discovery cycle. Built
+	// before the role switch so both hub mode (which records hub.handlePush on
+	// the receiving side of a spoke push) and spoke/standalone mode (which
+	// records discovery.cycle and spoke.push) install the same global
+	// TracerProvider + W3C TraceContext propagator. When traces.enabled is
+	// false, no provider is installed and the global tracer stays the OTel
+	// no-op, so all instrumentation is a cheap no-op.
+	var traceProvider *tracing.Provider
+	if cfg.Output.OTLP.Traces.Enabled {
+		sampleRate := 0.1
+		if cfg.Output.OTLP.Traces.SampleRate != nil {
+			sampleRate = *cfg.Output.OTLP.Traces.SampleRate
+		}
+		var err error
+		traceProvider, err = tracing.New(ctx, tracing.Config{
+			Endpoint:   cfg.Output.OTLP.Endpoint,
+			Timeout:    cfg.Output.OTLP.Timeout,
+			Protocol:   tracing.Protocol(cfg.Output.OTLP.Protocol),
+			InstanceID: cfg.Federation.Spoke.SpokeID, // empty in non-spoke roles → falls back to hostname
+			SampleRate: sampleRate,
+		})
+		if err != nil {
+			logger.Error("building tracer provider", "error", err)
+			return 1
+		}
+		logger.Info("tracing enabled", "sample_rate", sampleRate, "protocol", cfg.Output.OTLP.Protocol)
+	}
 
 	switch cfg.Federation.Role {
 	case "hub":
@@ -291,6 +320,13 @@ func Run(ctx context.Context, args []string) int {
 	}
 	otlpWg.Wait()
 	logger.Info("otlp push goroutines drained")
+	if traceProvider != nil {
+		if err := traceProvider.Shutdown(shutdownCtx); err != nil {
+			logger.Error("tracer provider shutdown error", "error", err)
+		} else {
+			logger.Info("tracer provider flushed and shut down")
+		}
+	}
 	logger.Info("clean shutdown complete")
 	return 0
 }

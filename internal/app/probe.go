@@ -9,10 +9,14 @@ import (
 	"os"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 	snmpwalk "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
+	"github.com/colinedwardwood/network-topology-exporter/internal/tracing"
 )
 
 // CredentialCandidate pairs a fully-populated snmpwalk.Params with the name of
@@ -98,8 +102,16 @@ func CredentialCandidates(cfg *config.Config, resolver *credentials.Resolver, ip
 // because the caller will use them for module walks; the caller MUST zeroize
 // them after those walks complete.
 func WalkSystemWithCredentials(ctx context.Context, cfg *config.Config, resolver *credentials.Resolver, ip net.IP, t config.TargetConfig, logger *slog.Logger) (*discovery.Device, snmpwalk.Params, string, error) {
+	// Issue #68: credentials.resolve span. Records how many candidates the
+	// fallback ladder produced, how many were tried, and the cumulative
+	// trial-limiter wait. Child of target.poll. No-op when tracing is disabled.
+	ctx, span := tracing.Tracer().Start(ctx, "credentials.resolve")
+	defer span.End()
+
 	candidates := CredentialCandidates(cfg, resolver, ip, t, logger)
+	span.SetAttributes(attribute.Int("credential.candidates", len(candidates)))
 	if len(candidates) == 0 {
+		span.SetStatus(codes.Error, "no usable credential profiles")
 		return nil, snmpwalk.Params{}, "", fmt.Errorf("no usable credential profiles for %s", ip)
 	}
 
@@ -115,16 +127,35 @@ func WalkSystemWithCredentials(ctx context.Context, cfg *config.Config, resolver
 
 	var lastErr error
 	allTimedOut := true // true until we see a non-timeout failure
+	var trials int
+	var limiterWait time.Duration
 	for i := range candidates {
 		c := &candidates[i]
+		trials++
+		// Measure how long the LD-12 trial limiter made this trial wait so the
+		// span surfaces token-bucket back-pressure during credential resolve.
+		acquireStart := time.Now()
 		if err := resolver.AcquireTrial(ctx); err != nil {
+			limiterWait += time.Since(acquireStart)
+			span.SetAttributes(
+				attribute.Int("credential.trials", trials),
+				attribute.Float64("credential.limiter_wait_seconds", limiterWait.Seconds()),
+			)
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "trial limiter acquire failed")
 			zeroizeFromIdx(i)
 			return nil, snmpwalk.Params{}, "", err
 		}
+		limiterWait += time.Since(acquireStart)
 		trialCtx, cancel := context.WithTimeout(ctx, cfg.Discovery.TimeoutPerDevice)
 		dev, err := snmpwalk.Walk(trialCtx, c.Params)
 		cancel()
 		if err == nil {
+			span.SetAttributes(
+				attribute.Int("credential.trials", trials),
+				attribute.Float64("credential.limiter_wait_seconds", limiterWait.Seconds()),
+				attribute.String("credential.winning_profile", c.ProfileName),
+			)
 			// Caller owns c.Params now and must zeroize it after module walks.
 			zeroizeFromIdx(i + 1)
 			return dev, c.Params, c.ProfileName, nil
@@ -151,6 +182,14 @@ func WalkSystemWithCredentials(ctx context.Context, cfg *config.Config, resolver
 	// the cached profile is still likely correct.
 	if !allTimedOut {
 		resolver.RecordFailure(ip.String())
+	}
+	span.SetAttributes(
+		attribute.Int("credential.trials", trials),
+		attribute.Float64("credential.limiter_wait_seconds", limiterWait.Seconds()),
+	)
+	if lastErr != nil {
+		span.RecordError(lastErr)
+		span.SetStatus(codes.Error, "all credential candidates failed")
 	}
 	return nil, snmpwalk.Params{}, "", lastErr
 }

@@ -180,6 +180,18 @@ snapshot:
 #     # exporters do not implement OTLP/JSON) — a wire-format change from the
 #     # pre-v1.5.0 hand-rolled JSON path. Receivers must accept protobuf.
 #     protocol: http
+#     # traces: opt-in OpenTelemetry tracing of the exporter's own discovery
+#     # cycle (v1.7.0, issue #68). Disabled by default. When enabled, spans are
+#     # exported over the SAME endpoint + protocol + auth as the metrics/logs
+#     # above — tracing has no endpoint of its own. See docs/operator/tracing.md.
+#     traces:
+#       # enabled turns on tracing. Default false (instrumentation is a no-op).
+#       enabled: false
+#       # sample_rate is the head-sampling ratio in [0,1] applied to the root
+#       # discovery.cycle span; child spans inherit the parent decision
+#       # (ParentBased). Default 0.1. Use 1.0 to trace every cycle while
+#       # debugging; keep it small in production to bound trace volume.
+#       sample_rate: 0.1
 
 # ─── Per-device enrichment ─────────────────────────────────────────────────
 # Targets attach enrichment metadata (SNMP port, site label, custom labels)

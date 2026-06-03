@@ -20,12 +20,17 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
+
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
 	"github.com/colinedwardwood/network-topology-exporter/internal/limits"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
 	"github.com/colinedwardwood/network-topology-exporter/internal/snapshot"
+	"github.com/colinedwardwood/network-topology-exporter/internal/tracing"
 )
 
 // Per-push payload caps. These bound the size of a single spoke push and are
@@ -416,6 +421,16 @@ func validateSpokePayload(p SpokePayload) error {
 }
 
 func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
+	// Issue #68: continue the spoke's trace. Extract the W3C traceparent the
+	// spoke injected into the request headers and start hub.handlePush as a
+	// child of the spoke.push span, so the hub span shares the spoke's trace
+	// ID. When the spoke is not tracing, no traceparent is present and this
+	// span starts a fresh (unsampled-by-default) root.
+	ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+	ctx, span := tracing.Tracer().Start(ctx, "hub.handlePush")
+	defer span.End()
+	r = r.WithContext(ctx)
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -465,6 +480,7 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "spoke_id required", http.StatusBadRequest)
 		return
 	}
+	span.SetAttributes(attribute.String("spoke.id", payload.SpokeID))
 	if len(payload.SpokeID) > 128 {
 		http.Error(w, "spoke_id too long (max 128)", http.StatusBadRequest)
 		return

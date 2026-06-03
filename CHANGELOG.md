@@ -57,6 +57,24 @@ v1.3.1 lands under this milestone instead, renamed to
   Mutator emits structured JSON events to stdout; Alloy ships them to
   Loki labelled `tester_id=long-running-lab, job=long-running-mutator`.
 
+### Observability
+
+- **#68 — Opt-in OpenTelemetry tracing of the discovery cycle (v1.7.0 work).**
+  The exporter can now emit OTel traces of its own discovery cycle. A new
+  `output.otlp.traces` block (`enabled`, default `false`; `sample_rate`, default
+  `0.1`, validated to `[0,1]`) turns it on. Tracing reuses the **#82 OTLP SDK
+  path** — the same `TracerProvider`-style SDK, the existing
+  `output.otlp.endpoint`, `output.otlp.protocol`, and transport — so it gets no
+  endpoint of its own. Spans nest per cycle: `discovery.cycle` →
+  `target.poll` → (`credentials.resolve`, `<module>.walk` for lldp/cdp/fdb/ospf/
+  bgp/isis/mpls_te), plus `graph.reconcile`, and on a federation spoke
+  `spoke.push`. The spoke injects a W3C `traceparent` into its outbound push so
+  the hub's `hub.handlePush` span continues the same trace (TraceContext set as
+  the global propagator). Head sampling is
+  `ParentBased(TraceIDRatioBased(sample_rate))`, keeping each trace whole. When
+  disabled, no provider is installed and the instrumentation resolves to the
+  OTel no-op tracer at effectively zero cost. See `docs/operator/tracing.md`.
+
 ### Security
 
 - **Fuzz coverage for SNMP parsers and index decoders.** Sixteen new

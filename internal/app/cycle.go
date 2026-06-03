@@ -10,6 +10,10 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
@@ -23,6 +27,7 @@ import (
 	snmpwalk "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
 	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/colinedwardwood/network-topology-exporter/internal/tracing"
 )
 
 // LargeTopologyEdgeThreshold is the edge count above which the exporter
@@ -140,12 +145,25 @@ func RunCycle(
 			}
 			defer func() { <-sem }()
 
+			// Issue #68: per-target span, child of discovery.cycle. targetCtx
+			// flows into the credential resolve and every module walk so they
+			// nest under target.poll. No-op when tracing is disabled.
+			targetStart := time.Now()
+			targetCtx, targetSpan := tracing.Tracer().Start(cycleCtx, "target.poll",
+				trace.WithAttributes(attribute.String("target.ip", target.Host)))
+			defer func() {
+				targetSpan.SetAttributes(
+					attribute.Float64("target.latency_seconds", time.Since(targetStart).Seconds()))
+				targetSpan.End()
+			}()
+
 			ip := net.ParseIP(target.Host)
 			if ip == nil {
-				addrs, err := net.DefaultResolver.LookupHost(cycleCtx, target.Host)
+				addrs, err := net.DefaultResolver.LookupHost(targetCtx, target.Host)
 				if err != nil || len(addrs) == 0 {
 					logger.Warn("host resolution failed", "host", target.Host, "error", err)
 					recordFail(metrics.DiscoveryReasonDNSFailed)
+					targetSpan.SetStatus(codes.Error, "dns resolution failed")
 					return
 				}
 				ip = net.ParseIP(addrs[0])
@@ -157,12 +175,16 @@ func RunCycle(
 				logger.Warn("resolved target outside allow-list, skipping",
 					"host", target.Host, "ip", ip)
 				recordFail(metrics.DiscoveryReasonOutsideAllowList)
+				targetSpan.SetStatus(codes.Error, "outside allow-list")
 				return
 			}
 
-			dev, params, profileName, err := WalkSystemWithCredentials(cycleCtx, cfg, resolver, ip, target, logger)
+			dev, params, profileName, err := WalkSystemWithCredentials(targetCtx, cfg, resolver, ip, target, logger)
+			targetSpan.SetAttributes(attribute.String("credential.profile", profileName))
 			if err != nil {
 				logger.Warn("snmp walk failed", "target", target.Host, "error", err)
+				targetSpan.RecordError(err)
+				targetSpan.SetStatus(codes.Error, "credential resolve / system walk failed")
 				m.DiscoveryHardFailTotal.WithLabelValues("system", "system_group_walk_error").Inc()
 				m.CredentialTrialsTotal.WithLabelValues("failed").Inc()
 				// Issue #20: partition the walk-failure counter by
@@ -187,7 +209,7 @@ func RunCycle(
 			// becomes unreachable to a sensible cleanup. Issue #5.
 			defer params.Zeroize()
 
-			devCtx, cancel := context.WithTimeout(cycleCtx, cfg.Discovery.TimeoutPerDevice)
+			devCtx, cancel := context.WithTimeout(targetCtx, cfg.Discovery.TimeoutPerDevice)
 			defer cancel()
 			devCtx = snmpwalk.ContextWithDecodeIssueReporter(devCtx, func(issue snmpwalk.DecodeIssue) {
 				m.DiscoveryDecodeIssues.WithLabelValues(issue.Module, string(issue.OID), issue.Reason).Add(float64(issue.Count))
@@ -238,16 +260,25 @@ func RunCycle(
 					continue
 				}
 				modStart := time.Now()
-				modCtx := devCtx
+				// Issue #68: per-module span, child of target.poll. Span name
+				// is "<proto>.walk" (e.g. lldp.walk, bgp.walk; the MPLS module
+				// uses its mpls_te proto identifier → mpls_te.walk). No-op when
+				// tracing is disabled.
+				modCtx, modSpan := tracing.Tracer().Start(devCtx, mod.Proto+".walk")
 				var modCancel context.CancelFunc = func() {}
 				if cfg.Discovery.TimeoutPerModule > 0 {
-					modCtx, modCancel = context.WithTimeout(devCtx, cfg.Discovery.TimeoutPerModule)
+					modCtx, modCancel = context.WithTimeout(modCtx, cfg.Discovery.TimeoutPerModule)
 				}
 				edges, oos, err := mod.Walk(modCtx, params, dev.ID, allowedNets)
 				modCancel()
 				m.DiscoveryModuleDuration.WithLabelValues(mod.Proto).Observe(time.Since(modStart).Seconds())
+				modSpan.SetAttributes(attribute.Int("walk.pdu_count", len(edges)))
 				if err != nil {
 					logger.Debug(mod.Proto+" walk failed", "target", target.Host, "error", err)
+					modSpan.SetAttributes(attribute.String("walk.outcome", "failed"))
+					modSpan.RecordError(err)
+					modSpan.SetStatus(codes.Error, "module walk failed")
+					modSpan.End()
 					reason := "module_walk_error"
 					var policyErr *discovery.PolicyError
 					if errors.As(err, &policyErr) && policyErr.Reason != "" {
@@ -275,14 +306,17 @@ func RunCycle(
 					m.DiscoveryDegradedTotal.WithLabelValues(mod.Proto, reason).Inc()
 				}
 				if len(degradedReasons) > 0 {
+					modSpan.SetAttributes(attribute.String("walk.outcome", "degraded"))
 					if _, ok := modStatus[mod.Proto]; !ok {
 						modStatus[mod.Proto] = 1
 					}
 				} else {
+					modSpan.SetAttributes(attribute.String("walk.outcome", "ok"))
 					if _, ok := modStatus[mod.Proto]; !ok {
 						modStatus[mod.Proto] = 0
 					}
 				}
+				modSpan.End()
 				allEdges = append(allEdges, edges...)
 				// Tag each OOS entry with the protocol that reported it so the
 				// boundary_observation_info metric and hub OOS matching have a
@@ -391,8 +425,23 @@ func RunCycle(
 	}
 	canonicalEdges := SynthesizeEdges(logger, rawEdges, ipToID, allARPMACs, m.FDBSuppressedMACs)
 
-	// Phase 2 complete; run reconciliation.
+	// Phase 2 complete; run reconciliation. Issue #68: graph.reconcile span,
+	// child of discovery.cycle, with per-source (discovery protocol) input edge
+	// counts as attributes. No-op when tracing is disabled.
+	_, reconcileSpan := tracing.Tracer().Start(ctx, "graph.reconcile")
+	bySource := make(map[discovery.DiscoveryProtocol]int)
+	for _, e := range canonicalEdges {
+		bySource[e.DiscoveryProto]++
+	}
+	reconcileAttrs := make([]attribute.KeyValue, 0, len(bySource)+2)
+	reconcileAttrs = append(reconcileAttrs, attribute.Int("reconcile.input_edges", len(canonicalEdges)))
+	for proto, n := range bySource {
+		reconcileAttrs = append(reconcileAttrs, attribute.Int("reconcile.edges."+string(proto), n))
+	}
 	reconciledEdges, conflicts := graph.Reconcile(canonicalEdges)
+	reconcileAttrs = append(reconcileAttrs, attribute.Int("reconcile.output_edges", len(reconciledEdges)))
+	reconcileSpan.SetAttributes(reconcileAttrs...)
+	reconcileSpan.End()
 
 	// LD-14: advance unconfirmed-link age counters and drop expired edges.
 	ages := maps.Clone(prevAges)

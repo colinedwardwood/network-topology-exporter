@@ -9,6 +9,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/colinedwardwood/network-topology-exporter/internal/app/httpx"
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
@@ -21,6 +24,7 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
 	"github.com/colinedwardwood/network-topology-exporter/internal/output/otlp"
 	"github.com/colinedwardwood/network-topology-exporter/internal/snapshot"
+	"github.com/colinedwardwood/network-topology-exporter/internal/tracing"
 )
 
 // SnapshotWriteTimeout caps how long the background snapshot write goroutine
@@ -241,16 +245,32 @@ func RunDiscoveryLoop(ctx context.Context, lc LoopConfig) {
 		cycleNum++
 		lc.M.GoRoutines.Set(float64(runtime.NumGoroutine()))
 		start := time.Now()
+
+		// Issue #68: root span for the cycle. cycleCtx carries the span so all
+		// per-target / per-module / reconcile spans nest under it. When tracing
+		// is disabled the tracer is the OTel no-op and this is free.
+		cycleCtx, cycleSpan := tracing.Tracer().Start(ctx, "discovery.cycle",
+			trace.WithAttributes(
+				attribute.Int("cycle.number", cycleNum),
+				attribute.String("cycle.start_time", start.Format(time.RFC3339Nano)),
+			))
+		defer cycleSpan.End()
+
 		// Serialise the cycle's SNMP work against forced out-of-cycle walks
 		// (issue #73): the Rediscoverer holds the same mutex, so a regular
 		// cycle and an admin rediscover never walk devices concurrently.
 		if lc.CycleMu != nil {
 			lc.CycleMu.Lock()
 		}
-		newGraph, newAges, conflicts, deviceErrors := RunCycle(ctx, lc.Logger, lc.Cfg, lc.M, lc.WalkerMetrics, lc.WarnLimiter, resolver, allowedNets, ages)
+		newGraph, newAges, conflicts, deviceErrors := RunCycle(cycleCtx, lc.Logger, lc.Cfg, lc.M, lc.WalkerMetrics, lc.WarnLimiter, resolver, allowedNets, ages)
 		if lc.CycleMu != nil {
 			lc.CycleMu.Unlock()
 		}
+		cycleSpan.SetAttributes(
+			attribute.Int("cycle.device_count", len(newGraph.Devices)),
+			attribute.Int("cycle.edge_count", len(newGraph.Edges)),
+			attribute.Int("cycle.device_errors", deviceErrors),
+		)
 		if ctx.Err() != nil {
 			return
 		}
@@ -355,7 +375,10 @@ func RunDiscoveryLoop(ctx context.Context, lc LoopConfig) {
 				OutOfScope: newGraph.OutOfScope,
 				Ages:       ageMap,
 			}
-			if err := lc.Spoke.Push(ctx, payload); err != nil && ctx.Err() == nil {
+			// Pass cycleCtx so the spoke.push span nests under discovery.cycle
+			// and carries the cycle's trace context into the outbound HTTP push
+			// (issue #68: spoke→hub W3C traceparent propagation).
+			if err := lc.Spoke.Push(cycleCtx, payload); err != nil && ctx.Err() == nil {
 				lc.Logger.Warn("spoke push failed", "error", err)
 			}
 		}

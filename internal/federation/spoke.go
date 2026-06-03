@@ -17,9 +17,16 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/loglimit"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/colinedwardwood/network-topology-exporter/internal/tracing"
 )
 
 // fatalPushError wraps an error that should not be retried (e.g. a 4xx
@@ -89,8 +96,23 @@ var spokePushBaseBackoff = time.Second
 // times with exponential backoff starting at spokePushBaseBackoff. A cancelled
 // context aborts immediately without retrying.
 func (s *Spoke) Push(ctx context.Context, payload SpokePayload) error {
+	// Issue #68: spoke.push span. The post() helper injects this span's W3C
+	// traceparent into each outbound HTTP request, so the hub's hub.handlePush
+	// span continues the same trace. No-op when tracing is disabled (the
+	// no-op span's SpanContext is not sampled, so the propagator injects
+	// nothing).
+	ctx, span := tracing.Tracer().Start(ctx, "spoke.push",
+		trace.WithAttributes(
+			attribute.String("spoke.id", payload.SpokeID),
+			attribute.Int("spoke.devices", len(payload.Devices)),
+			attribute.Int("spoke.edges", len(payload.Edges)),
+		))
+	defer span.End()
+
 	b, err := json.Marshal(payload)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "marshal payload failed")
 		return fmt.Errorf("spoke: marshal payload: %w", err)
 	}
 
@@ -164,6 +186,11 @@ func (s *Spoke) post(ctx context.Context, body []byte) error {
 		return fmt.Errorf("build push request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// Issue #68: inject the W3C traceparent (and baggage) of the active
+	// spoke.push span into the outbound headers so the hub can continue the
+	// trace. When tracing is disabled the active span is the OTel no-op whose
+	// SpanContext is not valid, so the propagator writes no headers.
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("push to hub: %w", err)

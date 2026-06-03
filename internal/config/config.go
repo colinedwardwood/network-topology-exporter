@@ -61,6 +61,30 @@ type OTLPOutputConfig struct {
 	// OTLP/JSON. This is a wire-format change from the pre-v1.5.0 hand-rolled
 	// JSON path; OTLP receivers must accept protobuf (the OTLP default).
 	Protocol string `yaml:"protocol"`
+
+	// Traces configures opt-in OpenTelemetry tracing of the exporter's own
+	// discovery cycle (issue #68). It reuses Endpoint, Protocol, and auth from
+	// this block — tracing has no endpoint of its own.
+	Traces OTLPTracesConfig `yaml:"traces"`
+}
+
+// OTLPTracesConfig configures the opt-in trace signal layered on the OTLP
+// output. Tracing is disabled by default; when enabled it exports spans of the
+// discovery cycle over the same Endpoint/Protocol as OTLP metrics and logs.
+type OTLPTracesConfig struct {
+	// Enabled turns on tracing of the discovery cycle. Default false: when
+	// off, instrumentation calls resolve to the OTel no-op tracer and emit
+	// nothing.
+	Enabled bool `yaml:"enabled"`
+	// SampleRate is the head-sampling ratio in [0,1] applied to the root
+	// discovery.cycle span; child spans inherit the parent decision
+	// (ParentBased). Default 0.1. Set to 1.0 to sample every cycle (useful for
+	// low-cardinality debugging) or to a small fraction in production.
+	//
+	// A pointer so a config that omits sample_rate gets the 0.1 default while a
+	// config that explicitly sets sample_rate: 0.0 (sample nothing) is honoured
+	// rather than silently overridden by the default.
+	SampleRate *float64 `yaml:"sample_rate"`
 }
 
 // FederationConfig is the LD-15–LD-20 multi-instance coordination config.
@@ -385,6 +409,10 @@ func (c *Config) applyDefaults() {
 	if c.Output.OTLP.Protocol == "" {
 		c.Output.OTLP.Protocol = "http"
 	}
+	if c.Output.OTLP.Traces.SampleRate == nil {
+		def := 0.1
+		c.Output.OTLP.Traces.SampleRate = &def
+	}
 }
 
 func (c *Config) validateListen() error {
@@ -459,6 +487,9 @@ func (c *Config) validate() error {
 	case "", "http", "grpc":
 	default:
 		return fmt.Errorf("output.otlp.protocol must be http or grpc, got %q", c.Output.OTLP.Protocol)
+	}
+	if sr := c.Output.OTLP.Traces.SampleRate; sr != nil && (*sr < 0 || *sr > 1) {
+		return fmt.Errorf("output.otlp.traces.sample_rate must be in [0, 1], got %v", *sr)
 	}
 	if c.Output.OTLP.Enabled {
 		// gRPC endpoints are bare host:port authorities (or a URL); HTTP

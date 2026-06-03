@@ -218,6 +218,7 @@ output:
 |--------|-----------|---------|
 | Full graph | `POST /v1/metrics` | `network_topology_edge_info` and `network_topology_device_info` gauge metrics, one data point per edge/device. Sent every cycle when there are changes, and unconditionally every `heartbeat_cycles` cycles. Metric names match the Prometheus `/metrics` series. |
 | Change events | `POST /v1/logs` | OTLP log records — severity INFO for added/updated edges, WARN for removed edges. Mirrors the JSON log lines already written to stderr. |
+| Discovery-cycle traces (opt-in) | `POST /v1/traces` | OTel spans of the exporter's own discovery cycle — `discovery.cycle` → `target.poll` → `<module>.walk` / `credentials.resolve`, plus `graph.reconcile` and (federation spoke) `spoke.push` continued on the hub as `hub.handlePush`. Disabled by default; enable with `output.otlp.traces.enabled`. See [`docs/operator/tracing.md`](docs/operator/tracing.md). |
 
 **Heartbeat semantics:** If no topology change is detected, the exporter skips the `/v1/metrics` push to avoid redundant data. Every `heartbeat_cycles` cycles (default: every 10th cycle) the full graph is pushed unconditionally so downstream receivers can detect a stale or silently-dropped connection.
 
