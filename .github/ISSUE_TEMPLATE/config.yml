@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/colinedwardwood/network-topology-exporter/security/advisories/new
+    about: >
+      Do not file public issues for security vulnerabilities.
+      Use the private Security Advisory form instead — see SECURITY.md for the full policy.
+  - name: Ask a question / discuss usage
+    url: https://github.com/colinedwardwood/network-topology-exporter/discussions
+    about: General usage questions, configuration help, and deployment discussions.

@@ -75,7 +75,7 @@ Things this binary deliberately does *not* defend against — they belong to the
 
 ## Reporting vulnerabilities
 
-Until `SECURITY.md` ships, vulnerability reports should be sent privately via GitHub Security Advisories (`Security` → `Report a vulnerability` on the repo). Do not file public issues for unpatched vulnerabilities.
+To report a vulnerability privately, see [`SECURITY.md`](../../SECURITY.md) for the full policy, response SLA, and credit/disclosure terms. Use GitHub Security Advisories (`Security` → `Report a vulnerability` on the repo). Do not file public issues for unpatched vulnerabilities.
 
 ## Related documents
 

@@ -89,7 +89,7 @@ without reading source:
 - **SLO guidance** (`docs/operator/slos.md`) — three SLIs an operator
   should track (cycle-duration headroom, snapshot-drop rate,
   federation-spoke-down rate); recommended burn-rate alerts.
-- **Stability matrix** — single-page authoritative restatement of the v1.0
+- **Stability matrix** (`docs/operator/stability.md`) — single-page authoritative restatement of the v1.0
   GA criteria above, with the actual frozen surfaces enumerated.
 - **Failure-mode coverage audit** — per walker, document what's hard-fail vs
   what surfaces via a `*_outcome_total` counter, and what the operator

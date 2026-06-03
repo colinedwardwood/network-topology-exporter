@@ -141,6 +141,7 @@ If either verification fails the artefact is not authentic — do not deploy it.
 
 ## References
 
+- [`SECURITY.md`](../../SECURITY.md) — vulnerability reporting policy, response SLA, credit/disclosure terms.
 - Issue #5 — the GitHub issue that motivated the SNMP zeroization work.
 - Issue #3 — the GitHub issue that motivated the `/metrics` authentication work.
 - `internal/discovery/snmp/zeroize.go` — the `Zeroize()` implementation and `zeroBytes` helper.

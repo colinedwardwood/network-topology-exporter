@@ -89,6 +89,8 @@ If a MIB you want to use isn't in this list, propose it in a PR description with
 
 Open an issue describing the change before sending a large PR. Branch from `main` with a `<type>/<short-description>` name (`feat/ospf-mib-discovery`). Commit messages follow conventional commits (`feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`). Run `make lint test` before pushing. Open the PR with a clear description of what changed and why, and reference the public specification source per the citation discipline above. CI must pass and one maintainer reviews before merge.
 
+Changes to config keys, metric names and label sets, CLI flags, the snapshot schema, or the federation API are **breaking changes** — see [`docs/operator/stability.md`](docs/operator/stability.md) for the full contract and deprecation policy. Breaking changes require a changelog entry labelled `(breaking)` and, at GA, a major-version bump.
+
 ## Code style
 
 `gofmt` / `goimports` and `golangci-lint` (config in `.golangci.yml`) are enforced in CI. Tests live next to the code they test as `internal/discovery/<module>/<module>_test.go`. Integration tests under `tests/integration/` use containerlab or simulated SNMP targets.
