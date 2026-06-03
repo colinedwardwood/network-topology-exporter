@@ -94,7 +94,7 @@ tls_server_config:
 
 `client_allowed_sans` pins which scraper identities are accepted — a leaked cert with an unexpected SAN is rejected at the TLS layer before the request body is parsed. The Prometheus exporter-toolkit handles cert reload-on-change automatically, so SAN rotation does not require an exporter restart.
 
-The legacy `listen.tls_cert_file` and `listen.tls_key_file` fields remain accepted but emit a startup deprecation warning. They configure server-side TLS only — no client authentication — and will be removed in v1.5.0. Migrate to `listen.web_config_file` (set `tls_server_config.cert_file` / `key_file` to the same paths) and the deprecation warning goes away.
+The `listen.tls_cert_file` and `listen.tls_key_file` fields were removed in v1.5.0. Migrate to `listen.web_config_file` (set `tls_server_config.cert_file` / `key_file` to the same paths). Configs using the removed keys will fail to load with a parse error.
 
 ## Verifying release artefact provenance
 

@@ -8,6 +8,12 @@ the README. The lab-fixture-capture work previously slotted for
 v1.3.1 lands under this milestone instead, renamed to
 [v1.4.0-rc.1 — Lab Fixture Capture](https://github.com/colinedwardwood/network-topology-exporter/milestones).
 
+### Configuration (breaking)
+
+- **#60 (breaking — config schema)** — `modules.bgp.use_v2_mib` removed. The key was deprecated in v1.4.0 and carried with a startup warning for one release. Configs that set `use_v2_mib` now fail to load with a parse error. Use `modules.bgp.disable_v2_mib` (default `false` = v2 walkers enabled; set `true` to fall back to RFC 4273-only behaviour). Closes #60.
+- **#61 (breaking — config schema)** — `federation.hub.strict_device_name_matching` removed. The key was deprecated in v1.4.0 and carried with a startup warning for one release. Configs that set `strict_device_name_matching` now fail to load with a parse error. Use `federation.hub.loose_device_name_matching` (default `false` = strict matching; set `true` to enable domain-suffix stripping for single-site mixed short/FQDN deployments). Closes #61.
+- **#62 (breaking — config schema)** — `listen.tls_cert_file` and `listen.tls_key_file` removed. The keys were deprecated in v1.4.0 (replaced by `listen.web_config_file`) and carried with a startup warning for one release. Configs that set either key now fail to load with a parse error. Migrate to `listen.web_config_file` pointing at a Prometheus exporter-toolkit web-config YAML (set `tls_server_config.cert_file` / `key_file` to the same paths); the toolkit adds basic_auth and mTLS support beyond what the legacy fields offered. The `srv.ListenAndServeTLS` code path is also removed from the application — all TLS is now handled by `web.ListenAndServe`. Closes #62.
+
 ### Licensing
 
 - **Relicensed from Apache-2.0 to AGPL-3.0.** The project is now distributed

@@ -1,7 +1,6 @@
 package config
 
 import (
-	"bytes"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -1492,9 +1491,9 @@ func TestListenAddrDefault(t *testing.T) {
 	}
 }
 
-// TestListenTLSCertWithoutKey verifies that setting tls_cert_file without
-// tls_key_file causes Load to return an error.
-func TestListenTLSCertWithoutKey(t *testing.T) {
+// TestListenTLSCertFileRemovedKey verifies that the removed tls_cert_file key
+// produces a parse error (removed in v1.5.0; use listen.web_config_file).
+func TestListenTLSCertFileRemovedKey(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	body := `
@@ -1506,13 +1505,13 @@ listen:
 	}
 	_, err := Load(path)
 	if err == nil {
-		t.Fatal("expected error when tls_cert_file set without tls_key_file, got nil")
+		t.Fatal("expected parse error for removed key tls_cert_file, got nil")
 	}
 }
 
-// TestListenTLSKeyWithoutCert verifies that setting tls_key_file without
-// tls_cert_file causes Load to return an error.
-func TestListenTLSKeyWithoutCert(t *testing.T) {
+// TestListenTLSKeyFileRemovedKey verifies that the removed tls_key_file key
+// produces a parse error (removed in v1.5.0; use listen.web_config_file).
+func TestListenTLSKeyFileRemovedKey(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	body := `
@@ -1524,13 +1523,13 @@ listen:
 	}
 	_, err := Load(path)
 	if err == nil {
-		t.Fatal("expected error when tls_key_file set without tls_cert_file, got nil")
+		t.Fatal("expected parse error for removed key tls_key_file, got nil")
 	}
 }
 
-// TestListenTLSBothSetButMissing verifies that providing non-existent TLS
-// file paths causes Load to return an error.
-func TestListenTLSBothSetButMissing(t *testing.T) {
+// TestListenTLSBothRemovedKeys verifies that using both removed tls_cert_file
+// and tls_key_file keys produces a parse error (removed in v1.5.0).
+func TestListenTLSBothRemovedKeys(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	body := `
@@ -1543,34 +1542,7 @@ listen:
 	}
 	_, err := Load(path)
 	if err == nil {
-		t.Fatal("expected error for non-existent TLS files, got nil")
-	}
-}
-
-// TestListenTLSBothSetAndExist verifies that providing existing (dummy) TLS
-// files passes validation.
-func TestListenTLSBothSetAndExist(t *testing.T) {
-	dir := t.TempDir()
-	certPath := filepath.Join(dir, "cert.pem")
-	keyPath := filepath.Join(dir, "key.pem")
-	if err := os.WriteFile(certPath, []byte("dummy cert"), 0o600); err != nil {
-		t.Fatalf("write cert: %v", err)
-	}
-	if err := os.WriteFile(keyPath, []byte("dummy key"), 0o600); err != nil {
-		t.Fatalf("write key: %v", err)
-	}
-
-	cfgPath := filepath.Join(dir, "config.yaml")
-	body := "listen:\n  tls_cert_file: " + certPath + "\n  tls_key_file: " + keyPath + "\n"
-	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	c, err := Load(cfgPath)
-	if err != nil {
-		t.Fatalf("expected valid config with existing TLS files, got: %v", err)
-	}
-	if c.Listen.TLSCertFile != certPath {
-		t.Errorf("TLSCertFile = %q, want %q", c.Listen.TLSCertFile, certPath)
+		t.Fatal("expected parse error for removed keys tls_cert_file/tls_key_file, got nil")
 	}
 }
 
@@ -1610,11 +1582,10 @@ func TestListenWebConfigFileMissingFails(t *testing.T) {
 	}
 }
 
-// TestListenWebConfigFileConflictsWithLegacyTLS verifies that setting BOTH
-// web_config_file AND the deprecated tls_cert_file/tls_key_file is rejected
-// at config load — there is one correct way to configure listener auth and
-// the operator must pick.
-func TestListenWebConfigFileConflictsWithLegacyTLS(t *testing.T) {
+// TestListenWebConfigFileWithLegacyTLSRejected verifies that setting
+// tls_cert_file/tls_key_file alongside web_config_file is rejected — these
+// keys were removed in v1.5.0 and produce a parse error regardless.
+func TestListenWebConfigFileWithLegacyTLSRejected(t *testing.T) {
 	dir := t.TempDir()
 	webCfgPath := filepath.Join(dir, "web-config.yml")
 	certPath := filepath.Join(dir, "cert.pem")
@@ -1630,23 +1601,23 @@ func TestListenWebConfigFileConflictsWithLegacyTLS(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 	if _, err := Load(cfgPath); err == nil {
-		t.Fatal("expected error when web_config_file is set alongside legacy tls fields, got nil")
+		t.Fatal("expected error when removed tls_cert_file/tls_key_file keys are present, got nil")
 	}
 }
 
-// TestListenDeprecatedTLSEmitsWarning verifies that EmitDeprecationWarnings
-// fires when the legacy tls_cert_file/tls_key_file fields are set.
-func TestListenDeprecatedTLSEmitsWarning(t *testing.T) {
+// TestListenTLSRemovedKeysEmitNoWarning verifies that EmitDeprecationWarnings
+// is a no-op now that all deprecated TLS keys have been removed in v1.5.0.
+func TestListenTLSRemovedKeysEmitNoWarning(t *testing.T) {
+	// Only web_config_file (the current API) is used here — the old
+	// tls_cert_file/tls_key_file keys would cause a parse error so we
+	// cannot construct a config that uses them and still calls Load.
 	dir := t.TempDir()
-	certPath := filepath.Join(dir, "cert.pem")
-	keyPath := filepath.Join(dir, "key.pem")
-	for _, p := range []string{certPath, keyPath} {
-		if err := os.WriteFile(p, []byte("dummy"), 0o600); err != nil {
-			t.Fatalf("write %s: %v", p, err)
-		}
+	webCfgPath := filepath.Join(dir, "web-config.yml")
+	if err := os.WriteFile(webCfgPath, []byte("# empty\n"), 0o600); err != nil {
+		t.Fatalf("write web-config: %v", err)
 	}
 	cfgPath := filepath.Join(dir, "config.yaml")
-	body := "listen:\n  tls_cert_file: " + certPath + "\n  tls_key_file: " + keyPath + "\n"
+	body := "listen:\n  web_config_file: " + webCfgPath + "\n"
 	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -1654,16 +1625,8 @@ func TestListenDeprecatedTLSEmitsWarning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if !c.HasDeprecatedListenTLS() {
-		t.Fatal("HasDeprecatedListenTLS() = false, want true")
-	}
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-	if !c.EmitDeprecationWarnings(logger) {
-		t.Error("EmitDeprecationWarnings returned false; expected a warning for the deprecated TLS keys")
-	}
-	if !strings.Contains(buf.String(), "tls_cert_file") {
-		t.Errorf("warning did not mention tls_cert_file; output: %s", buf.String())
+	if c.EmitDeprecationWarnings(nil) {
+		t.Error("EmitDeprecationWarnings returned true; expected false (no deprecated keys remain)")
 	}
 }
 
@@ -1680,10 +1643,10 @@ func TestListenTLSNeitherSet(t *testing.T) {
 	}
 }
 
-// TestListenTLSCertExistsKeyMissing verifies that when both tls_cert_file and
-// tls_key_file are provided but the key file does not exist on disk, Load
-// returns an error (covering the tls_key_file os.Stat branch).
-func TestListenTLSCertExistsKeyMissing(t *testing.T) {
+// TestListenTLSCertExistsKeyMissingRemovedKey verifies that using the removed
+// tls_cert_file/tls_key_file keys always produces a parse error (removed in
+// v1.5.0), regardless of whether the referenced files exist.
+func TestListenTLSCertExistsKeyMissingRemovedKey(t *testing.T) {
 	dir := t.TempDir()
 	certPath := filepath.Join(dir, "cert.pem")
 	if err := os.WriteFile(certPath, []byte("dummy cert"), 0o600); err != nil {
@@ -1697,7 +1660,7 @@ func TestListenTLSCertExistsKeyMissing(t *testing.T) {
 	}
 	_, err := Load(cfgPath)
 	if err == nil {
-		t.Fatal("expected error when tls_key_file does not exist, got nil")
+		t.Fatal("expected parse error for removed keys tls_cert_file/tls_key_file, got nil")
 	}
 }
 
@@ -2110,9 +2073,6 @@ func TestLooseDeviceNameMatchingNewKey(t *testing.T) {
 	if !c.Federation.Hub.LooseDeviceNameMatching {
 		t.Errorf("LooseDeviceNameMatching = false, want true")
 	}
-	if c.HasDeprecatedFederationHubStrict() {
-		t.Errorf("HasDeprecatedFederationHubStrict = true, want false (new key was used)")
-	}
 }
 
 // TestLooseDeviceNameMatchingNewKeyDefault: omitting the key yields strict
@@ -2130,50 +2090,33 @@ func TestLooseDeviceNameMatchingNewKeyDefault(t *testing.T) {
 	if c.Federation.Hub.LooseDeviceNameMatching {
 		t.Errorf("LooseDeviceNameMatching = true, want false (default = strict)")
 	}
-	if c.HasDeprecatedFederationHubStrict() {
-		t.Errorf("HasDeprecatedFederationHubStrict = true, want false (no key was set)")
-	}
 }
 
-// TestStrictDeviceNameMatchingDeprecatedOldKeyTrue: the legacy key set to true
-// (i.e. operator asks for strict) leaves LooseDeviceNameMatching=false and
-// flags the deprecation.
-func TestStrictDeviceNameMatchingDeprecatedOldKeyTrue(t *testing.T) {
+// TestStrictDeviceNameMatchingRemovedKeyTrue: the removed key strict_device_name_matching=true
+// must produce a parse error (removed in v1.5.0; use loose_device_name_matching instead).
+func TestStrictDeviceNameMatchingRemovedKeyTrue(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(cfgPath, []byte("federation:\n  hub:\n    strict_device_name_matching: true\n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	c, err := Load(cfgPath)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if c.Federation.Hub.LooseDeviceNameMatching {
-		t.Errorf("LooseDeviceNameMatching = true, want false (old strict=true → new loose=false)")
-	}
-	if !c.HasDeprecatedFederationHubStrict() {
-		t.Errorf("HasDeprecatedFederationHubStrict = false, want true (deprecated key was set)")
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected parse error for removed key strict_device_name_matching, got nil")
 	}
 }
 
-// TestStrictDeviceNameMatchingDeprecatedOldKeyFalse: the legacy key set to
-// false (i.e. operator asks for loose) flips LooseDeviceNameMatching to true
-// and flags the deprecation.
-func TestStrictDeviceNameMatchingDeprecatedOldKeyFalse(t *testing.T) {
+// TestStrictDeviceNameMatchingRemovedKeyFalse: the removed key strict_device_name_matching=false
+// must produce a parse error (removed in v1.5.0; use loose_device_name_matching instead).
+func TestStrictDeviceNameMatchingRemovedKeyFalse(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(cfgPath, []byte("federation:\n  hub:\n    strict_device_name_matching: false\n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	c, err := Load(cfgPath)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if !c.Federation.Hub.LooseDeviceNameMatching {
-		t.Errorf("LooseDeviceNameMatching = false, want true (old strict=false → new loose=true)")
-	}
-	if !c.HasDeprecatedFederationHubStrict() {
-		t.Errorf("HasDeprecatedFederationHubStrict = false, want true (deprecated key was set)")
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected parse error for removed key strict_device_name_matching, got nil")
 	}
 }
 
@@ -2197,9 +2140,6 @@ func TestDisableV2MIBNewKey(t *testing.T) {
 	if !c.Modules.BGP.DisableV2MIB {
 		t.Errorf("DisableV2MIB = false, want true")
 	}
-	if c.HasDeprecatedBGPUseV2MIB() {
-		t.Errorf("HasDeprecatedBGPUseV2MIB = true, want false (new key was used)")
-	}
 }
 
 // TestDisableV2MIBNewKeyDefault: omitting the key yields v2 enabled (the safe
@@ -2217,90 +2157,70 @@ func TestDisableV2MIBNewKeyDefault(t *testing.T) {
 	if c.Modules.BGP.DisableV2MIB {
 		t.Errorf("DisableV2MIB = true, want false (default = v2 enabled)")
 	}
-	if c.HasDeprecatedBGPUseV2MIB() {
-		t.Errorf("HasDeprecatedBGPUseV2MIB = true, want false (no key was set)")
-	}
 }
 
-// TestUseV2MIBDeprecatedOldKeyTrue: the legacy key set to true (operator asks
-// for v2 enabled) leaves DisableV2MIB=false and flags the deprecation.
-func TestUseV2MIBDeprecatedOldKeyTrue(t *testing.T) {
+// TestUseV2MIBRemovedKeyTrue: the removed key use_v2_mib=true must produce a
+// parse error (removed in v1.5.0; use disable_v2_mib instead).
+func TestUseV2MIBRemovedKeyTrue(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(cfgPath, []byte("modules:\n  bgp:\n    use_v2_mib: true\n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	c, err := Load(cfgPath)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if c.Modules.BGP.DisableV2MIB {
-		t.Errorf("DisableV2MIB = true, want false (old use_v2_mib=true → new disable_v2_mib=false)")
-	}
-	if !c.HasDeprecatedBGPUseV2MIB() {
-		t.Errorf("HasDeprecatedBGPUseV2MIB = false, want true (deprecated key was set)")
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected parse error for removed key use_v2_mib, got nil")
 	}
 }
 
-// TestUseV2MIBDeprecatedOldKeyFalse: the legacy key set to false (operator
-// asks to disable v2) flips DisableV2MIB to true and flags the deprecation.
-func TestUseV2MIBDeprecatedOldKeyFalse(t *testing.T) {
+// TestUseV2MIBRemovedKeyFalse: the removed key use_v2_mib=false must produce
+// a parse error (removed in v1.5.0; use disable_v2_mib instead).
+func TestUseV2MIBRemovedKeyFalse(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(cfgPath, []byte("modules:\n  bgp:\n    use_v2_mib: false\n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	c, err := Load(cfgPath)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if !c.Modules.BGP.DisableV2MIB {
-		t.Errorf("DisableV2MIB = false, want true (old use_v2_mib=false → new disable_v2_mib=true)")
-	}
-	if !c.HasDeprecatedBGPUseV2MIB() {
-		t.Errorf("HasDeprecatedBGPUseV2MIB = false, want true (deprecated key was set)")
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected parse error for removed key use_v2_mib, got nil")
 	}
 }
 
-// TestEmitDeprecationWarningsFiresForBothKeys verifies that
-// EmitDeprecationWarnings logs a warning for each deprecated key the
-// operator set during Load, and returns true when any warning was emitted.
-func TestEmitDeprecationWarningsFiresForBothKeys(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.yaml")
-	body := "" +
-		"federation:\n" +
-		"  hub:\n" +
-		"    strict_device_name_matching: false\n" +
-		"modules:\n" +
-		"  bgp:\n" +
-		"    use_v2_mib: false\n"
-	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
+// TestRemovedKeysProduceParseError verifies that configs using any of the three
+// removed deprecated keys (strict_device_name_matching, use_v2_mib,
+// tls_cert_file, tls_key_file) produce a parse error from Load (removed in
+// v1.5.0; the YAML loader uses KnownFields(true) to enforce this).
+func TestRemovedKeysProduceParseError(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+	}{
+		{
+			name: "strict_device_name_matching with use_v2_mib",
+			yaml: "federation:\n  hub:\n    strict_device_name_matching: false\nmodules:\n  bgp:\n    use_v2_mib: false\n",
+		},
+		{
+			name: "strict_device_name_matching alone",
+			yaml: "federation:\n  hub:\n    strict_device_name_matching: true\n",
+		},
+		{
+			name: "use_v2_mib alone",
+			yaml: "modules:\n  bgp:\n    use_v2_mib: true\n",
+		},
 	}
-	c, err := Load(cfgPath)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-
-	var buf strings.Builder
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	emitted := c.EmitDeprecationWarnings(logger)
-	if !emitted {
-		t.Fatal("EmitDeprecationWarnings returned false; expected true (two deprecated keys set)")
-	}
-	logged := buf.String()
-	if !strings.Contains(logged, "strict_device_name_matching") {
-		t.Errorf("expected log to mention strict_device_name_matching; got:\n%s", logged)
-	}
-	if !strings.Contains(logged, "loose_device_name_matching") {
-		t.Errorf("expected log to mention loose_device_name_matching; got:\n%s", logged)
-	}
-	if !strings.Contains(logged, "use_v2_mib") {
-		t.Errorf("expected log to mention use_v2_mib; got:\n%s", logged)
-	}
-	if !strings.Contains(logged, "disable_v2_mib") {
-		t.Errorf("expected log to mention disable_v2_mib; got:\n%s", logged)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cfgPath := filepath.Join(dir, "config.yaml")
+			if err := os.WriteFile(cfgPath, []byte(tc.yaml), 0o600); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			_, err := Load(cfgPath)
+			if err == nil {
+				t.Fatalf("expected parse error for removed deprecated key(s), got nil")
+			}
+		})
 	}
 }
 

@@ -68,8 +68,7 @@ modules:
     #                          # failure modes via network_topology_bgp_walker_outcome_total
     #                          # (labels walker_drift / malformed_index / mib_unimplemented),
     #                          # so silent zero-edge dropouts are alertable.
-    #                          # Replaces the v1.3.0 `use_v2_mib` key (still accepted with a
-    #                          # deprecation warning; removed in v1.5.0).
+    #                          # Replaces the removed v1.3.0 `use_v2_mib` key (removed in v1.5.0).
   ospf:
     enabled: false             # RFC 4750 OSPF-MIB
   fdb:
@@ -151,8 +150,7 @@ snapshot:
 #     # true ONLY for single-site deployments where mixed short/FQDN forms of
 #     # the same device must reconcile (e.g. one spoke reports "core-01" while
 #     # another reports "core-01.internal.corp" for the same physical device).
-#     # Replaces the v1.3.0 `strict_device_name_matching` key (still accepted
-#     # with a deprecation warning; removed in v1.5.0).
+#     # Replaces the removed v1.3.0 `strict_device_name_matching` key (removed in v1.5.0).
 #     # loose_device_name_matching: false
 #
 #     # Graph size admission control for the hub's combined graph.
