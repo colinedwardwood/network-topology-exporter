@@ -482,18 +482,6 @@ func TestNewDefaultsHTTPProtobuf(t *testing.T) {
 	// only Endpoint set is the contract under test.
 }
 
-// TestNewRejectsJSONEncoding documents that the SDK exporters cannot emit
-// OTLP/JSON, so requesting it fails fast rather than silently sending protobuf.
-func TestNewRejectsJSONEncoding(t *testing.T) {
-	_, err := New(context.Background(), Config{Endpoint: "http://127.0.0.1:4318", Encoding: EncodingJSON})
-	if err == nil {
-		t.Fatal("New with Encoding=json: want error, got nil")
-	}
-	if !strings.Contains(err.Error(), "json") {
-		t.Errorf("error %q should mention json encoding", err.Error())
-	}
-}
-
 // TestNewRejectsUnknownProtocol guards the protocol switch.
 func TestNewRejectsUnknownProtocol(t *testing.T) {
 	if _, err := New(context.Background(), Config{Endpoint: "x", Protocol: "ftp"}); err == nil {

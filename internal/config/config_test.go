@@ -1234,10 +1234,10 @@ func TestOTLPHeartbeatCyclesDefault(t *testing.T) {
 	}
 }
 
-// TestOTLPProtocolEncodingDefaults verifies the #82 backward-compatible
-// defaults: an OTLP block with only endpoint set defaults protocol=http and
-// encoding=protobuf.
-func TestOTLPProtocolEncodingDefaults(t *testing.T) {
+// TestOTLPProtocolDefault verifies the #82 backward-compatible default: an OTLP
+// block with only endpoint set defaults protocol=http (payload encoding is
+// always protobuf — there is no encoding config key).
+func TestOTLPProtocolDefault(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	body := `
@@ -1255,9 +1255,6 @@ output:
 	}
 	if c.Output.OTLP.Protocol != "http" {
 		t.Errorf("Protocol default = %q, want http", c.Output.OTLP.Protocol)
-	}
-	if c.Output.OTLP.Encoding != "protobuf" {
-		t.Errorf("Encoding default = %q, want protobuf", c.Output.OTLP.Encoding)
 	}
 }
 
@@ -1280,8 +1277,10 @@ output:
 	}
 }
 
-// TestOTLPValidationRejectsBadEncoding verifies an unknown encoding is rejected.
-func TestOTLPValidationRejectsBadEncoding(t *testing.T) {
+// TestOTLPRejectsRemovedEncodingKey verifies the removed `encoding` key is now
+// rejected as an unknown field (the SDK is protobuf-only; there is no encoding
+// option). This guards against the key silently reappearing.
+func TestOTLPRejectsRemovedEncodingKey(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	body := `
@@ -1289,13 +1288,13 @@ output:
   otlp:
     enabled: true
     endpoint: http://collector:4318
-    encoding: yaml
+    encoding: protobuf
 `
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	if _, err := Load(path); err == nil {
-		t.Fatal("expected error for unknown otlp encoding, got nil")
+		t.Fatal("expected parse error for removed otlp encoding key, got nil")
 	}
 }
 

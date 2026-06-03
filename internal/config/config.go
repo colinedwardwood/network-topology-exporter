@@ -56,16 +56,11 @@ type OTLPOutputConfig struct {
 	HeartbeatCycles int           `yaml:"heartbeat_cycles"`
 
 	// Protocol selects the OTLP transport: "http" (default) or "grpc".
-	// Empty preserves the pre-SDK behaviour (OTLP/HTTP).
+	// Empty preserves the pre-SDK behaviour (OTLP/HTTP). The payload encoding
+	// is always protobuf — the OpenTelemetry Go SDK exporters do not implement
+	// OTLP/JSON. This is a wire-format change from the pre-v1.5.0 hand-rolled
+	// JSON path; OTLP receivers must accept protobuf (the OTLP default).
 	Protocol string `yaml:"protocol"`
-
-	// Encoding selects the OTLP payload encoding: "protobuf" (default) or
-	// "json". Empty defaults to "protobuf" for OpenTelemetry SDK parity.
-	//
-	// NOTE: the OpenTelemetry Go SDK only implements protobuf encoding for its
-	// OTLP exporters; "json" is accepted by config validation but rejected at
-	// exporter construction until upstream support exists.
-	Encoding string `yaml:"encoding"`
 }
 
 // FederationConfig is the LD-15–LD-20 multi-instance coordination config.
@@ -390,9 +385,6 @@ func (c *Config) applyDefaults() {
 	if c.Output.OTLP.Protocol == "" {
 		c.Output.OTLP.Protocol = "http"
 	}
-	if c.Output.OTLP.Encoding == "" {
-		c.Output.OTLP.Encoding = "protobuf"
-	}
 }
 
 func (c *Config) validateListen() error {
@@ -467,11 +459,6 @@ func (c *Config) validate() error {
 	case "", "http", "grpc":
 	default:
 		return fmt.Errorf("output.otlp.protocol must be http or grpc, got %q", c.Output.OTLP.Protocol)
-	}
-	switch c.Output.OTLP.Encoding {
-	case "", "protobuf", "json":
-	default:
-		return fmt.Errorf("output.otlp.encoding must be protobuf or json, got %q", c.Output.OTLP.Encoding)
 	}
 	if c.Output.OTLP.Enabled {
 		// gRPC endpoints are bare host:port authorities (or a URL); HTTP

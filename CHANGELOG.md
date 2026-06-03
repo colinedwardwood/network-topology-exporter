@@ -197,18 +197,20 @@ v1.3.1 lands under this milestone instead, renamed to
   (`go.opentelemetry.io/otel/sdk/metric`, `.../sdk/log`, and the
   `otlpmetric{http,grpc}` / `otlplog{http,grpc}` exporters). The SDK now owns the
   proto3 wire mapping, the schema URL, and transport-level retry/backoff; no
-  `json.Marshal` of OTLP payloads remains in the binary. **Backward compatible:**
-  the `Exporter.PushGraph` / `Exporter.PushChanges` behaviour, the emitted metric
-  names (`network_topology_edge_info`, `network_topology_device_info`), the
-  topology-change log records, and all existing config keys
-  (`output.otlp.endpoint`, `timeout`, `heartbeat_cycles`) are unchanged — an
-  existing deployment that only sets `endpoint` keeps working and defaults to
-  OTLP/HTTP + protobuf (proven by `TestNewDefaultsHTTPProtobuf`).
-- **New OTLP config keys: `output.otlp.protocol` (http|grpc) and
-  `output.otlp.encoding` (json|protobuf).** Defaults are `http` + `protobuf` for
-  OpenTelemetry parity. NOTE: the OpenTelemetry Go SDK exporters only implement
-  protobuf encoding; `encoding: json` is validated but rejected at exporter
-  construction until upstream OTLP/JSON export support exists.
+  `json.Marshal` of OTLP payloads remains in the binary. Config and API are
+  preserved: the `Exporter.PushGraph` / `Exporter.PushChanges` behaviour, the
+  emitted metric names (`network_topology_edge_info`,
+  `network_topology_device_info`), the topology-change log records, and all
+  existing config keys (`output.otlp.endpoint`, `timeout`, `heartbeat_cycles`)
+  are unchanged — a deployment that only sets `endpoint` keeps working (proven by
+  `TestNewDefaultsHTTPProtobuf`).
+- **Wire-format change (OTLP): JSON → protobuf.** The pre-v1.5.0 hand-rolled
+  path emitted OTLP/HTTP + JSON; the SDK emits **protobuf** (the OTLP default and
+  the only encoding the OTel Go SDK exporters implement). OTLP receivers must
+  accept protobuf — virtually all do. There is no JSON option, so no
+  `output.otlp.encoding` key exists.
+- **New OTLP config key: `output.otlp.protocol` (http|grpc), default `http`.**
+  Adds OTLP/gRPC support alongside the existing HTTP transport.
 
 First release candidate for the 1.3.1 milestone. Includes the new tester-onboarding stack and critical codebase health fixes.
 

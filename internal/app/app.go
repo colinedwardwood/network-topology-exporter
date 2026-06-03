@@ -197,7 +197,6 @@ func Run(ctx context.Context, args []string) int {
 				Timeout:    cfg.Output.OTLP.Timeout,
 				InstanceID: cfg.Federation.Spoke.SpokeID, // empty in non-spoke roles → falls back to hostname
 				Protocol:   otlp.Protocol(cfg.Output.OTLP.Protocol),
-				Encoding:   otlp.Encoding(cfg.Output.OTLP.Encoding),
 			})
 			if err != nil {
 				logger.Error("building OTLP exporter", "error", err)

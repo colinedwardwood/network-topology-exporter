@@ -51,16 +51,6 @@ const (
 	ProtocolGRPC Protocol = "grpc"
 )
 
-// Encoding selects the OTLP payload encoding.
-type Encoding string
-
-// Encoding values. EncodingProtobuf is the default and the only encoding the
-// OpenTelemetry Go SDK implements for export today; see the note on Config.Encoding.
-const (
-	EncodingProtobuf Encoding = "protobuf"
-	EncodingJSON     Encoding = "json"
-)
-
 // Config holds the settings for the OTLP exporter.
 type Config struct {
 	// Endpoint is the base URL of the OTLP receiver, e.g. "http://alloy:4318"
@@ -80,17 +70,13 @@ type Config struct {
 	// Protocol selects the OTLP transport: ProtocolHTTP (default) or
 	// ProtocolGRPC. The empty value is treated as ProtocolHTTP for backward
 	// compatibility with deployments that only set Endpoint.
-	Protocol Protocol
-
-	// Encoding selects the OTLP payload encoding: EncodingProtobuf (default)
-	// or EncodingJSON. The empty value is treated as EncodingProtobuf.
 	//
-	// NOTE: The OpenTelemetry Go SDK's OTLP exporters only implement protobuf
-	// encoding (Content-Type application/x-protobuf for HTTP, protobuf framing
-	// for gRPC). There is no OTLP/JSON exporter upstream. Selecting
-	// EncodingJSON is therefore rejected by New until upstream adds it; the
-	// field exists so the config surface is stable and forward-compatible.
-	Encoding Encoding
+	// The payload encoding is always protobuf: the OpenTelemetry Go SDK's OTLP
+	// exporters only implement protobuf (Content-Type application/x-protobuf
+	// for HTTP, protobuf framing for gRPC); there is no OTLP/JSON exporter
+	// upstream. This is a wire-format change from the pre-v1.5.0 hand-rolled
+	// OTLP/JSON path — receivers must accept protobuf (the OTLP default).
+	Protocol Protocol
 }
 
 // Exporter pushes topology data to an OTLP endpoint via the OpenTelemetry SDK.
@@ -114,11 +100,11 @@ const (
 
 // New constructs an Exporter from cfg, wiring an OTLP metric exporter into a
 // MeterProvider and an OTLP log exporter into a LoggerProvider. A zero Timeout
-// is replaced with 10 seconds; an empty Protocol defaults to HTTP and an empty
-// Encoding defaults to protobuf.
+// is replaced with 10 seconds; an empty Protocol defaults to HTTP. The payload
+// encoding is always protobuf (the only encoding the OTel Go SDK exporters
+// implement).
 //
-// New returns an error when the OTLP exporters cannot be constructed or when an
-// unsupported encoding (JSON) is requested.
+// New returns an error when the OTLP exporters cannot be constructed.
 func New(ctx context.Context, cfg Config) (*Exporter, error) {
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 10 * time.Second
@@ -126,24 +112,11 @@ func New(ctx context.Context, cfg Config) (*Exporter, error) {
 	if cfg.Protocol == "" {
 		cfg.Protocol = ProtocolHTTP
 	}
-	if cfg.Encoding == "" {
-		cfg.Encoding = EncodingProtobuf
-	}
 
 	switch cfg.Protocol {
 	case ProtocolHTTP, ProtocolGRPC:
 	default:
 		return nil, fmt.Errorf("otlp: unsupported protocol %q (want http or grpc)", cfg.Protocol)
-	}
-	switch cfg.Encoding {
-	case EncodingProtobuf:
-		// supported
-	case EncodingJSON:
-		// The OpenTelemetry Go SDK does not ship an OTLP/JSON exporter. Rather
-		// than silently emit protobuf and mislead the operator, reject it.
-		return nil, fmt.Errorf("otlp: encoding %q is not supported by the OpenTelemetry Go SDK exporters (only %q); see output.otlp.encoding docs", EncodingJSON, EncodingProtobuf)
-	default:
-		return nil, fmt.Errorf("otlp: unsupported encoding %q (want protobuf or json)", cfg.Encoding)
 	}
 
 	instanceID := cfg.InstanceID
@@ -222,7 +195,8 @@ func assemble(res *resource.Resource, reader sdkmetric.Reader, proc log.Processo
 }
 
 // newMetricExporter builds the OTLP metric exporter for the configured
-// protocol. Encoding is always protobuf (validated in New).
+// protocol. The payload encoding is always protobuf (the only encoding the
+// OTel Go SDK exporters implement).
 func newMetricExporter(ctx context.Context, cfg Config) (sdkmetric.Exporter, error) {
 	switch cfg.Protocol {
 	case ProtocolGRPC:

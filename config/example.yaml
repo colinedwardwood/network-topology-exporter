@@ -176,11 +176,10 @@ snapshot:
 #     timeout: 10s
 #     heartbeat_cycles: 10
 #     # protocol selects the OTLP transport: http (default) or grpc.
+#     # The payload encoding is always protobuf (the OpenTelemetry Go SDK
+#     # exporters do not implement OTLP/JSON) — a wire-format change from the
+#     # pre-v1.5.0 hand-rolled JSON path. Receivers must accept protobuf.
 #     protocol: http
-#     # encoding selects the OTLP payload encoding: protobuf (default) or json.
-#     # NOTE: the OpenTelemetry Go SDK only implements protobuf; selecting json
-#     # is rejected at startup until upstream OTLP/JSON export support lands.
-#     encoding: protobuf
 
 # ─── Per-device enrichment ─────────────────────────────────────────────────
 # Targets attach enrichment metadata (SNMP port, site label, custom labels)
