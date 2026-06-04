@@ -31,7 +31,7 @@ func TestBuildEdgesInScope(t *testing.T) {
 		},
 	}
 
-	edges, oos, _ := buildEdges("local-sw", ifNames, entries, []*net.IPNet{allowed})
+	edges, oos, _ := buildEdges(context.Background(), "local-sw", ifNames, entries, []*net.IPNet{allowed})
 	if len(oos) != 0 {
 		t.Errorf("unexpected out-of-scope: %v", oos)
 	}
@@ -75,7 +75,7 @@ func TestBuildEdgesIPv6Neighbor(t *testing.T) {
 		},
 	}
 
-	edges, oos, _ := buildEdges("local-sw", ifNames, entries, []*net.IPNet{allowed})
+	edges, oos, _ := buildEdges(context.Background(), "local-sw", ifNames, entries, []*net.IPNet{allowed})
 	if len(oos) != 0 {
 		t.Errorf("unexpected out-of-scope entries: %v", oos)
 	}
@@ -108,7 +108,7 @@ func TestBuildEdgesOutOfScope(t *testing.T) {
 		},
 	}
 
-	edges, oos, _ := buildEdges("local-sw", ifNames, entries, []*net.IPNet{allowed})
+	edges, oos, _ := buildEdges(context.Background(), "local-sw", ifNames, entries, []*net.IPNet{allowed})
 	if len(edges) != 0 {
 		t.Errorf("expected no edges for out-of-scope, got %d", len(edges))
 	}
@@ -132,7 +132,7 @@ func TestBuildEdgesNoFilter(t *testing.T) {
 		},
 	}
 
-	edges, oos, _ := buildEdges("me", ifNames, entries, nil)
+	edges, oos, _ := buildEdges(context.Background(), "me", ifNames, entries, nil)
 	if len(oos) != 0 {
 		t.Errorf("unexpected oos with nil allowedNets")
 	}
@@ -149,7 +149,7 @@ func TestBuildEdgesSkipsIncomplete(t *testing.T) {
 		{1, 2}: {deviceID: "sw", devPort: ""},    // no devPort
 	}
 
-	edges, _, _ := buildEdges("me", ifNames, entries, nil)
+	edges, _, _ := buildEdges(context.Background(), "me", ifNames, entries, nil)
 	if len(edges) != 0 {
 		t.Errorf("expected no edges, got %d", len(edges))
 	}
@@ -161,7 +161,7 @@ func TestBuildEdgesFallbackIfIndex(t *testing.T) {
 		{7, 1}: {deviceID: "peer", devPort: "eth0"},
 	}
 
-	edges, _, _ := buildEdges("me", map[int]string{}, entries, nil)
+	edges, _, _ := buildEdges(context.Background(), "me", map[int]string{}, entries, nil)
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d", len(edges))
 	}
@@ -177,7 +177,7 @@ func TestBuildEdgesIfNameFallback(t *testing.T) {
 		{3, 1}: {deviceID: "peer-sw", devPort: "GigabitEthernet0/1"},
 	}
 
-	edges, _, _ := buildEdges("local-sw", map[int]string{}, entries, nil)
+	edges, _, _ := buildEdges(context.Background(), "local-sw", map[int]string{}, entries, nil)
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d: %v", len(edges), edges)
 	}
@@ -530,5 +530,71 @@ func TestWalkCacheTableSkipsShortOIDs(t *testing.T) {
 	// provided, so the entry exists but is incomplete).
 	if len(entries) != 1 {
 		t.Errorf("expected 1 entry, got %d", len(entries))
+	}
+}
+
+// ---------- decode-issue reporter tests (issue #99) ----------
+
+// buildEdges: a cache row with an empty deviceID reports a decode issue to the
+// reporter installed on ctx with reason empty_device_id and the cdpCacheTable
+// root OID.
+func TestBuildEdgesReportsEmptyDeviceID(t *testing.T) {
+	var issues []snmputil.DecodeIssue
+	ctx := snmputil.ContextWithDecodeIssueReporter(context.Background(), func(i snmputil.DecodeIssue) {
+		issues = append(issues, i)
+	})
+
+	entries := map[cacheKey]*cacheEntry{
+		{1, 1}: {deviceID: "", devPort: "Gi0/1"}, // empty deviceID → rejected
+	}
+
+	edges, _, _ := buildEdges(ctx, "me", map[int]string{1: "eth0"}, entries, nil)
+	if len(edges) != 0 {
+		t.Fatalf("expected 0 edges, got %d", len(edges))
+	}
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 decode issue, got %d: %v", len(issues), issues)
+	}
+	if issues[0].Module != walkerCDP || issues[0].Reason != "empty_device_id" {
+		t.Errorf("issue = {%q,%q}, want {cdp,empty_device_id}", issues[0].Module, issues[0].Reason)
+	}
+	if string(issues[0].OID) != oidCDPCacheTable {
+		t.Errorf("issue OID = %q, want %q", issues[0].OID, oidCDPCacheTable)
+	}
+}
+
+// walkCacheTable: a PDU whose OID index carries ifIndex=0 reports a decode
+// issue with reason index_unparseable and the cdpCacheTable root OID.
+func TestWalkCacheTableReportsIndexUnparseable(t *testing.T) {
+	const zeroIfIdxOID = ".1.3.6.1.4.1.9.9.23.1.2.1.1.6.0.1"
+	pdus := []gsnmp.SnmpPDU{
+		{Name: zeroIfIdxOID, Type: gsnmp.OctetString, Value: []byte("peer-sw")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
+	client, err := snmputil.Open(p)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = client.Conn.Close() }()
+
+	var issues []snmputil.DecodeIssue
+	ctx := snmputil.ContextWithDecodeIssueReporter(context.Background(), func(i snmputil.DecodeIssue) {
+		issues = append(issues, i)
+	})
+
+	if _, _, err := walkCacheTable(ctx, client); err != nil {
+		t.Fatalf("walkCacheTable: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 decode issue, got %d: %v", len(issues), issues)
+	}
+	if issues[0].Module != walkerCDP || issues[0].Reason != "index_unparseable" {
+		t.Errorf("issue = {%q,%q}, want {cdp,index_unparseable}", issues[0].Module, issues[0].Reason)
+	}
+	if string(issues[0].OID) != oidCDPCacheTable {
+		t.Errorf("issue OID = %q, want %q", issues[0].OID, oidCDPCacheTable)
 	}
 }

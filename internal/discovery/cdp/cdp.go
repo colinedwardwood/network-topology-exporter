@@ -103,7 +103,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 		return nil, nil, fmt.Errorf("cdp cache %s: %w", p.IP, err)
 	}
 
-	edges, oos, decoded := buildEdges(localDevice, ifNames, entries, allowedNets)
+	edges, oos, decoded := buildEdges(ctx, localDevice, ifNames, entries, allowedNets)
 
 	switch {
 	case len(edges) > 0:
@@ -140,20 +140,25 @@ func walkCacheTable(ctx context.Context, client *gsnmp.GoSNMP) (map[cacheKey]*ca
 		// suffix: col.ifIndex.neighIndex
 		col, rest, ok := snmputil.SplitOIDComponent(suffix)
 		if !ok {
+			snmputil.ReportDecodeIssue(ctx, walkerCDP, oidCDPCacheTable, "index_unparseable", 1)
 			continue
 		}
 		ifIdx, neighStr, ok := snmputil.SplitOIDComponent(rest)
 		if !ok {
+			snmputil.ReportDecodeIssue(ctx, walkerCDP, oidCDPCacheTable, "index_unparseable", 1)
 			continue
 		}
 		if ifIdx <= 0 {
+			snmputil.ReportDecodeIssue(ctx, walkerCDP, oidCDPCacheTable, "index_unparseable", 1)
 			continue
 		}
 		neighIdx, err := strconv.Atoi(neighStr)
 		if err != nil {
+			snmputil.ReportDecodeIssue(ctx, walkerCDP, oidCDPCacheTable, "index_unparseable", 1)
 			continue
 		}
 		if neighIdx <= 0 {
+			snmputil.ReportDecodeIssue(ctx, walkerCDP, oidCDPCacheTable, "index_unparseable", 1)
 			continue
 		}
 
@@ -188,7 +193,7 @@ func walkCacheTable(ctx context.Context, client *gsnmp.GoSNMP) (map[cacheKey]*ca
 // The Walk-level outcome accounting uses it to distinguish "no_neighbours"
 // (rows decoded, nothing usable) from "walker_drift" (PDUs arrived but every
 // row was decoder-rejected). See issue #98.
-func buildEdges(localDevice string, ifNames map[int]string, entries map[cacheKey]*cacheEntry, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, bool) {
+func buildEdges(ctx context.Context, localDevice string, ifNames map[int]string, entries map[cacheKey]*cacheEntry, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, bool) {
 	var edges []discovery.Edge
 	var oos []discovery.OutOfScopeNeighbour
 	var decoded bool
@@ -196,6 +201,7 @@ func buildEdges(localDevice string, ifNames map[int]string, entries map[cacheKey
 
 	for k, e := range entries {
 		if e.deviceID == "" || e.devPort == "" {
+			snmputil.ReportDecodeIssue(ctx, walkerCDP, oidCDPCacheTable, "empty_device_id", 1)
 			continue
 		}
 		// The row carries a usable neighbour identity: it decoded cleanly.

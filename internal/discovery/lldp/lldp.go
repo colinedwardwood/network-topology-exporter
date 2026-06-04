@@ -144,7 +144,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 		return nil, nil, fmt.Errorf("lldp remtable %s: %w", p.IP, err)
 	}
 
-	edges, oos, decoded, err := buildEdges(localDevice, locPorts, remEntries, allowedNets)
+	edges, oos, decoded, err := buildEdges(ctx, localDevice, locPorts, remEntries, allowedNets)
 	if err != nil {
 		recordWalkerOutcome(&p, walkerLLDP, outcomeError)
 		return nil, nil, err
@@ -275,7 +275,7 @@ func walkRemEntries(ctx context.Context, client *gsnmp.GoSNMP) (map[remKey]*remE
 // uses it to distinguish "no_neighbours" (PDUs decoded, nothing usable) from
 // "walker_drift" (PDUs arrived but every row was decoder-rejected). See
 // issue #98.
-func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[remKey]*remEntry, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, bool, error) {
+func buildEdges(ctx context.Context, localDevice string, locPorts map[int]locPort, remEntries map[remKey]*remEntry, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, bool, error) {
 	var edges []discovery.Edge
 	var oos []discovery.OutOfScopeNeighbour
 	var decoded bool
@@ -286,6 +286,7 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 		if rem.chassisSubtype < 1 || rem.chassisSubtype > 7 {
 			slog.Debug("lldp: invalid chassis ID subtype; skipping entry",
 				"device", localDevice, "subtype", rem.chassisSubtype)
+			snmputil.ReportDecodeIssue(ctx, walkerLLDP, oidRemTable, "chassis_subtype_invalid", 1)
 			continue
 		}
 
@@ -293,6 +294,7 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 		if rem.portSubtype < 1 || rem.portSubtype > 7 {
 			slog.Debug("lldp: invalid port ID subtype; skipping entry",
 				"device", localDevice, "subtype", rem.portSubtype)
+			snmputil.ReportDecodeIssue(ctx, walkerLLDP, oidRemTable, "port_subtype_invalid", 1)
 			continue
 		}
 
@@ -300,6 +302,7 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 		if rem.chassisSubtype == chassisSubtypeMACAddress && len(rem.chassisID) != 6 {
 			slog.Debug("lldp: MAC chassis ID wrong length; skipping entry",
 				"device", localDevice, "got", len(rem.chassisID), "want", 6)
+			snmputil.ReportDecodeIssue(ctx, walkerLLDP, oidRemTable, "chassis_mac_bad_length", 1)
 			continue
 		}
 
@@ -309,6 +312,7 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 			if len(rem.chassisID) == 0 {
 				slog.Debug("lldp: zero-length network-address chassis ID; skipping entry",
 					"device", localDevice)
+				snmputil.ReportDecodeIssue(ctx, walkerLLDP, oidRemTable, "chassis_addr_malformed", 1)
 				continue
 			}
 			if len(rem.chassisID) < 2 ||
@@ -317,6 +321,7 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 				(rem.chassisID[0] != 1 && rem.chassisID[0] != 2) {
 				slog.Debug("lldp: malformed network-address chassis ID; skipping entry",
 					"device", localDevice, "family", rem.chassisID[0], "len", len(rem.chassisID))
+				snmputil.ReportDecodeIssue(ctx, walkerLLDP, oidRemTable, "chassis_addr_malformed", 1)
 				continue
 			}
 		}
@@ -325,6 +330,7 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 		if rem.portSubtype == portSubtypeMACAddress && len(rem.portID) != 6 {
 			slog.Debug("lldp: MAC port ID wrong length; skipping entry",
 				"device", localDevice, "got", len(rem.portID), "want", 6)
+			snmputil.ReportDecodeIssue(ctx, walkerLLDP, oidRemTable, "port_mac_bad_length", 1)
 			continue
 		}
 

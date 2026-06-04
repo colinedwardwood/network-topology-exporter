@@ -201,7 +201,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, _ []*net.I
 		return nil, nil, fmt.Errorf("fdb ifname %s: %w", p.IP, err)
 	}
 
-	edges, decoded := buildEdges(localDevice, entries, bridgePorts, ifNames, stpStates)
+	edges, decoded := buildEdges(ctx, localDevice, entries, bridgePorts, ifNames, stpStates)
 
 	switch {
 	case len(edges) > 0:
@@ -496,6 +496,7 @@ func walkBasePortTable(ctx context.Context, client *gsnmp.GoSNMP) (map[int]int, 
 		// RFC 4188: bridge port indices are 1-based; port 0 is invalid.
 		if portNum <= 0 {
 			slog.Debug("fdb: skipping invalid bridge port index", "port", portNum)
+			snmputil.ReportDecodeIssue(ctx, walkerFDB, oidBasePortTable, "bridge_port_index_invalid", 1)
 			continue
 		}
 		ports[portNum] = snmputil.PDUInt(pdu)
@@ -565,7 +566,7 @@ func isSpecialMAC(mac []byte) bool {
 // outcome accounting uses it to distinguish "no_neighbours" (rows decoded,
 // none usable) from "walker_drift" (PDUs arrived but every row was
 // decoder-rejected). See issue #98.
-func buildEdges(localDevice string, entries map[string]*fdbEntry, bridgePorts map[int]int, ifNames map[int]string, stpStates map[int]int) ([]discovery.Edge, bool) {
+func buildEdges(ctx context.Context, localDevice string, entries map[string]*fdbEntry, bridgePorts map[int]int, ifNames map[int]string, stpStates map[int]int) ([]discovery.Edge, bool) {
 	var decoded bool
 	portMACs := make(map[int][]net.HardwareAddr)
 	for _, e := range entries {
@@ -595,6 +596,7 @@ func buildEdges(localDevice string, entries map[string]*fdbEntry, bridgePorts ma
 		ifIdx, ok := bridgePorts[bridgePort]
 		if !ok {
 			slog.Debug("fdb: bridge port has no ifIndex mapping", "bridge_port", bridgePort)
+			snmputil.ReportDecodeIssue(ctx, walkerFDB, oidBasePortTable, "ifindex_unmapped", 1)
 			continue
 		}
 		localPort := ifNames[ifIdx]

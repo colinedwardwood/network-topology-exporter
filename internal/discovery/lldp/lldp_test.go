@@ -93,7 +93,7 @@ func TestBuildEdgesOutOfScope(t *testing.T) {
 		},
 	}
 
-	edges, oos, _, err := buildEdges("local-sw", locPorts, remEntries, []*net.IPNet{allowed})
+	edges, oos, _, err := buildEdges(context.Background(), "local-sw", locPorts, remEntries, []*net.IPNet{allowed})
 	if err != nil {
 		t.Fatalf("buildEdges: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestBuildEdgesMACChassisSkippedUnderScopeFilter(t *testing.T) {
 		},
 	}
 
-	edges, oos, _, err := buildEdges("local-sw", locPorts, remEntries, []*net.IPNet{allowed})
+	edges, oos, _, err := buildEdges(context.Background(), "local-sw", locPorts, remEntries, []*net.IPNet{allowed})
 	if err != nil {
 		t.Fatalf("buildEdges: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestBuildEdgesUnspecifiedChassisIP(t *testing.T) {
 		},
 	}
 
-	edges, oos, _, err := buildEdges("local-sw", locPorts, remEntries, nil)
+	edges, oos, _, err := buildEdges(context.Background(), "local-sw", locPorts, remEntries, nil)
 	if err != nil {
 		t.Fatalf("buildEdges: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestBuildEdgesNormal(t *testing.T) {
 	}
 
 	// No scope filter: MAC chassis ID neighbours are allowed through unconditionally.
-	edges, oos, _, err := buildEdges("leaf-01", locPorts, remEntries, nil)
+	edges, oos, _, err := buildEdges(context.Background(), "leaf-01", locPorts, remEntries, nil)
 	if err != nil {
 		t.Fatalf("buildEdges: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestBuildEdgesFallbackPortNum(t *testing.T) {
 		},
 	}
 
-	edges, _, _, err := buildEdges("me", locPorts, remEntries, nil)
+	edges, _, _, err := buildEdges(context.Background(), "me", locPorts, remEntries, nil)
 	if err != nil {
 		t.Fatalf("buildEdges: %v", err)
 	}
@@ -300,7 +300,7 @@ func TestBuildEdgesUsesPortDesc(t *testing.T) {
 		},
 	}
 
-	edges, _, _, err := buildEdges("me", locPorts, remEntries, nil)
+	edges, _, _, err := buildEdges(context.Background(), "me", locPorts, remEntries, nil)
 	if err != nil {
 		t.Fatalf("buildEdges: %v", err)
 	}
@@ -320,7 +320,7 @@ func TestBuildEdgesSkipsEmpty(t *testing.T) {
 		{1, 2}: {chassisID: []byte{1}, portID: []byte{}, sysName: "peer"},
 	}
 
-	edges, _, _, err := buildEdges("me", locPorts, remEntries, nil)
+	edges, _, _, err := buildEdges(context.Background(), "me", locPorts, remEntries, nil)
 	if err != nil {
 		t.Fatalf("buildEdges: %v", err)
 	}
@@ -715,7 +715,7 @@ func TestBuildEdgesSkipEmptyRemPort(t *testing.T) {
 			sysName:        "peer",
 		},
 	}
-	edges, _, _, err := buildEdges("me", locPorts, remEntries, nil)
+	edges, _, _, err := buildEdges(context.Background(), "me", locPorts, remEntries, nil)
 	if err != nil {
 		t.Fatalf("buildEdges: %v", err)
 	}
@@ -851,7 +851,7 @@ func TestBuildEdgesInvalidChassisSubtypeLow(t *testing.T) {
 			sysName:        "peer",
 		},
 	}
-	edges, _, _, err := buildEdges("me", locPorts, remEntries, nil)
+	edges, _, _, err := buildEdges(context.Background(), "me", locPorts, remEntries, nil)
 	if err != nil {
 		t.Fatalf("buildEdges: %v", err)
 	}
@@ -872,7 +872,7 @@ func TestBuildEdgesInvalidChassisSubtypeHigh(t *testing.T) {
 			sysName:        "peer",
 		},
 	}
-	edges, _, _, err := buildEdges("me", locPorts, remEntries, nil)
+	edges, _, _, err := buildEdges(context.Background(), "me", locPorts, remEntries, nil)
 	if err != nil {
 		t.Fatalf("buildEdges: %v", err)
 	}
@@ -893,7 +893,7 @@ func TestBuildEdgesInvalidPortSubtypeLow(t *testing.T) {
 			sysName:        "peer",
 		},
 	}
-	edges, _, _, err := buildEdges("me", locPorts, remEntries, nil)
+	edges, _, _, err := buildEdges(context.Background(), "me", locPorts, remEntries, nil)
 	if err != nil {
 		t.Fatalf("buildEdges: %v", err)
 	}
@@ -914,7 +914,7 @@ func TestBuildEdgesInvalidPortSubtypeHigh(t *testing.T) {
 			sysName:        "peer",
 		},
 	}
-	edges, _, _, err := buildEdges("me", locPorts, remEntries, nil)
+	edges, _, _, err := buildEdges(context.Background(), "me", locPorts, remEntries, nil)
 	if err != nil {
 		t.Fatalf("buildEdges: %v", err)
 	}
@@ -935,7 +935,7 @@ func TestBuildEdgesMACChassisIDWrongLength(t *testing.T) {
 			sysName:        "peer",
 		},
 	}
-	edges, _, _, err := buildEdges("me", locPorts, remEntries, nil)
+	edges, _, _, err := buildEdges(context.Background(), "me", locPorts, remEntries, nil)
 	if err != nil {
 		t.Fatalf("buildEdges: %v", err)
 	}
@@ -956,7 +956,7 @@ func TestBuildEdgesNetworkAddressChassisIDUnknownFamily(t *testing.T) {
 			sysName:        "peer",
 		},
 	}
-	edges, _, _, err := buildEdges("me", locPorts, remEntries, nil)
+	edges, _, _, err := buildEdges(context.Background(), "me", locPorts, remEntries, nil)
 	if err != nil {
 		t.Fatalf("buildEdges: %v", err)
 	}
@@ -977,7 +977,7 @@ func TestBuildEdgesNetworkAddressChassisIDIPv4WrongLength(t *testing.T) {
 			sysName:        "peer",
 		},
 	}
-	edges, _, _, err := buildEdges("me", locPorts, remEntries, nil)
+	edges, _, _, err := buildEdges(context.Background(), "me", locPorts, remEntries, nil)
 	if err != nil {
 		t.Fatalf("buildEdges: %v", err)
 	}
@@ -998,7 +998,7 @@ func TestBuildEdgesMACPortIDWrongLength(t *testing.T) {
 			sysName:        "peer",
 		},
 	}
-	edges, _, _, err := buildEdges("me", locPorts, remEntries, nil)
+	edges, _, _, err := buildEdges(context.Background(), "me", locPorts, remEntries, nil)
 	if err != nil {
 		t.Fatalf("buildEdges: %v", err)
 	}
@@ -1022,7 +1022,7 @@ func TestBuildEdgesPeerChassisMACMetadata(t *testing.T) {
 		},
 	}
 
-	edges, _, _, err := buildEdges("me", locPorts, remEntries, nil)
+	edges, _, _, err := buildEdges(context.Background(), "me", locPorts, remEntries, nil)
 	if err != nil {
 		t.Fatalf("buildEdges: %v", err)
 	}
@@ -1057,7 +1057,7 @@ func TestBuildEdgesNoPeerChassisMACWithoutSysName(t *testing.T) {
 		},
 	}
 
-	edges, _, _, err := buildEdges("me", locPorts, remEntries, nil)
+	edges, _, _, err := buildEdges(context.Background(), "me", locPorts, remEntries, nil)
 	if err != nil {
 		t.Fatalf("buildEdges: %v", err)
 	}
@@ -1165,6 +1165,45 @@ func TestIEEE802_1ABCompliance(t *testing.T) {
 	}
 }
 
+// ---------- decode-issue reporter tests (issue #99) ----------
+
+// buildEdges: a row rejected for an out-of-range chassis subtype reports a
+// decode issue to the reporter installed on ctx with reason
+// chassis_subtype_invalid and the lldpRemTable root OID.
+func TestBuildEdgesReportsDecodeIssue(t *testing.T) {
+	var issues []snmputil.DecodeIssue
+	ctx := snmputil.ContextWithDecodeIssueReporter(context.Background(), func(i snmputil.DecodeIssue) {
+		issues = append(issues, i)
+	})
+
+	remEntries := map[remKey]*remEntry{
+		{1, 1}: {
+			chassisSubtype: 0, // invalid: below IEEE 802.1AB range 1–7
+			chassisID:      []byte{0, 1, 2, 3, 4, 5},
+			portSubtype:    portSubtypeInterfaceName,
+			portID:         []byte("Eth0"),
+			sysName:        "peer",
+		},
+	}
+
+	edges, _, _, err := buildEdges(ctx, "me", map[int]locPort{}, remEntries, nil)
+	if err != nil {
+		t.Fatalf("buildEdges: %v", err)
+	}
+	if len(edges) != 0 {
+		t.Fatalf("expected 0 edges, got %d", len(edges))
+	}
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 decode issue, got %d: %v", len(issues), issues)
+	}
+	if issues[0].Module != walkerLLDP || issues[0].Reason != "chassis_subtype_invalid" {
+		t.Errorf("issue = {%q,%q}, want {lldp,chassis_subtype_invalid}", issues[0].Module, issues[0].Reason)
+	}
+	if string(issues[0].OID) != oidRemTable {
+		t.Errorf("issue OID = %q, want %q", issues[0].OID, oidRemTable)
+	}
+}
+
 // ---------- TestMandatoryTLVValidation ----------
 
 // TestMandatoryTLVValidation verifies that buildEdges drops entries whose
@@ -1223,7 +1262,7 @@ func TestMandatoryTLVValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			entry := tc.entry
 			remEntries := map[remKey]*remEntry{{1, 1}: &entry}
-			edges, _, _, err := buildEdges("me", map[int]locPort{}, remEntries, nil)
+			edges, _, _, err := buildEdges(context.Background(), "me", map[int]locPort{}, remEntries, nil)
 			if err != nil {
 				t.Fatalf("buildEdges: %v", err)
 			}

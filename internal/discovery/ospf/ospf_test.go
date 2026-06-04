@@ -354,3 +354,58 @@ func TestParseNbrOIDValid(t *testing.T) {
 		t.Errorf("key = %q, want 192.0.2.1.0", key)
 	}
 }
+
+// ---------- decode-issue reporter tests (issue #99) ----------
+
+// walkOspfNbrTable: a PDU with a malformed neighbour-OID suffix and an
+// ospfNbrIpAddr PDU that does not decode as IPv4 each report a decode issue to
+// the reporter installed on ctx, tagged with the ospfNbrTable root OID.
+func TestWalkOspfNbrTableReportsDecodeIssues(t *testing.T) {
+	const base = ".1.3.6.1.2.1.14.10.1."
+	const idx = "192.0.2.1.0"
+
+	pdus := []gsnmp.SnmpPDU{
+		// Malformed suffix: within the BulkWalk root but parseNbrOID rejects the
+		// ".2." sub-table prefix → oid_suffix_malformed.
+		{Name: ".1.3.6.1.2.1.14.10.2.1.192.0.2.1.0", Type: gsnmp.Integer, Value: int(8)},
+		// ospfNbrIpAddr with a 2-byte raw value → PDUIPv4 returns nil →
+		// nbr_ip_undecodable.
+		{Name: base + "1." + idx, Type: gsnmp.OctetString, Value: []byte{192, 0}},
+	}
+
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
+	client, err := snmputil.Open(p)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = client.Conn.Close() }()
+
+	var issues []snmputil.DecodeIssue
+	ctx := snmputil.ContextWithDecodeIssueReporter(context.Background(), func(i snmputil.DecodeIssue) {
+		issues = append(issues, i)
+	})
+
+	if _, _, err := walkOspfNbrTable(ctx, client); err != nil {
+		t.Fatalf("walkOspfNbrTable: %v", err)
+	}
+
+	got := map[string]int{}
+	for _, i := range issues {
+		if i.Module != walkerOSPF {
+			t.Errorf("issue module = %q, want ospf", i.Module)
+		}
+		if string(i.OID) != oidOspfNbrTable {
+			t.Errorf("issue OID = %q, want %q", i.OID, oidOspfNbrTable)
+		}
+		got[i.Reason]++
+	}
+	if got["oid_suffix_malformed"] != 1 {
+		t.Errorf("oid_suffix_malformed count = %d, want 1 (issues: %v)", got["oid_suffix_malformed"], issues)
+	}
+	if got["nbr_ip_undecodable"] != 1 {
+		t.Errorf("nbr_ip_undecodable count = %d, want 1 (issues: %v)", got["nbr_ip_undecodable"], issues)
+	}
+}

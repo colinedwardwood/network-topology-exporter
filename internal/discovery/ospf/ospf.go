@@ -147,6 +147,7 @@ func walkOspfNbrTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*nb
 	for _, pdu := range pdus {
 		col, key, ok := parseNbrOID(pdu.Name, prefix)
 		if !ok {
+			snmputil.ReportDecodeIssue(ctx, walkerOSPF, oidOspfNbrTable, "oid_suffix_malformed", 1)
 			continue
 		}
 		row := rows[key]
@@ -157,6 +158,9 @@ func walkOspfNbrTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*nb
 		switch col {
 		case colNbrIPAddr:
 			row.nbrIP = snmputil.PDUIPv4(pdu)
+			if row.nbrIP == nil {
+				snmputil.ReportDecodeIssue(ctx, walkerOSPF, oidOspfNbrTable, "nbr_ip_undecodable", 1)
+			}
 		case colNbrState:
 			row.state = snmputil.PDUInt(pdu)
 		}
