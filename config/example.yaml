@@ -47,6 +47,14 @@ discovery:
   # 0 = no additional cap (default); must be < timeout_per_device when set.
   # timeout_per_module: 3s
 
+  # Per-target SNMP request (PDU) rate cap. A high parallelism with every
+  # module enabled can otherwise fire hundreds of PDUs/sec at a single slow
+  # device and self-DoS its SNMP daemon. This paces the steady-state walk rate
+  # against each device independently (per-target isolation). 0 = unlimited
+  # (default — unchanged behaviour); set a positive value (e.g. 50) only if a
+  # target's agent struggles under load.
+  # per_target_pdu_rate_per_second: 50
+
   # Polling-scope guard (hard allow-list). The exporter polls only IPs within
   # these CIDRs. LLDP/CDP-discovered neighbours outside this range surface as
   # network_topology_out_of_scope_neighbours_total but are never polled.

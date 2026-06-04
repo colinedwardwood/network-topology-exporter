@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/time/rate"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
@@ -215,6 +216,23 @@ func RunCycle(
 				m.DiscoveryDecodeIssues.WithLabelValues(issue.Module, string(issue.OID), issue.Reason).Add(float64(issue.Count))
 				m.DiscoveryQuarantinedRowsTotal.WithLabelValues(issue.Module, string(issue.OID), issue.Reason).Add(float64(issue.Count))
 			})
+
+			// Issue #72: per-target SNMP PDU rate limiter. When configured, cap
+			// the steady-state request rate against this single device so a high
+			// parallelism + all-modules run cannot self-DoS its SNMP daemon. One
+			// limiter per device per cycle (per-target isolation — never shared
+			// across devices). Burst is set equal to the rate so a freshly-built
+			// limiter starts with a full 1-second bucket (no artificial stall on
+			// the first walk) while still pacing sustained throughput to the
+			// configured ceiling. Unset/0 injects nothing — zero overhead,
+			// unchanged behaviour.
+			if rps := cfg.Discovery.PerTargetPDURatePerSecond; rps > 0 {
+				lim := rate.NewLimiter(rate.Limit(rps), rps)
+				devCtx = snmpwalk.ContextWithRateLimiter(devCtx, lim)
+				devCtx = snmpwalk.ContextWithRateLimitWaitObserver(devCtx, func(d time.Duration) {
+					m.SNMPRateLimitWaitSeconds.Observe(d.Seconds())
+				})
+			}
 
 			resolver.RecordSuccess(ip.String(), profileName)
 			m.CredentialTrialsTotal.WithLabelValues("ok").Inc()

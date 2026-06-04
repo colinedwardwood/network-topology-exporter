@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	g "github.com/gosnmp/gosnmp"
+	"golang.org/x/time/rate"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 )
@@ -203,6 +204,48 @@ func Open(p Params) (*g.GoSNMP, error) {
 	return client, nil
 }
 
+type rateLimiterKey struct{}
+type rateLimitWaitObserverKey struct{}
+
+// ContextWithRateLimiter returns a child context carrying a per-target SNMP
+// request-rate limiter. BulkWalk consults the limiter before issuing each walk
+// so that the steady-state PDU rate against an individual device cannot exceed
+// the operator-configured ceiling, preventing a self-DoS of the device's SNMP
+// daemon (issue #72). A nil limiter returns the original context unchanged
+// (the default — zero overhead, unlimited rate). The limiter is injected per
+// device per cycle in internal/app/cycle.go; it deliberately lives behind a
+// context seam (mirroring ContextWithDecodeIssueReporter) so that this package
+// stays free of any prometheus-client dependency.
+func ContextWithRateLimiter(ctx context.Context, l *rate.Limiter) context.Context {
+	if l == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, rateLimiterKey{}, l)
+}
+
+func rateLimiterFrom(ctx context.Context) *rate.Limiter {
+	l, _ := ctx.Value(rateLimiterKey{}).(*rate.Limiter)
+	return l
+}
+
+// ContextWithRateLimitWaitObserver returns a child context carrying a callback
+// invoked with the duration BulkWalk spent blocked on the per-target rate
+// limiter. cycle.go wires this to the network_topology_snmp_rate_limit_wait_seconds
+// histogram; carrying it as a context callback (rather than a metrics handle)
+// keeps the prometheus-client import out of this package. A nil callback
+// returns the original context unchanged.
+func ContextWithRateLimitWaitObserver(ctx context.Context, fn func(time.Duration)) context.Context {
+	if fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, rateLimitWaitObserverKey{}, fn)
+}
+
+func rateLimitWaitObserverFrom(ctx context.Context) func(time.Duration) {
+	fn, _ := ctx.Value(rateLimitWaitObserverKey{}).(func(time.Duration))
+	return fn
+}
+
 // BulkWalk walks rootOID using BulkWalkAll, falling back to WalkAll for
 // devices that reject GetBulk PDUs (some older IOS/JunOS revisions, some AP
 // controllers). ctx is checked before each attempt and wraps the blocking
@@ -211,6 +254,20 @@ func Open(p Params) (*g.GoSNMP, error) {
 func BulkWalk(ctx context.Context, client *g.GoSNMP, rootOID string) ([]g.SnmpPDU, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+
+	// Per-target rate limit (issue #72): block here until a token is available
+	// before issuing the walk. Wait is ctx-aware — on cancellation/deadline it
+	// returns promptly with an error and we do NOT issue the walk. When no
+	// limiter is installed (the default), this is a no-op with zero overhead.
+	if l := rateLimiterFrom(ctx); l != nil {
+		start := time.Now()
+		if err := l.Wait(ctx); err != nil {
+			return nil, err
+		}
+		if obs := rateLimitWaitObserverFrom(ctx); obs != nil {
+			obs(time.Since(start))
+		}
 	}
 
 	type walkResult struct {

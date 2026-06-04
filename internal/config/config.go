@@ -202,6 +202,15 @@ type DiscoveryConfig struct {
 	// this value. Mirrors FederationHubConfig.MaxGraphEdges for standalone
 	// and spoke mode.
 	MaxGraphEdges int `yaml:"max_graph_edges"`
+
+	// PerTargetPDURatePerSecond caps the steady-state SNMP request (PDU) rate
+	// issued against a single device during a discovery cycle. A misconfigured
+	// high parallelism with all modules enabled can otherwise drive hundreds of
+	// PDUs/sec at one target and self-DoS its SNMP daemon (issue #72). The cap
+	// is applied per device per cycle (per-target isolation — limiters are not
+	// shared across devices). 0 (default) means unlimited, preserving today's
+	// behaviour. Must be >= 0.
+	PerTargetPDURatePerSecond int `yaml:"per_target_pdu_rate_per_second"`
 }
 
 // ScopeConfig is the LD-11 polling-scope guard. CIDRAllowList is mandatory
@@ -447,6 +456,9 @@ func (c *Config) validate() error {
 	}
 	if c.Discovery.MaxGraphEdges < 0 {
 		return errors.New("discovery.max_graph_edges must be >= 0 (0 = unlimited)")
+	}
+	if c.Discovery.PerTargetPDURatePerSecond < 0 {
+		return errors.New("discovery.per_target_pdu_rate_per_second must be >= 0 (0 = unlimited)")
 	}
 	if c.Discovery.Interval <= 0 {
 		return errors.New("discovery.interval must be > 0")

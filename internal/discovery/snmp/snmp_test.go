@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	gsnmp "github.com/gosnmp/gosnmp"
+	"golang.org/x/time/rate"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/snmptest"
 )
@@ -1493,5 +1494,108 @@ func TestParseStrictAcceptsValid(t *testing.T) {
 	}
 	if len(nets) != 2 {
 		t.Errorf("ParseCIDRsStrict returned %d nets, want 2", len(nets))
+	}
+}
+
+// ContextWithRateLimiter: a nil limiter returns the original context unchanged
+// (the default / unlimited path).
+func TestContextWithRateLimiterNil(t *testing.T) {
+	ctx := context.Background()
+	if got := ContextWithRateLimiter(ctx, nil); got != ctx {
+		t.Error("ContextWithRateLimiter(nil) should return the original context")
+	}
+	if rateLimiterFrom(ctx) != nil {
+		t.Error("rateLimiterFrom should be nil on a bare context")
+	}
+}
+
+// ContextWithRateLimiter: BulkWalk paces throughput to the configured rate.
+// We drive several real BulkWalks through the ctx seam at a known low rate and
+// assert the total elapsed time is consistent with the limiter biting. Burst
+// equals the rate (mirroring cycle.go), so the first `rate` calls are free and
+// each subsequent call costs ~1/rate. Tolerances are generous and durations
+// short to keep the timing assertion non-flaky.
+func TestBulkWalkRateLimiterPacesThroughput(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.1.1.0", Type: gsnmp.OctetString, Value: []byte("desc")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
+	client, err := Open(p)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = client.Conn.Close() }()
+
+	// Rate 5/s, burst 1: the bucket starts with 1 token, so the first walk is
+	// free and each of the next N-1 walks waits ~200ms. 4 paced waits ≈ 800ms.
+	const calls = 5
+	lim := rate.NewLimiter(rate.Limit(5), 1)
+	var totalWait time.Duration
+	ctx := ContextWithRateLimiter(context.Background(), lim)
+	ctx = ContextWithRateLimitWaitObserver(ctx, func(d time.Duration) { totalWait += d })
+
+	start := time.Now()
+	for i := 0; i < calls; i++ {
+		if _, err := BulkWalk(ctx, client, "1.3.6.1.2.1.1"); err != nil {
+			t.Fatalf("BulkWalk #%d: %v", i, err)
+		}
+	}
+	elapsed := time.Since(start)
+
+	// (calls-1) paced waits at 1/5s = 800ms expected. Lower bound guards that
+	// the limiter actually held; we deliberately omit a tight upper bound to
+	// avoid flakiness under load.
+	const wantMin = 600 * time.Millisecond
+	if elapsed < wantMin {
+		t.Errorf("elapsed %v < %v: rate limiter did not pace throughput", elapsed, wantMin)
+	}
+	if totalWait <= 0 {
+		t.Error("expected non-zero observed wait time from the rate-limit observer")
+	}
+}
+
+// ContextWithRateLimiter: a cancelled context interrupts a waiting limit-block
+// promptly and the walk is NOT issued. We set an effectively-infinite delay
+// (rate so low the second token never arrives in-test) and a deadline already
+// in the past, then assert Wait returns an error fast. A counting observer
+// proves the wait callback is not fired on the error path.
+func TestBulkWalkRateLimiterCtxCancel(t *testing.T) {
+	pdus := []gsnmp.SnmpPDU{
+		{Name: ".1.3.6.1.2.1.1.1.0", Type: gsnmp.OctetString, Value: []byte("desc")},
+	}
+	addr := snmptest.Start(t, "public", pdus)
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := Params{IP: ip, Port: port, Community: []byte("public"), Timeout: 3 * time.Second}
+	client, err := Open(p)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = client.Conn.Close() }()
+
+	// Rate of ~1 token/hour, burst 0: no token is ever immediately available,
+	// so Wait must block — until the context deadline (already expired) trips.
+	lim := rate.NewLimiter(rate.Limit(1.0/3600.0), 0)
+	observed := false
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx = ContextWithRateLimiter(ctx, lim)
+	ctx = ContextWithRateLimitWaitObserver(ctx, func(time.Duration) { observed = true })
+	cancel() // already cancelled before the call
+
+	start := time.Now()
+	_, err = BulkWalk(ctx, client, "1.3.6.1.2.1.1")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error from cancelled-context rate-limit wait, got nil")
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("Wait took %v to return after cancel, want prompt return", elapsed)
+	}
+	if observed {
+		t.Error("rate-limit wait observer should not fire when Wait returns an error")
 	}
 }
