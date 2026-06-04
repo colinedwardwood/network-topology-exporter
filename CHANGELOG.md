@@ -191,6 +191,22 @@ v1.3.1 lands under this milestone instead, renamed to
   documented in `docs/operator/security.md` § "Verifying release artefact
   provenance." Closes the supply-chain attestation gap identified in the
   May 2026 architectural review.
+- **#72 — Per-target SNMP PDU rate limiter.** New
+  `discovery.per_target_pdu_rate_per_second` (default `0` = unlimited, today's
+  behaviour) caps the steady-state SNMP request rate against an individual
+  device, so a high-`parallelism`, all-modules run can no longer self-DoS a slow
+  target's SNMP daemon. The limiter is per-target, applied at the `BulkWalk`
+  boundary (covers every walker uniformly), and waits on `ctx.Done()` so a stuck
+  target never blocks a worker past `discovery.timeout_per_device`. New histogram
+  `network_topology_snmp_rate_limit_wait_seconds` surfaces when the limit is
+  biting. Closes the self-DoS gap tracked in `docs/operator/threat-model.md`.
+  Closes #72.
+- **#84 — OSS-Fuzz integration staged.** New `oss-fuzz/` directory holds the
+  `project.yaml` / `Dockerfile` / `build.sh` to enroll the project in Google
+  OSS-Fuzz for continuous fuzzing of the native Go harnesses. `build.sh`
+  auto-discovers every `Fuzz*` target under `internal/discovery/` (16 today), so
+  new harnesses are picked up with no edit. The upstream `google/oss-fuzz`
+  application and PR are tracked as remaining steps on #84.
 
 ### Discovery
 
@@ -225,6 +241,16 @@ v1.3.1 lands under this milestone instead, renamed to
   cost without coverage. README BGP vendor-coverage table updated to
   describe what was validated where. Closes #58.
 
+- **#74 — Protocol-level discovery scoping.** New `discovery.target_overrides`
+  (a list of `{cidr, modules}` rules) restricts which modules run against a
+  CIDR, resolved most-specific-first (longest-prefix match, same precedence
+  model as `credentials.assignments`) and intersected with globally-enabled
+  modules. Heterogeneous fleets can now skip irrelevant walks — e.g. BGP against
+  access switches — eliminating guaranteed `mib_unimplemented` noise and a wasted
+  SNMP cycle. An override referencing a globally-disabled module is a config
+  error; IPs matching no override run all enabled modules (unchanged default).
+  The admin `/admin/rediscover` path honours overrides too. Closes #74.
+
 ### Operability
 
 - **Admin endpoint for forced out-of-cycle re-discovery.** New
@@ -245,6 +271,19 @@ v1.3.1 lands under this milestone instead, renamed to
   device's edges land in `/metrics` on the next regular cycle. New audit metric
   `network_topology_admin_rediscovery_total{outcome}`. See
   `docs/operator/troubleshooting.md` § 4a. Closes #73.
+- **#78 — Release artefacts mirrored beyond GHCR.** The release pipeline now
+  mirrors the multi-arch image to Docker Hub
+  (`docker.io/colinedwardwood/network-topology-exporter`) alongside GHCR, and
+  publishes a cosign-signed offline tarball (static binaries + sigs, example
+  config, Helm chart, Kustomize overlays) attached to each GitHub Release for
+  air-gapped / proxy-restricted environments. The Docker Hub push is gated on the
+  `DOCKERHUB_TOKEN` secret, so releases stay GHCR-complete until the repo owner
+  provisions the Docker Hub repo + secrets (remaining steps on #78).
+- **#79 — Kustomize manifests.** New `deploy/kustomize/` (base + `standalone` /
+  `hub` / `spoke` overlays) lets the exporter be installed with `kubectl apply
+  -k`, Argo CD, or Flux without Helm. The manifests mirror the Helm chart's
+  rendered output; a new `kustomize-smoke` CI workflow validates that all three
+  overlays render. Closes the Helm-only deployment gap (#79).
 
 ### Documentation
 
