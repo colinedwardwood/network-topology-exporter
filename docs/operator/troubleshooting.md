@@ -70,6 +70,14 @@ An edge you expect is absent from `network_topology_edge_info`.
    snmpwalk -v2c -c public <device-ip> .1.0.8802.1.1.2.1.4
    ```
 
+6. To learn which signal (metric label or log line) a given walker emits for a
+   given dependency failure, consult the per-walker matrix in
+   [`failure-modes.md`](failure-modes.md). It documents, for LLDP, CDP, OSPF,
+   IS-IS, BGP, FDB, MPLS-TE, the SNMP system walk, and ARP enrichment, exactly
+   what happens on each external-dependency failure and where it surfaces — and
+   flags the cases that degrade silently (no metric, debug-log only), which is
+   why an expected edge can be missing with no obvious alert firing.
+
 ---
 
 ## 4. Credential failures
