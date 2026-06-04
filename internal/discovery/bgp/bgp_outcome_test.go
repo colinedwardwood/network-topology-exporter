@@ -50,6 +50,10 @@ func (f *fakeWalkerMetrics) RecordProtocolWalkerOutcome(walker, outcome string) 
 	f.calls = append(f.calls, walkerCall{walker, outcome})
 }
 
+// RecordDegraded satisfies snmputil.WalkerMetrics (issue #100). The BGP
+// outcome tests don't assert on degraded signals, so it is a no-op.
+func (f *fakeWalkerMetrics) RecordDegraded(_, _ string) {}
+
 // count returns the number of recorded calls matching (walker, outcome).
 // Linear scan because test inputs are small (typically <10 entries) and
 // the simple shape makes failures easy to debug.

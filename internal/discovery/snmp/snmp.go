@@ -45,9 +45,18 @@ import (
 // nil-tolerant helper in their own package (see bgp.recordWalkerOutcome): a
 // nil Params or nil Params.WalkerMetrics drops the increment rather than
 // panicking.
+//
+// RecordDegraded increments network_topology_discovery_degraded_total for a
+// (module, reason) tuple. It exists for the zero-edge degraded case (issue
+// #100): when a sub-walk fails and the module returns no edge to stamp with
+// degraded metadata, the orchestrator's edge-metadata path (see
+// internal/app/cycle.go CollectDegradedReasons) has nothing to carry the
+// signal. Modules call this directly so a degraded run is still observable.
+// Same nil-tolerance contract as the outcome methods.
 type WalkerMetrics interface {
 	RecordWalkerOutcome(walker, outcome string)
 	RecordProtocolWalkerOutcome(walker, outcome string)
+	RecordDegraded(module, reason string)
 }
 
 // WarnLimiter is the per-key Warn rate-limiter sink used by discovery

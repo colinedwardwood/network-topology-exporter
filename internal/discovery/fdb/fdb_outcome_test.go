@@ -21,9 +21,17 @@ type walkerCall struct {
 	Outcome string
 }
 
+// degradedCall captures one (module, reason) tuple recorded via
+// RecordDegraded (issue #100).
+type degradedCall struct {
+	Module string
+	Reason string
+}
+
 type fakeWalkerMetrics struct {
-	mu    sync.Mutex
-	calls []walkerCall
+	mu        sync.Mutex
+	calls     []walkerCall
+	degradeds []degradedCall
 }
 
 func (f *fakeWalkerMetrics) RecordWalkerOutcome(walker, outcome string) {
@@ -38,12 +46,30 @@ func (f *fakeWalkerMetrics) RecordProtocolWalkerOutcome(walker, outcome string) 
 	f.calls = append(f.calls, walkerCall{walker, outcome})
 }
 
+func (f *fakeWalkerMetrics) RecordDegraded(module, reason string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.degradeds = append(f.degradeds, degradedCall{module, reason})
+}
+
 func (f *fakeWalkerMetrics) count(walker, outcome string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var n int
 	for _, c := range f.calls {
 		if c.Walker == walker && c.Outcome == outcome {
+			n++
+		}
+	}
+	return n
+}
+
+func (f *fakeWalkerMetrics) countDegraded(module, reason string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var n int
+	for _, d := range f.degradeds {
+		if d.Module == module && d.Reason == reason {
 			n++
 		}
 	}

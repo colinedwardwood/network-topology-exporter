@@ -37,3 +37,11 @@ func (a *WalkerMetricsAdapter) RecordWalkerOutcome(walker, outcome string) {
 func (a *WalkerMetricsAdapter) RecordProtocolWalkerOutcome(walker, outcome string) {
 	a.m.WalkerOutcomeTotal.WithLabelValues(walker, outcome).Inc()
 }
+
+// RecordDegraded increments network_topology_discovery_degraded_total for the
+// (module, reason) tuple. Used for zero-edge degraded runs that cannot be
+// carried by the orchestrator's edge-metadata path (issue #100); the label
+// set and semantics are documented on Metrics.DiscoveryDegradedTotal.
+func (a *WalkerMetricsAdapter) RecordDegraded(module, reason string) {
+	a.m.DiscoveryDegradedTotal.WithLabelValues(module, reason).Inc()
+}

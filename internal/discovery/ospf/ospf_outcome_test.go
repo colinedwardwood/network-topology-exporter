@@ -38,6 +38,10 @@ func (f *fakeWalkerMetrics) RecordProtocolWalkerOutcome(walker, outcome string) 
 	f.calls = append(f.calls, walkerCall{walker, outcome})
 }
 
+// RecordDegraded satisfies snmputil.WalkerMetrics (issue #100). This module's
+// outcome tests don't assert on degraded signals, so it is a no-op.
+func (f *fakeWalkerMetrics) RecordDegraded(_, _ string) {}
+
 func (f *fakeWalkerMetrics) count(walker, outcome string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

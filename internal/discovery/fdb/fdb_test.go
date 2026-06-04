@@ -927,7 +927,7 @@ func TestWalkVlanCommunityFdbsMaxVlans(t *testing.T) {
 	}
 	entries := make(map[string]*fdbEntry)
 	// MaxVlans=2: only VLANs 10 and 20 should be walked; VLAN 30 must be skipped.
-	walkVlanCommunityFdbs(context.Background(), p, mainClient, entries, 2)
+	walkVlanCommunityFdbs(context.Background(), &p, mainClient, entries, 2)
 
 	// VLAN 10 and 20 entries should be present.
 	key10 := "0.170.187.204.221.16"
@@ -952,7 +952,7 @@ func TestWalkVlanCommunityFdbsV3Skip(t *testing.T) {
 	entries := make(map[string]*fdbEntry)
 	p := snmputil.Params{V3: true, Community: []byte("public")}
 	// Should return without calling anything on client (which is dead).
-	walkVlanCommunityFdbs(context.Background(), p, client, entries, 100)
+	walkVlanCommunityFdbs(context.Background(), &p, client, entries, 100)
 }
 
 // walkVlanCommunityFdbs: per-VLAN snmputil.Open fails (nil IP) → continue
@@ -991,7 +991,7 @@ func TestWalkVlanCommunityFdbsOpenFails(t *testing.T) {
 	}
 	entries := make(map[string]*fdbEntry)
 	// Should not panic and should not add any entries.
-	walkVlanCommunityFdbs(context.Background(), p, realClient, entries, 100)
+	walkVlanCommunityFdbs(context.Background(), &p, realClient, entries, 100)
 }
 
 // TestWalkVlanCommunityFdbsParallel verifies that walkVlanCommunityFdbs merges
@@ -1069,7 +1069,7 @@ func TestWalkVlanCommunityFdbsParallel(t *testing.T) {
 		macKeys[10]: preExistingEntry,
 	}
 
-	walkVlanCommunityFdbs(context.Background(), p, mainClient, entries, 100)
+	walkVlanCommunityFdbs(context.Background(), &p, mainClient, entries, 100)
 
 	// All four VLAN entries must be present.
 	for _, id := range vlanIDs {

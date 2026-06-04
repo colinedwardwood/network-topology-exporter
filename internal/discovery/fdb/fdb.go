@@ -120,6 +120,16 @@ const (
 	outcomeError            = "error"
 )
 
+// Degraded reasons for network_topology_discovery_degraded_total{module="fdb"}
+// (issue #100). These signal a sub-walk failure that left the device's
+// bridging topology incomplete on a path the orchestrator's edge-metadata
+// degraded channel cannot reach (a zero-edge degraded run carries no edge to
+// stamp). Keep low-cardinality: label by reason only, never by VLAN id.
+const (
+	reasonQBridgeWalkFailed = "qbridge_walk_failed"
+	reasonVLANWalkFailed    = "vlan_walk_failed"
+)
+
 // recordWalkerOutcome forwards a {walker, outcome} observation to the generic
 // non-BGP counter via the metrics sink carried on Params. nil-safe: a nil
 // Params or nil Params.WalkerMetrics drops the increment rather than panicking,
@@ -130,6 +140,28 @@ func recordWalkerOutcome(p *snmputil.Params, walker, outcome string) {
 	}
 	p.WalkerMetrics.RecordProtocolWalkerOutcome(walker, outcome)
 }
+
+// recordDegraded forwards a {module, reason} degraded observation to
+// DiscoveryDegradedTotal via the metrics sink carried on Params. nil-safe like
+// recordWalkerOutcome. This is the zero-edge degraded path (issue #100): a
+// failed sub-walk that yields no edge cannot be carried by the orchestrator's
+// edge-metadata degraded channel, so the module reports it directly.
+func recordDegraded(p *snmputil.Params, module, reason string) {
+	if p == nil || p.WalkerMetrics == nil {
+		return
+	}
+	p.WalkerMetrics.RecordDegraded(module, reason)
+}
+
+// Sub-walk seams (issue #100). Wrapping the two non-fatal sub-walks in
+// package-level function variables lets tests inject a failure that the
+// in-process SNMP test agent cannot otherwise produce (BulkWalk against the
+// fake agent returns empty, never errors). Production code uses the real
+// implementations; only tests reassign these, restoring them with t.Cleanup.
+var (
+	walkQBridgeFdbTableFn = walkQBridgeFdbTable
+	walkFdbTableIntoFn    = walkFdbTableInto
+)
 
 // dot1qTpFdbTable column numbers (RFC 4363).
 const (
@@ -173,14 +205,24 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, _ []*net.I
 	// A device that implements ONLY Q-BRIDGE (no B-MIB) still counts as
 	// MIB-implemented, so fold any Q-BRIDGE/VLAN entries into the base-table
 	// signal below.
-	if err := walkQBridgeFdbTable(ctx, client, entries); err != nil {
+	// Snapshot whether the B-MIB walk already produced usable entries BEFORE
+	// the Q-BRIDGE walk mutates the map. This is the false-alert guard (issue
+	// #100): a Q-BRIDGE failure only matters when the device actually depended
+	// on Q-BRIDGE. If B-MIB already populated entries, a Q-BRIDGE failure is
+	// benign and must stay quiet; a legitimate B-MIB-only device (clean,
+	// empty Q-BRIDGE walk) also stays quiet because there is no error.
+	bmibHadEntries := len(entries) > 0
+	if err := walkQBridgeFdbTableFn(ctx, client, entries); err != nil {
 		slog.Debug("fdb: Q-BRIDGE walk failed; using B-MIB only", "device", p.IP, "err", err)
+		if !bmibHadEntries {
+			recordDegraded(&p, walkerFDB, reasonQBridgeWalkFailed)
+		}
 	}
 	maxVlans := p.MaxVlans
 	if maxVlans <= 0 {
 		maxVlans = 100 // default when not set by caller
 	}
-	walkVlanCommunityFdbs(ctx, p, client, entries, maxVlans)
+	walkVlanCommunityFdbs(ctx, &p, client, entries, maxVlans)
 	// A device implementing only the Q-BRIDGE or VLAN-community FDB (and not
 	// B-MIB) is still a learning bridge; treat any forwarding-DB entry as
 	// evidence the MIB family is implemented.
@@ -385,7 +427,8 @@ const maxVlanConcurrency = 8
 // maxVlans caps the number of VLANs iterated; if the discovered VLAN list is
 // longer, a warning is logged and the remaining VLANs are skipped.
 // Per-VLAN walks run in parallel, bounded by maxVlanConcurrency.
-func walkVlanCommunityFdbs(ctx context.Context, p snmputil.Params, client *gsnmp.GoSNMP, entries map[string]*fdbEntry, maxVlans int) {
+func walkVlanCommunityFdbs(ctx context.Context, pp *snmputil.Params, client *gsnmp.GoSNMP, entries map[string]*fdbEntry, maxVlans int) {
+	p := *pp
 	if p.V3 || len(p.Community) == 0 {
 		return
 	}
@@ -450,12 +493,17 @@ func walkVlanCommunityFdbs(ctx context.Context, p snmputil.Params, client *gsnmp
 			vlanClient, err := snmputil.Open(vp)
 			if err != nil {
 				slog.Debug("fdb: VLAN community open failed", "device", vp.IP, "vlan", vlan, "err", err)
+				// A per-VLAN session that won't open leaves that VLAN's
+				// bridging topology undiscovered (issue #100). Label by reason
+				// only — never by vlan id — to keep cardinality bounded.
+				recordDegraded(pp, walkerFDB, reasonVLANWalkFailed)
 				return
 			}
 			defer func() { _ = vlanClient.Conn.Close() }()
 			vlanEntries := make(map[string]*fdbEntry)
-			if _, err := walkFdbTableInto(ctx, vlanClient, vlanEntries); err != nil {
+			if _, err := walkFdbTableIntoFn(ctx, vlanClient, vlanEntries); err != nil {
 				slog.Debug("fdb: VLAN community walk incomplete", "device", vp.IP, "vlan", vlan, "err", err)
+				recordDegraded(pp, walkerFDB, reasonVLANWalkFailed)
 			}
 			results[idx] = result{vlanEntries: vlanEntries}
 		}(i, vlanID)
