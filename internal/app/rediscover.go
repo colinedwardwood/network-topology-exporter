@@ -5,8 +5,11 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"os"
 	"sync"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
@@ -111,6 +114,42 @@ func NewRediscoverer(
 // uses this to fail closed (403) when no auth is configured.
 func (rd *Rediscoverer) AuthConfigured() bool { return rd.authConfigured }
 
+// WebConfigHasClientAuth reports whether the Prometheus exporter-toolkit
+// web-config at path actually authenticates the CLIENT — i.e. it defines
+// basic_auth_users or requires a client certificate. Plain server TLS
+// (tls_server_config without a client-cert-requiring client_auth_type)
+// encrypts the channel but does NOT authenticate the caller, so it must not
+// gate the privileged /admin/rediscover endpoint. Fails closed: an empty path
+// or an unreadable/unparseable config returns false (endpoint stays 403).
+func WebConfigHasClientAuth(path string) bool {
+	if path == "" {
+		return false
+	}
+	b, err := os.ReadFile(path) //nolint:gosec // operator-supplied config path
+	if err != nil {
+		return false
+	}
+	var wc struct {
+		BasicAuthUsers  map[string]string `yaml:"basic_auth_users"`
+		TLSServerConfig struct {
+			ClientAuthType string `yaml:"client_auth_type"`
+		} `yaml:"tls_server_config"`
+	}
+	if err := yaml.Unmarshal(b, &wc); err != nil {
+		return false
+	}
+	if len(wc.BasicAuthUsers) > 0 {
+		return true
+	}
+	// Only these two require the client to present a certificate. RequestClientCert
+	// and VerifyClientCertIfGiven make the cert optional → not authentication.
+	switch wc.TLSServerConfig.ClientAuthType {
+	case "RequireAnyClientCert", "RequireAndVerifyClientCert":
+		return true
+	}
+	return false
+}
+
 // Rediscover runs a forced out-of-cycle walk against each target IP and
 // returns one result per target in input order. Out-of-scope targets are
 // rejected before any SNMP traffic is sent. The whole batch runs under
@@ -151,9 +190,13 @@ func (rd *Rediscoverer) Rediscover(ctx context.Context, targets []string) []Redi
 		return results
 	}
 
-	// Serialise the SNMP work against the regular cycle.
-	rd.cycleMu.Lock()
-	defer rd.cycleMu.Unlock()
+	// Serialise the SNMP work against the regular cycle, but acquire CycleMu
+	// PER TARGET rather than around the whole batch: a forced rediscover of many
+	// (or slow/unreachable) targets must not monopolise the mutex and stall the
+	// regular discovery cycle for the entire batch. Locking per target bounds
+	// the contiguous hold to one device's walk and lets the regular cycle
+	// interleave between targets, while still guaranteeing the two paths never
+	// hit a device concurrently.
 	for _, p := range toWalk {
 		select {
 		case <-ctx.Done():
@@ -163,7 +206,9 @@ func (rd *Rediscoverer) Rediscover(ctx context.Context, targets []string) []Redi
 			continue
 		default:
 		}
+		rd.cycleMu.Lock()
 		outcome, edges, err := rd.walkOne(ctx, p.ip)
+		rd.cycleMu.Unlock()
 		results[p.idx].Outcome = outcome
 		results[p.idx].Edges = edges
 		if err != nil {

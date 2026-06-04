@@ -1,7 +1,6 @@
 package config
 
 import (
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1689,31 +1688,6 @@ func TestListenWebConfigFileWithLegacyTLSRejected(t *testing.T) {
 	}
 }
 
-// TestListenTLSRemovedKeysEmitNoWarning verifies that EmitDeprecationWarnings
-// is a no-op now that all deprecated TLS keys have been removed in v1.5.0.
-func TestListenTLSRemovedKeysEmitNoWarning(t *testing.T) {
-	// Only web_config_file (the current API) is used here — the old
-	// tls_cert_file/tls_key_file keys would cause a parse error so we
-	// cannot construct a config that uses them and still calls Load.
-	dir := t.TempDir()
-	webCfgPath := filepath.Join(dir, "web-config.yml")
-	if err := os.WriteFile(webCfgPath, []byte("# empty\n"), 0o600); err != nil {
-		t.Fatalf("write web-config: %v", err)
-	}
-	cfgPath := filepath.Join(dir, "config.yaml")
-	body := "listen:\n  web_config_file: " + webCfgPath + "\n"
-	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	c, err := Load(cfgPath)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if c.EmitDeprecationWarnings(nil) {
-		t.Error("EmitDeprecationWarnings returned true; expected false (no deprecated keys remain)")
-	}
-}
-
 // TestListenTLSNeitherSet verifies that omitting both TLS fields is valid
 // (plain HTTP mode).
 func TestListenTLSNeitherSet(t *testing.T) {
@@ -2305,30 +2279,6 @@ func TestRemovedKeysProduceParseError(t *testing.T) {
 				t.Fatalf("expected parse error for removed deprecated key(s), got nil")
 			}
 		})
-	}
-}
-
-// TestEmitDeprecationWarningsNoopWhenNeitherKeySet verifies that
-// EmitDeprecationWarnings is a silent no-op when only the new keys (or no
-// keys at all) are used.
-func TestEmitDeprecationWarningsNoopWhenNeitherKeySet(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(cfgPath, []byte("targets: []\n"), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	c, err := Load(cfgPath)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-
-	var buf strings.Builder
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	if c.EmitDeprecationWarnings(logger) {
-		t.Errorf("EmitDeprecationWarnings returned true; expected false (no deprecated keys)")
-	}
-	if buf.Len() > 0 {
-		t.Errorf("expected silent no-op; got log output:\n%s", buf.String())
 	}
 }
 

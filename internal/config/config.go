@@ -7,7 +7,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/url"
 	"os"
@@ -795,15 +794,6 @@ func (c *Config) validateFDB() error {
 		return errors.New("fdb.max_vlans must be at most 4096")
 	}
 	return nil
-}
-
-// EmitDeprecationWarnings is a no-op stub retained so call-sites in main
-// continue to compile without modification. All three deprecated config keys
-// (use_v2_mib, strict_device_name_matching, tls_cert_file/tls_key_file) were
-// removed in v1.5.0; the YAML loader now rejects them with a parse error.
-// Returns false always.
-func (c *Config) EmitDeprecationWarnings(_ *slog.Logger) bool {
-	return false
 }
 
 func cidrContainsAny(nets []*net.IPNet, ip net.IP) bool {
