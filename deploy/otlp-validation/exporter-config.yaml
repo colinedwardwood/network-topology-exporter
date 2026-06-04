@@ -1,0 +1,47 @@
+# Exporter config for the OTLP validation harness. Pushes OTLP
+# (metrics + logs + traces) to the Alloy OTLP receiver, which forwards to the
+# Grafana Cloud OTLP gateway. Discovers the snmpsim device so device_info flows
+# over OTLP and the observable-gauge staleness fix can be exercised (stop
+# snmpsim -> device_info stops being exported).
+discovery:
+  interval: 15s
+  timeout_per_device: 4s
+  parallelism: 5
+  scope:
+    cidr_allow_list:
+      - "172.28.0.0/16"      # the compose network subnet (see docker-compose.yml)
+
+modules:
+  snmp: { enabled: true, version: v2c }
+  lldp: { enabled: true }
+  cdp:  { enabled: true }
+  bgp:  { enabled: false }
+  ospf: { enabled: false }
+  isis: { enabled: false }
+  fdb:  { enabled: false }
+
+credentials:
+  profiles:
+    - name: sim-v2c
+      type: snmp_v2c
+      community_env: SNMP_COMMUNITY
+  fallback_order: [sim-v2c]
+
+output:
+  otlp:
+    enabled: true
+    endpoint: "http://alloy:4318"   # Alloy OTLP/HTTP receiver
+    protocol: http
+    timeout: 10s
+    heartbeat_cycles: 1             # push every cycle so churn shows quickly
+    traces:
+      enabled: true
+      sample_rate: 1.0              # trace every cycle for validation
+
+snapshot:
+  path: /tmp/snapshot.json
+
+targets:
+  - host: 172.28.0.10               # snmpsim static IP
+    port: 161
+    site: sim
