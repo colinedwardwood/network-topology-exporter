@@ -100,6 +100,49 @@ v1.3.1 lands under this milestone instead, renamed to
 
 ### Observability
 
+- **#98–#102 — Per-walker observability for the non-BGP discovery walkers.**
+  Closes the per-walker failure-mode visibility gaps identified in the #67
+  audit: the LLDP, CDP, OSPF, and FDB walkers move from SILENT to FULL coverage,
+  and the IS-IS IPv6 skip and SNMP system-walk content gaps are closed.
+  - **New `network_topology_walker_outcome_total{walker, outcome}` (#98)** — the
+    generic, non-breaking sibling of `network_topology_bgp_walker_outcome_total`
+    (which is **not** renamed). `walker ∈ {lldp, cdp, ospf, fdb}`;
+    `outcome ∈ {edges, mib_unimplemented, no_neighbours, walker_drift, error}`,
+    mirroring the BGP four-bucket semantics — a zero-edge result can now be told
+    apart as "feature absent" (`mib_unimplemented`, do not page), "feature up,
+    nothing to report" (`no_neighbours`), or "decoder broken on this firmware"
+    (`walker_drift`, page-level).
+  - **New decode-issue reasons on `network_topology_discovery_decode_issues_total` (#99)** —
+    the same four walkers now report per-row decode rejections that were
+    previously a silent `continue`/`slog.Debug`: `lldp`
+    (`chassis_subtype_invalid`, `port_subtype_invalid`, `chassis_mac_bad_length`,
+    `port_mac_bad_length`, `chassis_addr_malformed`), `cdp` (`index_unparseable`,
+    `empty_device_id`), `ospf` (`oid_suffix_malformed`, `nbr_ip_undecodable`),
+    and `fdb` (`bridge_port_index_invalid`, `ifindex_unmapped`).
+  - **New FDB degraded reasons on `network_topology_discovery_degraded_total` (#100)** —
+    `{module="fdb", reason="qbridge_walk_failed"}` (Q-BRIDGE walk errored and the
+    B-MIB produced no usable entries; guarded against false alerts when the B-MIB
+    already had entries or for clean B-MIB-only devices) and
+    `{module="fdb", reason="vlan_walk_failed"}` (a per-VLAN community walk failed,
+    labelled by reason only, not by VLAN id). Both emit via a new direct
+    `RecordDegraded` module sink so they fire even with zero edges.
+  - **New `network_topology_system_walk_anomaly_total{reason}` (#101)** — a
+    low-cardinality counter (closed set `{empty_sysname, unknown_vendor}`, no
+    device/IP/OID label) flagging content anomalies in an otherwise-successful
+    system GET: `empty_sysname` (device ID falls back to the management IP) and
+    `unknown_vendor` (sysObjectID unresolved, so the vendor BGP4-V2 walker is
+    skipped — BGP still falls through to the RFC 4273 path).
+  - **New IS-IS degraded reason `unsupported_ip_version` (#102)** —
+    `{module="isis", reason="unsupported_ip_version"}` fires once per walk when
+    IPv6 IS-IS adjacency rows are skipped (IPv4 edges unaffected). Emitted via
+    the direct `RecordDegraded` sink so it fires even on an IPv6-only device with
+    zero IPv4 edges, reviving the previously-dead
+    `DegradedReasonUnsupportedIPVersion` constant.
+
+  `docs/metrics.md` and `docs/operator/failure-modes.md` updated to match (the
+  failure-modes coverage table now reads FULL/observable for LLDP, CDP, OSPF,
+  FDB, the IS-IS IPv6 skip, and the system walk).
+
 - **#68 — Opt-in OpenTelemetry tracing of the discovery cycle (v1.7.0 work).**
   The exporter can now emit OTel traces of its own discovery cycle. A new
   `output.otlp.traces` block (`enabled`, default `false`; `sample_rate`, default
