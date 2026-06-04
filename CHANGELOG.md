@@ -8,6 +8,33 @@ the README. The lab-fixture-capture work previously slotted for
 v1.3.1 lands under this milestone instead, renamed to
 [v1.4.0-rc.1 — Lab Fixture Capture](https://github.com/colinedwardwood/network-topology-exporter/milestones).
 
+### Security & correctness (post-merge hardening)
+
+- **`/admin/rediscover` auth gate now requires real client authentication.** The
+  endpoint previously enabled itself whenever `listen.web_config_file` was set —
+  but a TLS-only web-config encrypts without authenticating the caller, so any
+  HTTPS-only deployment exposed the privileged forced-walk endpoint
+  unauthenticated. It now parses the web-config and enables the endpoint only
+  when `basic_auth_users` is set or a client-cert-requiring `client_auth_type`
+  (`RequireAnyClientCert`/`RequireAndVerifyClientCert`) is configured; otherwise
+  it stays `403` (fails closed on an unreadable/unparseable config). Regression
+  test `TestWebConfigHasClientAuth`.
+- **`/admin/rediscover` no longer monopolises the discovery cycle.** The forced
+  walk now acquires the cycle mutex **per target** instead of around the whole
+  batch, so a large or slow/unreachable batch can no longer stall the regular
+  discovery cycle for the full request — bounding the contiguous hold to one
+  device's walk while still serialising each walk against the cycle.
+- **OTLP no longer reports phantom topology.** The edge/device metrics are now
+  **observable gauges** that report exactly the current graph on each
+  collection. The previous synchronous gauges retained every recorded
+  attribute-set under cumulative temporality, so a removed edge/device would
+  linger at the OTLP receiver indefinitely. Regression test
+  `TestPushGraphDropsStaleEdges`.
+- Removed the dead no-op `Config.EmitDeprecationWarnings` stub (no deprecated
+  keys remain after v1.5.0; a future deprecation re-introduces a real one).
+- Documented the topology dashboard's **Grafana SQL Expressions** requirement
+  in `dashboards/test-harness/README.md`.
+
 ### Configuration
 
 - **#63 — Config schema parity audit.** `config/example.yaml` is now the

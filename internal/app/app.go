@@ -68,7 +68,6 @@ func Run(ctx context.Context, args []string) int {
 		logger.Error("loading config failed", "error", err)
 		return 1
 	}
-	cfg.EmitDeprecationWarnings(logger)
 	logger.Info("config loaded",
 		"discovery_interval", cfg.Discovery.Interval,
 		"parallelism", cfg.Discovery.Parallelism,
@@ -243,8 +242,10 @@ func Run(ctx context.Context, args []string) int {
 		// Rediscoverer carries its own credential resolver built from the same
 		// config; access to either resolver is serialised by cycleMu, so the
 		// two paths never hit a device concurrently. The endpoint is privileged:
-		// it only runs when listen.web_config_file configures basic_auth/mTLS,
-		// otherwise the handler returns 403.
+		// it only runs when listen.web_config_file actually authenticates the
+		// caller (basic_auth_users, or a client-cert-requiring client_auth_type).
+		// A TLS-only web-config encrypts but does NOT authenticate the client, so
+		// it does not enable the endpoint — the handler returns 403.
 		var cycleMu sync.Mutex
 		adminResolver, err := credentials.New(cfg.Credentials)
 		if err != nil {
@@ -252,7 +253,7 @@ func Run(ctx context.Context, args []string) int {
 			return 1
 		}
 		allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
-		rediscoverer := NewRediscoverer(cfg, m, logger, adminResolver, allowedNets, &cycleMu, cfg.Listen.WebConfigFile != "")
+		rediscoverer := NewRediscoverer(cfg, m, logger, adminResolver, allowedNets, &cycleMu, WebConfigHasClientAuth(cfg.Listen.WebConfigFile))
 		mux.HandleFunc("/admin/rediscover", httpx.NewRediscoverHandler(rediscoverer))
 
 		workerDone.Add(1)

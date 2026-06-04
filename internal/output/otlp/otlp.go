@@ -19,6 +19,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -87,9 +88,53 @@ type Exporter struct {
 	meterProvider  *sdkmetric.MeterProvider
 	loggerProvider *log.LoggerProvider
 
-	edgeGauge   otelmetric.Float64Gauge
-	deviceGauge otelmetric.Float64Gauge
-	logger      otellog.Logger
+	// latest holds the most recent graph pushed via PushGraph. The edge/device
+	// metrics are OBSERVABLE gauges whose callbacks read this pointer on every
+	// collection, so each export reflects exactly the current graph — a removed
+	// edge/device is simply not observed and therefore disappears at the
+	// receiver. A synchronous gauge would instead retain every attribute-set
+	// ever recorded under cumulative temporality, leaving phantom links in the
+	// topology at the collector indefinitely.
+	latest atomic.Pointer[discovery.Graph]
+	logger otellog.Logger
+}
+
+// edgeAttrs builds the OTLP attribute set for one topology edge.
+func edgeAttrs(edge discovery.Edge) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{
+		attribute.String("src_device", sanitizeUTF8(edge.SrcDevice)),
+		attribute.String("src_port", sanitizeUTF8(edge.SrcPort)),
+		attribute.String("dst_device", sanitizeUTF8(edge.DstDevice)),
+		attribute.String("dst_port", sanitizeUTF8(edge.DstPort)),
+		attribute.String("proto", sanitizeUTF8(string(edge.DiscoveryProto))),
+		attribute.String("link_kind", sanitizeUTF8(string(edge.LinkKind))),
+		attribute.String("direction", sanitizeUTF8(string(edge.Direction))),
+		attribute.String("confidence", sanitizeUTF8(string(edge.Confidence))),
+		attribute.String("adjacency", sanitizeUTF8(string(edge.Adjacency))),
+		attribute.String("precedence_rank", strconv.Itoa(edge.PrecedenceRank)),
+	}
+	for k, v := range edge.Metadata {
+		attrs = append(attrs, attribute.String(metadataAttrPrefix+k, sanitizeUTF8(v)))
+	}
+	return attrs
+}
+
+// deviceAttrs builds the OTLP attribute set for one device.
+func deviceAttrs(dev discovery.Device) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{attribute.String("device", sanitizeUTF8(dev.ID))}
+	if dev.Vendor != "" {
+		attrs = append(attrs, attribute.String("vendor", sanitizeUTF8(dev.Vendor)))
+	}
+	if dev.Model != "" {
+		attrs = append(attrs, attribute.String("model", sanitizeUTF8(dev.Model)))
+	}
+	if dev.OSVersion != "" {
+		attrs = append(attrs, attribute.String("os_version", sanitizeUTF8(dev.OSVersion)))
+	}
+	if dev.Site != "" {
+		attrs = append(attrs, attribute.String("site", sanitizeUTF8(dev.Site)))
+	}
+	return attrs
 }
 
 const (
@@ -173,25 +218,44 @@ func assemble(res *resource.Resource, reader sdkmetric.Reader, proc log.Processo
 		log.WithProcessor(proc),
 	)
 
+	e := &Exporter{
+		meterProvider:  mp,
+		loggerProvider: lp,
+		logger:         lp.Logger(scopeName),
+	}
+
 	meter := mp.Meter(scopeName)
-	edgeGauge, err := meter.Float64Gauge("network_topology_edge_info",
-		otelmetric.WithDescription("Topology edge presence; value 1 with edge attributes."))
-	if err != nil {
+	// Observable gauges: the callback reports exactly the current graph on each
+	// collection, so removed edges/devices vanish at the receiver instead of
+	// lingering as phantom topology under cumulative temporality.
+	if _, err := meter.Float64ObservableGauge("network_topology_edge_info",
+		otelmetric.WithDescription("Topology edge presence; value 1 with edge attributes."),
+		otelmetric.WithFloat64Callback(func(_ context.Context, o otelmetric.Float64Observer) error {
+			if g := e.latest.Load(); g != nil {
+				for _, edge := range g.Edges {
+					o.Observe(1.0, otelmetric.WithAttributes(edgeAttrs(edge)...))
+				}
+			}
+			return nil
+		}),
+	); err != nil {
 		return nil, fmt.Errorf("otlp: create edge gauge: %w", err)
 	}
-	deviceGauge, err := meter.Float64Gauge("network_topology_device_info",
-		otelmetric.WithDescription("Discovered device presence; value 1 with device attributes."))
-	if err != nil {
+	if _, err := meter.Float64ObservableGauge("network_topology_device_info",
+		otelmetric.WithDescription("Discovered device presence; value 1 with device attributes."),
+		otelmetric.WithFloat64Callback(func(_ context.Context, o otelmetric.Float64Observer) error {
+			if g := e.latest.Load(); g != nil {
+				for _, dev := range g.Devices {
+					o.Observe(1.0, otelmetric.WithAttributes(deviceAttrs(dev)...))
+				}
+			}
+			return nil
+		}),
+	); err != nil {
 		return nil, fmt.Errorf("otlp: create device gauge: %w", err)
 	}
 
-	return &Exporter{
-		meterProvider:  mp,
-		loggerProvider: lp,
-		edgeGauge:      edgeGauge,
-		deviceGauge:    deviceGauge,
-		logger:         lp.Logger(scopeName),
-	}, nil
+	return e, nil
 }
 
 // newMetricExporter builds the OTLP metric exporter for the configured
@@ -286,47 +350,13 @@ func sanitizeUTF8(s string) string {
 	return strings.ToValidUTF8(s, "�")
 }
 
-// PushGraph records graph.Edges and graph.Devices as OTLP gauge measurements
-// and force-flushes them through the MeterProvider's OTLP exporter.
+// PushGraph publishes the current graph as the snapshot the observable edge/
+// device gauges report, then force-flushes a collection through the OTLP
+// exporter. Because the gauges observe this snapshot (rather than accumulating
+// recorded measurements), each push emits exactly the edges/devices present in
+// g — edges removed since the last push are not re-emitted.
 func (e *Exporter) PushGraph(ctx context.Context, g discovery.Graph) error {
-	for _, edge := range g.Edges {
-		attrs := []attribute.KeyValue{
-			attribute.String("src_device", sanitizeUTF8(edge.SrcDevice)),
-			attribute.String("src_port", sanitizeUTF8(edge.SrcPort)),
-			attribute.String("dst_device", sanitizeUTF8(edge.DstDevice)),
-			attribute.String("dst_port", sanitizeUTF8(edge.DstPort)),
-			attribute.String("proto", sanitizeUTF8(string(edge.DiscoveryProto))),
-			attribute.String("link_kind", sanitizeUTF8(string(edge.LinkKind))),
-			attribute.String("direction", sanitizeUTF8(string(edge.Direction))),
-			attribute.String("confidence", sanitizeUTF8(string(edge.Confidence))),
-			attribute.String("adjacency", sanitizeUTF8(string(edge.Adjacency))),
-			attribute.String("precedence_rank", strconv.Itoa(edge.PrecedenceRank)),
-		}
-		for k, v := range edge.Metadata {
-			attrs = append(attrs, attribute.String(metadataAttrPrefix+k, sanitizeUTF8(v)))
-		}
-		e.edgeGauge.Record(ctx, 1.0, otelmetric.WithAttributes(attrs...))
-	}
-
-	for _, dev := range g.Devices {
-		attrs := []attribute.KeyValue{
-			attribute.String("device", sanitizeUTF8(dev.ID)),
-		}
-		if dev.Vendor != "" {
-			attrs = append(attrs, attribute.String("vendor", sanitizeUTF8(dev.Vendor)))
-		}
-		if dev.Model != "" {
-			attrs = append(attrs, attribute.String("model", sanitizeUTF8(dev.Model)))
-		}
-		if dev.OSVersion != "" {
-			attrs = append(attrs, attribute.String("os_version", sanitizeUTF8(dev.OSVersion)))
-		}
-		if dev.Site != "" {
-			attrs = append(attrs, attribute.String("site", sanitizeUTF8(dev.Site)))
-		}
-		e.deviceGauge.Record(ctx, 1.0, otelmetric.WithAttributes(attrs...))
-	}
-
+	e.latest.Store(&g)
 	if err := e.meterProvider.ForceFlush(ctx); err != nil {
 		return fmt.Errorf("otlp: flush metrics: %w", err)
 	}

@@ -289,7 +289,7 @@ Two reusable harness stacks live under `deploy/`:
 | [`deploy/test-harness/`](deploy/test-harness/) | Single-shot test harness — exporter + Alloy shipping a fixed topology to Grafana Cloud, used to validate a build end-to-end. |
 | [`deploy/long-running-test/`](deploy/long-running-test/) | Continuously-running validation lab. A mutator container rotates between four containerlab topologies every UTC hour (chain → cross-link → ring → CLOS) to exercise add/remove/swap reconciliation. Ships to Grafana Cloud with `tester_id=long-running-lab`. |
 
-Curated dashboards for both harnesses live in [`dashboards/test-harness/`](dashboards/test-harness/).
+Curated dashboards for both harnesses live in [`dashboards/test-harness/`](dashboards/test-harness/) — see its [README](dashboards/test-harness/README.md) for what each shows and requirements (the topology Node Graph relies on Grafana SQL Expressions).
 
 ## Architecture
 

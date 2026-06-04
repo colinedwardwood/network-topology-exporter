@@ -502,3 +502,39 @@ func TestNewGRPCConstructs(t *testing.T) {
 	defer cancel()
 	_ = exp.Shutdown(ctx)
 }
+
+// TestPushGraphDropsStaleEdges proves the observable-gauge fix for the
+// cumulative-temporality phantom-edge flaw: pushing a graph with fewer edges
+// than the previous push must NOT leave the removed edge reported at the
+// receiver. The old synchronous Float64Gauge retained every recorded
+// attribute-set and would fail this test.
+func TestPushGraphDropsStaleEdges(t *testing.T) {
+	exp, reader, _ := newTestExporter("")
+	ctx := context.Background()
+
+	two := discovery.Graph{Edges: []discovery.Edge{
+		{SrcDevice: "a", SrcPort: "1", DstDevice: "b", DstPort: "2", DiscoveryProto: "lldp", LinkKind: "ethernet"},
+		{SrcDevice: "c", SrcPort: "3", DstDevice: "d", DstPort: "4", DiscoveryProto: "lldp", LinkKind: "ethernet"},
+	}}
+	if err := exp.PushGraph(ctx, two); err != nil {
+		t.Fatalf("PushGraph(two): %v", err)
+	}
+	if pts := collectMetrics(t, reader)["network_topology_edge_info"]; len(pts) != 2 {
+		t.Fatalf("first push: edge points = %d, want 2", len(pts))
+	}
+
+	// Remove the c→d edge.
+	one := discovery.Graph{Edges: []discovery.Edge{
+		{SrcDevice: "a", SrcPort: "1", DstDevice: "b", DstPort: "2", DiscoveryProto: "lldp", LinkKind: "ethernet"},
+	}}
+	if err := exp.PushGraph(ctx, one); err != nil {
+		t.Fatalf("PushGraph(one): %v", err)
+	}
+	pts := collectMetrics(t, reader)["network_topology_edge_info"]
+	if len(pts) != 1 {
+		t.Fatalf("after edge removal: edge points = %d, want 1 (the removed edge must not persist)", len(pts))
+	}
+	if pts[0]["src_device"] != "a" {
+		t.Errorf("surviving edge src_device = %q, want a", pts[0]["src_device"])
+	}
+}
