@@ -1,0 +1,44 @@
+# OTLP validation harness. Run from this directory:
+#   cp .env.example .env   # fill in the Grafana Cloud OTLP details
+#   docker compose up -d --build
+# See README.md for the verification steps.
+services:
+  snmpsim:
+    image: tandrup/snmpsim:latest
+    container_name: otlp-validation-snmpsim
+    networks:
+      net:
+        ipv4_address: 172.28.0.10
+    restart: unless-stopped
+
+  exporter:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: otlp-validation-exporter
+    depends_on: [snmpsim, alloy]
+    volumes:
+      - ./exporter-config.yaml:/etc/topology-exporter/config.yaml:ro
+    environment:
+      - SNMP_COMMUNITY=public
+    networks: [net]
+    restart: unless-stopped
+
+  alloy:
+    image: grafana/alloy:latest
+    container_name: otlp-validation-alloy
+    volumes:
+      - ./alloy-config.alloy:/etc/alloy/config.alloy:ro
+    command: run --storage.path=/var/lib/alloy/data /etc/alloy/config.alloy
+    environment:
+      - GCLOUD_OTLP_ENDPOINT=${GCLOUD_OTLP_ENDPOINT}
+      - GCLOUD_OTLP_USER=${GCLOUD_OTLP_USER}
+      - GCLOUD_TOKEN=${GCLOUD_TOKEN}
+    networks: [net]
+    restart: unless-stopped
+
+networks:
+  net:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
