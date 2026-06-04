@@ -45,3 +45,12 @@ func (a *WalkerMetricsAdapter) RecordProtocolWalkerOutcome(walker, outcome strin
 func (a *WalkerMetricsAdapter) RecordDegraded(module, reason string) {
 	a.m.DiscoveryDegradedTotal.WithLabelValues(module, reason).Inc()
 }
+
+// RecordSystemWalkAnomaly increments network_topology_system_walk_anomaly_total
+// for the given low-cardinality reason. Used by the SNMP system walk to surface
+// the empty-sysName fallback and the unresolved-vendor outcome (issue #101);
+// the closed reason set and semantics are documented on
+// Metrics.SystemWalkAnomalyTotal.
+func (a *WalkerMetricsAdapter) RecordSystemWalkAnomaly(reason string) {
+	a.m.SystemWalkAnomalyTotal.WithLabelValues(reason).Inc()
+}

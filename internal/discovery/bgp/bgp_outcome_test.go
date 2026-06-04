@@ -54,6 +54,10 @@ func (f *fakeWalkerMetrics) RecordProtocolWalkerOutcome(walker, outcome string) 
 // outcome tests don't assert on degraded signals, so it is a no-op.
 func (f *fakeWalkerMetrics) RecordDegraded(_, _ string) {}
 
+// RecordSystemWalkAnomaly satisfies snmputil.WalkerMetrics (issue #101). The
+// BGP outcome tests don't assert on system-walk anomalies, so it is a no-op.
+func (f *fakeWalkerMetrics) RecordSystemWalkAnomaly(_ string) {}
+
 // count returns the number of recorded calls matching (walker, outcome).
 // Linear scan because test inputs are small (typically <10 entries) and
 // the simple shape makes failures easy to debug.

@@ -52,6 +52,10 @@ func (f *fakeWalkerMetrics) RecordDegraded(module, reason string) {
 	f.degradeds = append(f.degradeds, degradedCall{module, reason})
 }
 
+// RecordSystemWalkAnomaly satisfies snmputil.WalkerMetrics (issue #101). This
+// module's tests don't assert on system-walk anomalies, so it is a no-op.
+func (f *fakeWalkerMetrics) RecordSystemWalkAnomaly(_ string) {}
+
 func (f *fakeWalkerMetrics) count(walker, outcome string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
