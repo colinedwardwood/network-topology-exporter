@@ -301,6 +301,10 @@ Vendor platform support: [`docs/supported-platforms.md`](docs/supported-platform
 
 Stability promises and GA criteria: [`docs/operator/stability.md`](docs/operator/stability.md).
 
+Upgrade runbook (per-minor-version breaking changes, backup steps, rollout order): [`docs/operator/upgrades.md`](docs/operator/upgrades.md).
+
+SLO guidance (SLI definitions, multi-burn-rate alerts, copy-pasteable PromQL): [`docs/operator/slos.md`](docs/operator/slos.md).
+
 To report a vulnerability privately: [`SECURITY.md`](SECURITY.md).
 
 ## License

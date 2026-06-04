@@ -1,4 +1,7 @@
 {{- if .Values.prometheusRule.enabled }}
+# This PrometheusRule ships a baseline alert set. For multi-window multi-burn-rate
+# SLO alerts (cycle-duration headroom, snapshot-drop rate, federation spoke-down),
+# see docs/operator/slos.md for copy-pasteable PromQL and recording rules.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
