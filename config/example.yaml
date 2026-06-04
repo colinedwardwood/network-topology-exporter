@@ -63,6 +63,24 @@ discovery:
     cidr_allow_list:
       - 198.51.100.0/24
 
+  # Per-target protocol scoping (issue #74). By default every module enabled
+  # below runs against every in-scope target. On a heterogeneous fleet that
+  # wastes cycles and pollutes metrics — e.g. walking BGP against an access
+  # switch yields a guaranteed mib_unimplemented walker outcome. An override
+  # restricts an IP (matched by longest-prefix CIDR, same precedence as
+  # credentials.assignments) to ONLY the listed modules, intersected with the
+  # global modules.<m>.enabled gates. An IP matching no override runs ALL
+  # enabled modules (unchanged default). Rules:
+  #   - every listed module must also be enabled globally (modules.<m>.enabled)
+  #   - the modules list must be non-empty (to poll nothing at a CIDR, remove it
+  #     from scope.cidr_allow_list instead)
+  #   - most-specific CIDR wins; equal-prefix duplicate CIDRs are rejected
+  # target_overrides:
+  #   - cidr: 198.51.100.0/26      # core routers: full L3 topology
+  #     modules: [bgp, isis, lldp]
+  #   - cidr: 198.51.100.128/25    # access switches: L2 only, never BGP
+  #     modules: [lldp, cdp, fdb]
+
   # Unidirectional link expiry: remove a link that has not been confirmed from
   # both sides after this many consecutive cycles (default 3; must be >= 1).
   unconfirmed_link_ttl_cycles: 3

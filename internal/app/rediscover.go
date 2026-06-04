@@ -285,9 +285,17 @@ func (rd *Rediscoverer) walkOne(ctx context.Context, ip net.IP) (RediscoverOutco
 		{"mpls_te", rd.cfg.Modules.MPLSTE.Enabled, mpls.Walk},
 	}
 
+	// Issue #74: honour the same per-target protocol scope as the regular
+	// cycle so a forced rediscover does not walk a module (e.g. bgp) against a
+	// target an override has scoped it out of.
+	allowedMods, overrideMatched := rd.cfg.ModulesForIP(ip)
+
 	var edgeCount int
 	for _, mod := range mods {
 		if !mod.Enabled {
+			continue
+		}
+		if overrideMatched && !allowedMods[mod.Proto] {
 			continue
 		}
 		modCtx := devCtx

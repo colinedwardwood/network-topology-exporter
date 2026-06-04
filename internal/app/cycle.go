@@ -272,9 +272,22 @@ func RunCycle(
 				{"isis", cfg.Modules.ISIS.Enabled, isis.Walk},
 				{"mpls_te", cfg.Modules.MPLSTE.Enabled, mpls.Walk},
 			}
+			// Issue #74: resolve this target's per-protocol scope once. When an
+			// override matches, only the listed modules run (intersected with
+			// the global mod.Enabled gate below); when none matches, allowed is
+			// nil/overrideMatched=false and ALL enabled modules run — today's
+			// unchanged default. The headline case: bgp.Walk only fires where
+			// bgp is in the override's module set, so the walker outcome
+			// counters partition naturally.
+			allowedMods, overrideMatched := cfg.ModulesForIP(ip)
 			modStatus := map[string]int{}
 			for _, mod := range mods {
 				if !mod.Enabled {
+					continue
+				}
+				// Per-target protocol scoping: an override never widens beyond
+				// mod.Enabled (intersection), it only narrows.
+				if overrideMatched && !allowedMods[mod.Proto] {
 					continue
 				}
 				modStart := time.Now()
