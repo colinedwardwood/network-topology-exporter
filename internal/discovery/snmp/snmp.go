@@ -36,8 +36,18 @@ import (
 // (no panic). The bgp module's recordWalkerOutcome helper encapsulates that
 // nil-check; other modules wanting the same observability should mirror the
 // pattern rather than calling Inc directly on a possibly-nil handle.
+// RecordWalkerOutcome routes to the BGP-specific counter
+// (network_topology_bgp_walker_outcome_total); RecordProtocolWalkerOutcome
+// routes to the generic counter (network_topology_walker_outcome_total) used
+// by the LLDP, CDP, OSPF, and FDB walkers (issue #98). The two are kept
+// separate so the long-standing BGP series operators alert on is never
+// renamed. As with RecordWalkerOutcome, callers reach these through the
+// nil-tolerant helper in their own package (see bgp.recordWalkerOutcome): a
+// nil Params or nil Params.WalkerMetrics drops the increment rather than
+// panicking.
 type WalkerMetrics interface {
 	RecordWalkerOutcome(walker, outcome string)
+	RecordProtocolWalkerOutcome(walker, outcome string)
 }
 
 // WarnLimiter is the per-key Warn rate-limiter sink used by discovery

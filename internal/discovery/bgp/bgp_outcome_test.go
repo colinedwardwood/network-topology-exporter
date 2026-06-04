@@ -40,6 +40,16 @@ func (f *fakeWalkerMetrics) RecordWalkerOutcome(walker, outcome string) {
 	f.calls = append(f.calls, walkerCall{walker, outcome})
 }
 
+// RecordProtocolWalkerOutcome implements snmputil.WalkerMetrics. The BGP
+// walker never calls this (it routes to RecordWalkerOutcome); it exists only
+// to satisfy the interface now that the generic non-BGP counter was added in
+// issue #98.
+func (f *fakeWalkerMetrics) RecordProtocolWalkerOutcome(walker, outcome string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, walkerCall{walker, outcome})
+}
+
 // count returns the number of recorded calls matching (walker, outcome).
 // Linear scan because test inputs are small (typically <10 entries) and
 // the simple shape makes failures easy to debug.

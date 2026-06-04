@@ -19,7 +19,7 @@ func TestBuildEdgesEstablishedNeighbour(t *testing.T) {
 		"192.0.2.1.0": {nbrIP: net.ParseIP("192.0.2.1").To4(), state: stateFull},
 	}
 
-	edges, oos := buildEdges("router-a", rows, nil)
+	edges, oos, _ := buildEdges("router-a", rows, nil)
 	if len(oos) != 0 {
 		t.Errorf("expected 0 out-of-scope, got %d", len(oos))
 	}
@@ -64,7 +64,7 @@ func TestBuildEdgesTwoWayNeighbour(t *testing.T) {
 	rows := map[string]*nbrRow{
 		"10.0.0.2.0": {nbrIP: net.ParseIP("10.0.0.2").To4(), state: stateTwoWay},
 	}
-	edges, oos := buildEdges("router-b", rows, nil)
+	edges, oos, _ := buildEdges("router-b", rows, nil)
 	if len(oos) != 0 {
 		t.Errorf("expected 0 out-of-scope, got %d", len(oos))
 	}
@@ -81,7 +81,7 @@ func TestBuildEdgesFiltersDownNeighbour(t *testing.T) {
 	rows := map[string]*nbrRow{
 		"192.0.2.1.0": {nbrIP: net.ParseIP("192.0.2.1").To4(), state: 1},
 	}
-	edges, oos := buildEdges("router-a", rows, nil)
+	edges, oos, _ := buildEdges("router-a", rows, nil)
 	if len(edges) != 0 {
 		t.Errorf("expected 0 edges for down neighbour, got %d", len(edges))
 	}
@@ -96,7 +96,7 @@ func TestBuildEdgesFiltersExchangeStartNeighbour(t *testing.T) {
 	rows := map[string]*nbrRow{
 		"192.0.2.1.0": {nbrIP: net.ParseIP("192.0.2.1").To4(), state: 5},
 	}
-	edges, oos := buildEdges("router-a", rows, nil)
+	edges, oos, _ := buildEdges("router-a", rows, nil)
 	if len(edges) != 0 {
 		t.Errorf("expected 0 edges for exchangeStart neighbour, got %d", len(edges))
 	}
@@ -111,7 +111,7 @@ func TestBuildEdgesMultipleNeighbours(t *testing.T) {
 		"192.0.2.1.0": {nbrIP: net.ParseIP("192.0.2.1").To4(), state: stateFull},
 		"10.0.0.2.0":  {nbrIP: net.ParseIP("10.0.0.2").To4(), state: stateFull},
 	}
-	edges, oos := buildEdges("router-a", rows, nil)
+	edges, oos, _ := buildEdges("router-a", rows, nil)
 	if len(oos) != 0 {
 		t.Errorf("expected 0 out-of-scope, got %d", len(oos))
 	}
@@ -136,7 +136,7 @@ func TestBuildEdgesOutOfScope(t *testing.T) {
 	rows := map[string]*nbrRow{
 		"192.0.2.1.0": {nbrIP: net.ParseIP("192.0.2.1").To4(), state: stateFull},
 	}
-	edges, oos := buildEdges("router-a", rows, []*net.IPNet{allow})
+	edges, oos, _ := buildEdges("router-a", rows, []*net.IPNet{allow})
 	if len(edges) != 0 {
 		t.Errorf("expected 0 in-scope edges, got %d", len(edges))
 	}
@@ -267,7 +267,7 @@ func TestWalkOspfNbrTableSkipsOIDs(t *testing.T) {
 	}
 	defer func() { _ = client.Conn.Close() }()
 
-	rows, err := walkOspfNbrTable(context.Background(), client)
+	rows, _, err := walkOspfNbrTable(context.Background(), client)
 	if err != nil {
 		t.Fatalf("walkOspfNbrTable: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestBuildEdgesNilNbrIP(t *testing.T) {
 	rows := map[string]*nbrRow{
 		"10.0.0.1.0": {nbrIP: nil, state: stateFull},
 	}
-	edges, oos := buildEdges("router-a", rows, nil)
+	edges, oos, _ := buildEdges("router-a", rows, nil)
 	if len(edges) != 0 {
 		t.Errorf("expected 0 edges for nil nbrIP, got %d", len(edges))
 	}
@@ -301,7 +301,7 @@ func TestBuildEdgesFiltersLinkLocalNbrIP(t *testing.T) {
 	rows := map[string]*nbrRow{
 		"169.254.1.1.0": {nbrIP: net.ParseIP("169.254.1.1").To4(), state: stateFull},
 	}
-	edges, oos := buildEdges("router-a", rows, nil)
+	edges, oos, _ := buildEdges("router-a", rows, nil)
 	if len(edges) != 0 {
 		t.Errorf("expected 0 edges for link-local nbrIP, got %d", len(edges))
 	}

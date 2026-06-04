@@ -29,3 +29,11 @@ func NewWalkerMetricsAdapter(m *Metrics) *WalkerMetricsAdapter {
 func (a *WalkerMetricsAdapter) RecordWalkerOutcome(walker, outcome string) {
 	a.m.BGPWalkerOutcomeTotal.WithLabelValues(walker, outcome).Inc()
 }
+
+// RecordProtocolWalkerOutcome increments network_topology_walker_outcome_total
+// for the (walker, outcome) tuple. This is the generic, non-BGP counter used
+// by the LLDP, CDP, OSPF, and FDB walkers (issue #98). The label set and
+// semantics are documented on Metrics.WalkerOutcomeTotal.
+func (a *WalkerMetricsAdapter) RecordProtocolWalkerOutcome(walker, outcome string) {
+	a.m.WalkerOutcomeTotal.WithLabelValues(walker, outcome).Inc()
+}

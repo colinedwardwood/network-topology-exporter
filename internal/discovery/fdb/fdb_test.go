@@ -23,7 +23,7 @@ func TestBuildEdgesDirectAdjacency(t *testing.T) {
 	bridgePorts := map[int]int{1: 2}
 	ifNames := map[int]string{2: "GigabitEthernet0/1"}
 
-	edges := buildEdges("sw-01", entries, bridgePorts, ifNames, nil)
+	edges, _ := buildEdges("sw-01", entries, bridgePorts, ifNames, nil)
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d", len(edges))
 	}
@@ -63,7 +63,7 @@ func TestBuildEdgesIndirectAdjacency(t *testing.T) {
 	bridgePorts := map[int]int{1: 3}
 	ifNames := map[int]string{3: "Ethernet1/1"}
 
-	edges := buildEdges("sw-01", entries, bridgePorts, ifNames, nil)
+	edges, _ := buildEdges("sw-01", entries, bridgePorts, ifNames, nil)
 	if len(edges) != 0 {
 		t.Fatalf("expected 0 edges for indirect port, got %d", len(edges))
 	}
@@ -79,7 +79,7 @@ func TestBuildEdgesFiltersNonLearned(t *testing.T) {
 	bridgePorts := map[int]int{1: 2}
 	ifNames := map[int]string{2: "Gi0/1"}
 
-	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
+	edges, _ := buildEdges("sw", entries, bridgePorts, ifNames, nil)
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge (only learned), got %d", len(edges))
 	}
@@ -97,7 +97,7 @@ func TestBuildEdgesSkipsInvalidMAC(t *testing.T) {
 	bridgePorts := map[int]int{1: 2}
 	ifNames := map[int]string{2: "Gi0/1"}
 
-	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
+	edges, _ := buildEdges("sw", entries, bridgePorts, ifNames, nil)
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge (invalid MAC skipped), got %d", len(edges))
 	}
@@ -111,7 +111,7 @@ func TestBuildEdgesMissingBridgePort(t *testing.T) {
 	bridgePorts := map[int]int{} // port 99 not present
 	ifNames := map[int]string{}
 
-	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
+	edges, _ := buildEdges("sw", entries, bridgePorts, ifNames, nil)
 	if len(edges) != 0 {
 		t.Fatalf("expected 0 edges when bridge port unmapped, got %d", len(edges))
 	}
@@ -125,7 +125,7 @@ func TestBuildEdgesFallbackPortName(t *testing.T) {
 	bridgePorts := map[int]int{1: 7}
 	ifNames := map[int]string{} // ifIndex 7 has no name
 
-	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
+	edges, _ := buildEdges("sw", entries, bridgePorts, ifNames, nil)
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d", len(edges))
 	}
@@ -143,7 +143,7 @@ func TestBuildEdgesStpForwardingAllowed(t *testing.T) {
 	ifNames := map[int]string{4: "Ethernet0/2"}
 	stpStates := map[int]int{2: stpStateForwarding}
 
-	edges := buildEdges("sw", entries, bridgePorts, ifNames, stpStates)
+	edges, _ := buildEdges("sw", entries, bridgePorts, ifNames, stpStates)
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge for forwarding STP port, got %d", len(edges))
 	}
@@ -158,7 +158,7 @@ func TestBuildEdgesStpBlockingFiltered(t *testing.T) {
 	ifNames := map[int]string{5: "Ethernet0/3"}
 	stpStates := map[int]int{3: 2} // blocking(2)
 
-	edges := buildEdges("sw", entries, bridgePorts, ifNames, stpStates)
+	edges, _ := buildEdges("sw", entries, bridgePorts, ifNames, stpStates)
 	if len(edges) != 0 {
 		t.Fatalf("expected 0 edges for blocking STP port, got %d", len(edges))
 	}
@@ -173,7 +173,7 @@ func TestBuildEdgesStpAbsentAllowed(t *testing.T) {
 	ifNames := map[int]string{6: "Ethernet0/4"}
 	stpStates := map[int]int{} // port 4 not present
 
-	edges := buildEdges("sw", entries, bridgePorts, ifNames, stpStates)
+	edges, _ := buildEdges("sw", entries, bridgePorts, ifNames, stpStates)
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge when port absent from STP table, got %d", len(edges))
 	}
@@ -188,7 +188,7 @@ func TestBuildEdgesStpLearningFiltered(t *testing.T) {
 	ifNames := map[int]string{7: "Ethernet0/5"}
 	stpStates := map[int]int{5: 4} // learning(4)
 
-	edges := buildEdges("sw", entries, bridgePorts, ifNames, stpStates)
+	edges, _ := buildEdges("sw", entries, bridgePorts, ifNames, stpStates)
 	if len(edges) != 0 {
 		t.Fatalf("expected 0 edges for learning STP port, got %d", len(edges))
 	}
@@ -650,7 +650,7 @@ func TestWalkIfNamesFails(t *testing.T) {
 func TestWalkFdbTableIntoBulkWalkError(t *testing.T) {
 	client := openDeadClient(t)
 	entries := make(map[string]*fdbEntry)
-	err := walkFdbTableInto(cancelledCtx(), client, entries)
+	_, err := walkFdbTableInto(cancelledCtx(), client, entries)
 	if err == nil {
 		t.Fatal("expected error from walkFdbTableInto with cancelled context, got nil")
 	}
@@ -668,7 +668,7 @@ func TestWalkFdbTableIntoTrimPrefixSkip(t *testing.T) {
 	}
 	client := openClientToAgent(t, "public", pdus)
 	entries := make(map[string]*fdbEntry)
-	err := walkFdbTableInto(context.Background(), client, entries)
+	_, err := walkFdbTableInto(context.Background(), client, entries)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -687,7 +687,7 @@ func TestWalkFdbTableIntoMacKeyEmpty(t *testing.T) {
 	}
 	client := openClientToAgent(t, "public", pdus)
 	entries := make(map[string]*fdbEntry)
-	err := walkFdbTableInto(context.Background(), client, entries)
+	_, err := walkFdbTableInto(context.Background(), client, entries)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1185,7 +1185,7 @@ func TestBuildEdgesBroadcastMACFiltered(t *testing.T) {
 	bridgePorts := map[int]int{1: 2}
 	ifNames := map[int]string{2: "Gi0/1"}
 
-	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
+	edges, _ := buildEdges("sw", entries, bridgePorts, ifNames, nil)
 	if len(edges) != 0 {
 		t.Fatalf("expected 0 edges for broadcast MAC, got %d: %v", len(edges), edges)
 	}
@@ -1199,7 +1199,7 @@ func TestBuildEdgesAllZerosMACFiltered(t *testing.T) {
 	bridgePorts := map[int]int{1: 2}
 	ifNames := map[int]string{2: "Gi0/1"}
 
-	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
+	edges, _ := buildEdges("sw", entries, bridgePorts, ifNames, nil)
 	if len(edges) != 0 {
 		t.Fatalf("expected 0 edges for all-zeros MAC, got %d: %v", len(edges), edges)
 	}
@@ -1214,7 +1214,7 @@ func TestBuildEdgesMulticastMACFiltered(t *testing.T) {
 	bridgePorts := map[int]int{1: 2}
 	ifNames := map[int]string{2: "Gi0/1"}
 
-	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
+	edges, _ := buildEdges("sw", entries, bridgePorts, ifNames, nil)
 	if len(edges) != 0 {
 		t.Fatalf("expected 0 edges for multicast MAC, got %d: %v", len(edges), edges)
 	}
@@ -1230,7 +1230,7 @@ func TestBuildEdgesSkipsZeroPort(t *testing.T) {
 	bridgePorts := map[int]int{1: 2}
 	ifNames := map[int]string{2: "Gi0/1"}
 
-	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
+	edges, _ := buildEdges("sw", entries, bridgePorts, ifNames, nil)
 	if len(edges) != 0 {
 		t.Fatalf("expected 0 edges for port=0 entry, got %d: %v", len(edges), edges)
 	}
@@ -1315,7 +1315,7 @@ func TestWalkFdbTableIntoPortZeroRejected(t *testing.T) {
 	}
 	client := openClientToAgent(t, "public", pdus)
 	entries := make(map[string]*fdbEntry)
-	if err := walkFdbTableInto(context.Background(), client, entries); err != nil {
+	if _, err := walkFdbTableInto(context.Background(), client, entries); err != nil {
 		t.Fatalf("walkFdbTableInto: %v", err)
 	}
 	e, ok := entries[macSuffix]
@@ -1329,7 +1329,7 @@ func TestWalkFdbTableIntoPortZeroRejected(t *testing.T) {
 	// buildEdges with no bridgePorts mapping for port 0 → no edges.
 	bridgePorts := map[int]int{1: 2} // port 1 mapped; port 0 intentionally absent
 	ifNames := map[int]string{2: "Gi0/1"}
-	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
+	edges, _ := buildEdges("sw", entries, bridgePorts, ifNames, nil)
 	if len(edges) != 0 {
 		t.Errorf("expected 0 edges for port=0 entry, got %d: %v", len(edges), edges)
 	}
@@ -1347,7 +1347,7 @@ func TestWalkFdbTableIntoPortOneAccepted(t *testing.T) {
 	}
 	client := openClientToAgent(t, "public", pdus)
 	entries := make(map[string]*fdbEntry)
-	if err := walkFdbTableInto(context.Background(), client, entries); err != nil {
+	if _, err := walkFdbTableInto(context.Background(), client, entries); err != nil {
 		t.Fatalf("walkFdbTableInto: %v", err)
 	}
 	e, ok := entries[macSuffix]
@@ -1360,7 +1360,7 @@ func TestWalkFdbTableIntoPortOneAccepted(t *testing.T) {
 
 	bridgePorts := map[int]int{1: 2}
 	ifNames := map[int]string{2: "Gi0/1"}
-	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
+	edges, _ := buildEdges("sw", entries, bridgePorts, ifNames, nil)
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge for port=1 entry, got %d: %v", len(edges), edges)
 	}
@@ -1393,7 +1393,7 @@ func TestWalkQBridgeFdbTablePortZeroRejected(t *testing.T) {
 	// buildEdges with no bridgePorts mapping for port 0 → no edges.
 	bridgePorts := map[int]int{1: 2} // port 1 mapped; port 0 intentionally absent
 	ifNames := map[int]string{2: "Gi0/1"}
-	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
+	edges, _ := buildEdges("sw", entries, bridgePorts, ifNames, nil)
 	if len(edges) != 0 {
 		t.Errorf("expected 0 edges for port=0 Q-BRIDGE entry, got %d: %v", len(edges), edges)
 	}
@@ -1425,7 +1425,7 @@ func TestWalkQBridgeFdbTablePortOneAccepted(t *testing.T) {
 
 	bridgePorts := map[int]int{1: 2}
 	ifNames := map[int]string{2: "Gi0/1"}
-	edges := buildEdges("sw", entries, bridgePorts, ifNames, nil)
+	edges, _ := buildEdges("sw", entries, bridgePorts, ifNames, nil)
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge for port=1 Q-BRIDGE entry, got %d: %v", len(edges), edges)
 	}

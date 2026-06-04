@@ -36,6 +36,31 @@ const (
 	precedenceRank   = 3
 )
 
+// Walker label and outcome constants for network_topology_walker_outcome_total
+// (issue #98). The walker label is fixed per package; the outcome set is closed
+// and mirrors the four-bucket BGP categorisation documented on
+// internal/metrics/metrics.go (Metrics.WalkerOutcomeTotal). Keep in sync.
+const (
+	walkerCDP = "cdp"
+
+	outcomeEdges            = "edges"
+	outcomeMIBUnimplemented = "mib_unimplemented"
+	outcomeNoNeighbours     = "no_neighbours"
+	outcomeWalkerDrift      = "walker_drift"
+	outcomeError            = "error"
+)
+
+// recordWalkerOutcome forwards a {walker, outcome} observation to the generic
+// non-BGP counter via the metrics sink carried on Params. nil-safe: a nil
+// Params or nil Params.WalkerMetrics drops the increment rather than panicking,
+// mirroring bgp.recordWalkerOutcome.
+func recordWalkerOutcome(p *snmputil.Params, walker, outcome string) {
+	if p == nil || p.WalkerMetrics == nil {
+		return
+	}
+	p.WalkerMetrics.RecordProtocolWalkerOutcome(walker, outcome)
+}
+
 // cdpCacheTable column numbers (CISCO-CDP-MIB).
 const (
 	colAddressType = 3
@@ -58,28 +83,52 @@ type cacheEntry struct {
 func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
 	client, err := snmputil.Open(p)
 	if err != nil {
+		recordWalkerOutcome(&p, walkerCDP, outcomeError)
 		return nil, nil, fmt.Errorf("cdp %s: %w", p.IP, err)
 	}
 	defer func() { _ = client.Conn.Close() }()
 
 	ifNames, err := snmputil.WalkIfNamesWithFallback(ctx, client)
 	if err != nil {
+		recordWalkerOutcome(&p, walkerCDP, outcomeError)
 		return nil, nil, fmt.Errorf("cdp ifname %s: %w", p.IP, err)
 	}
 
-	entries, err := walkCacheTable(ctx, client)
+	// cdpCacheTable is the base table for the outcome accounting: hadPDUs
+	// distinguishes "MIB unimplemented" (zero PDUs — expected on non-Cisco
+	// devices) from a device that does cache neighbours.
+	entries, hadPDUs, err := walkCacheTable(ctx, client)
 	if err != nil {
+		recordWalkerOutcome(&p, walkerCDP, outcomeError)
 		return nil, nil, fmt.Errorf("cdp cache %s: %w", p.IP, err)
 	}
 
-	return buildEdges(localDevice, ifNames, entries, allowedNets)
+	edges, oos, decoded := buildEdges(localDevice, ifNames, entries, allowedNets)
+
+	switch {
+	case len(edges) > 0:
+		recordWalkerOutcome(&p, walkerCDP, outcomeEdges)
+	case !hadPDUs:
+		recordWalkerOutcome(&p, walkerCDP, outcomeMIBUnimplemented)
+	case decoded:
+		// PDUs arrived and at least one cache row decoded cleanly, but no
+		// usable edge resulted (e.g. neighbour filtered out of scope).
+		recordWalkerOutcome(&p, walkerCDP, outcomeNoNeighbours)
+	default:
+		// PDUs arrived but no cache row yielded a usable neighbour identity;
+		// the MIB is implemented but our decoder doesn't match this firmware.
+		recordWalkerOutcome(&p, walkerCDP, outcomeWalkerDrift)
+	}
+
+	return edges, oos, nil
 }
 
-func walkCacheTable(ctx context.Context, client *gsnmp.GoSNMP) (map[cacheKey]*cacheEntry, error) {
+func walkCacheTable(ctx context.Context, client *gsnmp.GoSNMP) (map[cacheKey]*cacheEntry, bool, error) {
 	pdus, err := snmputil.BulkWalk(ctx, client, oidCDPCacheTable)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
+	hadPDUs := len(pdus) > 0
 
 	const prefix = "." + oidCDPCacheTable + ".1."
 	entries := make(map[cacheKey]*cacheEntry)
@@ -130,18 +179,28 @@ func walkCacheTable(ctx context.Context, client *gsnmp.GoSNMP) (map[cacheKey]*ca
 			e.devPort = snmputil.SanitisePortName(snmputil.PDUString(pdu))
 		}
 	}
-	return entries, nil
+	return entries, hadPDUs, nil
 }
 
-func buildEdges(localDevice string, ifNames map[int]string, entries map[cacheKey]*cacheEntry, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
+// buildEdges returns (edges, oos, decoded). decoded reports whether at least
+// one cache row decoded cleanly — i.e. yielded a non-empty neighbour device ID
+// and port — regardless of whether it ultimately produced an in-scope edge.
+// The Walk-level outcome accounting uses it to distinguish "no_neighbours"
+// (rows decoded, nothing usable) from "walker_drift" (PDUs arrived but every
+// row was decoder-rejected). See issue #98.
+func buildEdges(localDevice string, ifNames map[int]string, entries map[cacheKey]*cacheEntry, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, bool) {
 	var edges []discovery.Edge
 	var oos []discovery.OutOfScopeNeighbour
+	var decoded bool
 	now := time.Now()
 
 	for k, e := range entries {
 		if e.deviceID == "" || e.devPort == "" {
 			continue
 		}
+		// The row carries a usable neighbour identity: it decoded cleanly.
+		// Anything that drops it below is a scope filter, not decoder drift.
+		decoded = true
 
 		localPort := ifNames[k.ifIndex]
 		if localPort == "" {
@@ -183,7 +242,7 @@ func buildEdges(localDevice string, ifNames map[int]string, entries map[cacheKey
 		})
 	}
 
-	return edges, oos, nil
+	return edges, oos, decoded
 }
 
 // cdpNeighborIP extracts the IP address from cdpCacheAddress. addrType 1 is

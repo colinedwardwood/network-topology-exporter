@@ -106,6 +106,31 @@ const (
 	colFdbStatus  = 3
 )
 
+// Walker label and outcome constants for network_topology_walker_outcome_total
+// (issue #98). The walker label is fixed per package; the outcome set is closed
+// and mirrors the four-bucket BGP categorisation documented on
+// internal/metrics/metrics.go (Metrics.WalkerOutcomeTotal). Keep in sync.
+const (
+	walkerFDB = "fdb"
+
+	outcomeEdges            = "edges"
+	outcomeMIBUnimplemented = "mib_unimplemented"
+	outcomeNoNeighbours     = "no_neighbours"
+	outcomeWalkerDrift      = "walker_drift"
+	outcomeError            = "error"
+)
+
+// recordWalkerOutcome forwards a {walker, outcome} observation to the generic
+// non-BGP counter via the metrics sink carried on Params. nil-safe: a nil
+// Params or nil Params.WalkerMetrics drops the increment rather than panicking,
+// mirroring bgp.recordWalkerOutcome.
+func recordWalkerOutcome(p *snmputil.Params, walker, outcome string) {
+	if p == nil || p.WalkerMetrics == nil {
+		return
+	}
+	p.WalkerMetrics.RecordProtocolWalkerOutcome(walker, outcome)
+}
+
 // dot1qTpFdbTable column numbers (RFC 4363).
 const (
 	colQBridgePort   = 2
@@ -130,16 +155,24 @@ type fdbEntry struct {
 func Walk(ctx context.Context, p snmputil.Params, localDevice string, _ []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
 	client, err := snmputil.Open(p)
 	if err != nil {
+		recordWalkerOutcome(&p, walkerFDB, outcomeError)
 		return nil, nil, fmt.Errorf("fdb %s: %w", p.IP, err)
 	}
 	defer func() { _ = client.Conn.Close() }()
 
-	entries, err := walkFdbTable(ctx, client)
+	// dot1dTpFdbTable (B-MIB) is the base table for the outcome accounting:
+	// hadFdbPDUs distinguishes "MIB unimplemented" (zero PDUs — device is not
+	// a learning bridge) from a switch that does populate its forwarding DB.
+	entries, hadFdbPDUs, err := walkFdbTable(ctx, client)
 	if err != nil {
+		recordWalkerOutcome(&p, walkerFDB, outcomeError)
 		return nil, nil, fmt.Errorf("fdb table %s: %w", p.IP, err)
 	}
 	// Q-BRIDGE walk failures are non-fatal: devices that implement only B-MIB
 	// return an empty result or a no-such-object error, both of which are fine.
+	// A device that implements ONLY Q-BRIDGE (no B-MIB) still counts as
+	// MIB-implemented, so fold any Q-BRIDGE/VLAN entries into the base-table
+	// signal below.
 	if err := walkQBridgeFdbTable(ctx, client, entries); err != nil {
 		slog.Debug("fdb: Q-BRIDGE walk failed; using B-MIB only", "device", p.IP, "err", err)
 	}
@@ -148,31 +181,62 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, _ []*net.I
 		maxVlans = 100 // default when not set by caller
 	}
 	walkVlanCommunityFdbs(ctx, p, client, entries, maxVlans)
+	// A device implementing only the Q-BRIDGE or VLAN-community FDB (and not
+	// B-MIB) is still a learning bridge; treat any forwarding-DB entry as
+	// evidence the MIB family is implemented.
+	hadFdbPDUs = hadFdbPDUs || len(entries) > 0
 	bridgePorts, err := walkBasePortTable(ctx, client)
 	if err != nil {
+		recordWalkerOutcome(&p, walkerFDB, outcomeError)
 		return nil, nil, fmt.Errorf("fdb baseport %s: %w", p.IP, err)
 	}
 	stpStates, err := walkStpPortStates(ctx, client)
 	if err != nil {
+		recordWalkerOutcome(&p, walkerFDB, outcomeError)
 		return nil, nil, fmt.Errorf("fdb stpport %s: %w", p.IP, err)
 	}
 	ifNames, err := snmputil.WalkIfNamesWithFallback(ctx, client)
 	if err != nil {
+		recordWalkerOutcome(&p, walkerFDB, outcomeError)
 		return nil, nil, fmt.Errorf("fdb ifname %s: %w", p.IP, err)
 	}
-	return buildEdges(localDevice, entries, bridgePorts, ifNames, stpStates), nil, nil
+
+	edges, decoded := buildEdges(localDevice, entries, bridgePorts, ifNames, stpStates)
+
+	switch {
+	case len(edges) > 0:
+		recordWalkerOutcome(&p, walkerFDB, outcomeEdges)
+	case !hadFdbPDUs:
+		recordWalkerOutcome(&p, walkerFDB, outcomeMIBUnimplemented)
+	case decoded:
+		// FDB rows decoded cleanly but produced no peer (all entries filtered
+		// by status/STP, or only multi-MAC trunk ports that are suppressed,
+		// or no bridge-port→ifIndex mapping). Bridge is up, nothing to report.
+		recordWalkerOutcome(&p, walkerFDB, outcomeNoNeighbours)
+	default:
+		// PDUs arrived but no entry carried a valid MAC+port; the MIB is
+		// implemented but our decoder doesn't match this firmware.
+		recordWalkerOutcome(&p, walkerFDB, outcomeWalkerDrift)
+	}
+
+	return edges, nil, nil
 }
 
-func walkFdbTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*fdbEntry, error) {
+func walkFdbTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*fdbEntry, bool, error) {
 	entries := make(map[string]*fdbEntry)
-	return entries, walkFdbTableInto(ctx, client, entries)
+	hadPDUs, err := walkFdbTableInto(ctx, client, entries)
+	return entries, hadPDUs, err
 }
 
-func walkFdbTableInto(ctx context.Context, client *gsnmp.GoSNMP, entries map[string]*fdbEntry) error {
+// walkFdbTableInto walks dot1dTpFdbTable into entries and reports whether the
+// underlying BulkWalk produced any PDUs (the base-table MIB-implemented
+// signal for outcome accounting; see issue #98).
+func walkFdbTableInto(ctx context.Context, client *gsnmp.GoSNMP, entries map[string]*fdbEntry) (bool, error) {
 	pdus, err := snmputil.BulkWalk(ctx, client, oidFdbTable)
 	if err != nil {
-		return err
+		return false, err
 	}
+	hadPDUs := len(pdus) > 0
 	const prefix = ".1.3.6.1.2.1.17.4.3.1."
 	for _, pdu := range pdus {
 		suffix, ok := snmputil.TrimOIDPrefix(pdu.Name, prefix)
@@ -200,7 +264,7 @@ func walkFdbTableInto(ctx context.Context, client *gsnmp.GoSNMP, entries map[str
 			e.status = snmputil.PDUInt(pdu)
 		}
 	}
-	return nil
+	return hadPDUs, nil
 }
 
 // parseQBridgeIndex parses a Q-BRIDGE OID instance suffix of the form
@@ -390,7 +454,7 @@ func walkVlanCommunityFdbs(ctx context.Context, p snmputil.Params, client *gsnmp
 			}
 			defer func() { _ = vlanClient.Conn.Close() }()
 			vlanEntries := make(map[string]*fdbEntry)
-			if err := walkFdbTableInto(ctx, vlanClient, vlanEntries); err != nil {
+			if _, err := walkFdbTableInto(ctx, vlanClient, vlanEntries); err != nil {
 				slog.Debug("fdb: VLAN community walk incomplete", "device", vp.IP, "vlan", vlan, "err", err)
 			}
 			results[idx] = result{vlanEntries: vlanEntries}
@@ -494,10 +558,24 @@ func isSpecialMAC(mac []byte) bool {
 // are stale and do not represent active forwarding paths. Ports absent from
 // stpStates are passed through; not all devices populate STP state for every
 // port (e.g. access ports on non-STP VLANs).
-func buildEdges(localDevice string, entries map[string]*fdbEntry, bridgePorts map[int]int, ifNames map[int]string, stpStates map[int]int) []discovery.Edge {
+// buildEdges returns (edges, decoded). decoded reports whether at least one
+// FDB entry decoded cleanly — i.e. carried a valid 6-byte MAC on a valid
+// bridge port — regardless of its learned/self/mgmt status, STP state, or
+// whether it ultimately produced a direct-adjacency peer. The Walk-level
+// outcome accounting uses it to distinguish "no_neighbours" (rows decoded,
+// none usable) from "walker_drift" (PDUs arrived but every row was
+// decoder-rejected). See issue #98.
+func buildEdges(localDevice string, entries map[string]*fdbEntry, bridgePorts map[int]int, ifNames map[int]string, stpStates map[int]int) ([]discovery.Edge, bool) {
+	var decoded bool
 	portMACs := make(map[int][]net.HardwareAddr)
 	for _, e := range entries {
-		if e.status != fdbStatusLearned || len(e.mac) != 6 || e.port <= 0 {
+		if len(e.mac) != 6 || e.port <= 0 {
+			continue
+		}
+		// A valid MAC on a valid bridge port is a clean decode. The status and
+		// STP filters below are usability filters, not decoder mismatches.
+		decoded = true
+		if e.status != fdbStatusLearned {
 			continue
 		}
 		if isSpecialMAC(e.mac) {
@@ -550,5 +628,5 @@ func buildEdges(localDevice string, entries map[string]*fdbEntry, bridgePorts ma
 			ObservedAt:     now,
 		})
 	}
-	return edges
+	return edges, decoded
 }

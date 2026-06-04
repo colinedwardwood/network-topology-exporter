@@ -31,10 +31,7 @@ func TestBuildEdgesInScope(t *testing.T) {
 		},
 	}
 
-	edges, oos, err := buildEdges("local-sw", ifNames, entries, []*net.IPNet{allowed})
-	if err != nil {
-		t.Fatalf("buildEdges: %v", err)
-	}
+	edges, oos, _ := buildEdges("local-sw", ifNames, entries, []*net.IPNet{allowed})
 	if len(oos) != 0 {
 		t.Errorf("unexpected out-of-scope: %v", oos)
 	}
@@ -78,10 +75,7 @@ func TestBuildEdgesIPv6Neighbor(t *testing.T) {
 		},
 	}
 
-	edges, oos, err := buildEdges("local-sw", ifNames, entries, []*net.IPNet{allowed})
-	if err != nil {
-		t.Fatalf("buildEdges: %v", err)
-	}
+	edges, oos, _ := buildEdges("local-sw", ifNames, entries, []*net.IPNet{allowed})
 	if len(oos) != 0 {
 		t.Errorf("unexpected out-of-scope entries: %v", oos)
 	}
@@ -114,10 +108,7 @@ func TestBuildEdgesOutOfScope(t *testing.T) {
 		},
 	}
 
-	edges, oos, err := buildEdges("local-sw", ifNames, entries, []*net.IPNet{allowed})
-	if err != nil {
-		t.Fatalf("buildEdges: %v", err)
-	}
+	edges, oos, _ := buildEdges("local-sw", ifNames, entries, []*net.IPNet{allowed})
 	if len(edges) != 0 {
 		t.Errorf("expected no edges for out-of-scope, got %d", len(edges))
 	}
@@ -141,10 +132,7 @@ func TestBuildEdgesNoFilter(t *testing.T) {
 		},
 	}
 
-	edges, oos, err := buildEdges("me", ifNames, entries, nil)
-	if err != nil {
-		t.Fatalf("buildEdges: %v", err)
-	}
+	edges, oos, _ := buildEdges("me", ifNames, entries, nil)
 	if len(oos) != 0 {
 		t.Errorf("unexpected oos with nil allowedNets")
 	}
@@ -161,10 +149,7 @@ func TestBuildEdgesSkipsIncomplete(t *testing.T) {
 		{1, 2}: {deviceID: "sw", devPort: ""},    // no devPort
 	}
 
-	edges, _, err := buildEdges("me", ifNames, entries, nil)
-	if err != nil {
-		t.Fatalf("buildEdges: %v", err)
-	}
+	edges, _, _ := buildEdges("me", ifNames, entries, nil)
 	if len(edges) != 0 {
 		t.Errorf("expected no edges, got %d", len(edges))
 	}
@@ -176,10 +161,7 @@ func TestBuildEdgesFallbackIfIndex(t *testing.T) {
 		{7, 1}: {deviceID: "peer", devPort: "eth0"},
 	}
 
-	edges, _, err := buildEdges("me", map[int]string{}, entries, nil)
-	if err != nil {
-		t.Fatalf("buildEdges: %v", err)
-	}
+	edges, _, _ := buildEdges("me", map[int]string{}, entries, nil)
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d", len(edges))
 	}
@@ -195,10 +177,7 @@ func TestBuildEdgesIfNameFallback(t *testing.T) {
 		{3, 1}: {deviceID: "peer-sw", devPort: "GigabitEthernet0/1"},
 	}
 
-	edges, _, err := buildEdges("local-sw", map[int]string{}, entries, nil)
-	if err != nil {
-		t.Fatalf("buildEdges: %v", err)
-	}
+	edges, _, _ := buildEdges("local-sw", map[int]string{}, entries, nil)
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d: %v", len(edges), edges)
 	}
@@ -507,7 +486,7 @@ func TestWalkCacheTableSkipsZeroIfIdx(t *testing.T) {
 	}
 	defer func() { _ = client.Conn.Close() }()
 
-	entries, err := walkCacheTable(context.Background(), client)
+	entries, _, err := walkCacheTable(context.Background(), client)
 	if err != nil {
 		t.Fatalf("walkCacheTable: %v", err)
 	}
@@ -543,7 +522,7 @@ func TestWalkCacheTableSkipsShortOIDs(t *testing.T) {
 	}
 	defer func() { _ = client.Conn.Close() }()
 
-	entries, err := walkCacheTable(context.Background(), client)
+	entries, _, err := walkCacheTable(context.Background(), client)
 	if err != nil {
 		t.Fatalf("walkCacheTable: %v", err)
 	}
