@@ -66,6 +66,31 @@ const (
 	stateFull   = 8
 )
 
+// Walker label and outcome constants for network_topology_walker_outcome_total
+// (issue #98). The walker label is fixed per package; the outcome set is closed
+// and mirrors the four-bucket BGP categorisation documented on
+// internal/metrics/metrics.go (Metrics.WalkerOutcomeTotal). Keep in sync.
+const (
+	walkerOSPF = "ospf"
+
+	outcomeEdges            = "edges"
+	outcomeMIBUnimplemented = "mib_unimplemented"
+	outcomeNoNeighbours     = "no_neighbours"
+	outcomeWalkerDrift      = "walker_drift"
+	outcomeError            = "error"
+)
+
+// recordWalkerOutcome forwards a {walker, outcome} observation to the generic
+// non-BGP counter via the metrics sink carried on Params. nil-safe: a nil
+// Params or nil Params.WalkerMetrics drops the increment rather than panicking,
+// mirroring bgp.recordWalkerOutcome.
+func recordWalkerOutcome(p *snmputil.Params, walker, outcome string) {
+	if p == nil || p.WalkerMetrics == nil {
+		return
+	}
+	p.WalkerMetrics.RecordProtocolWalkerOutcome(walker, outcome)
+}
+
 type nbrRow struct {
 	nbrIP net.IP
 	state int
@@ -77,28 +102,52 @@ type nbrRow struct {
 func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
 	client, err := snmputil.Open(p)
 	if err != nil {
+		recordWalkerOutcome(&p, walkerOSPF, outcomeError)
 		return nil, nil, fmt.Errorf("ospf %s: %w", p.IP, err)
 	}
 	defer func() { _ = client.Conn.Close() }()
 
-	rows, err := walkOspfNbrTable(ctx, client)
+	// ospfNbrTable is the base table for the outcome accounting: hadPDUs
+	// distinguishes "MIB unimplemented" (zero PDUs — common on modern OS that
+	// don't ship the RFC 4750 MIB) from a device that does report neighbours.
+	rows, hadPDUs, err := walkOspfNbrTable(ctx, client)
 	if err != nil {
+		recordWalkerOutcome(&p, walkerOSPF, outcomeError)
 		return nil, nil, fmt.Errorf("ospf nbrTable %s: %w", p.IP, err)
 	}
-	edges, oos := buildEdges(localDevice, rows, allowedNets)
+	edges, oos, decoded := buildEdges(localDevice, rows, allowedNets)
+
+	switch {
+	case len(edges) > 0:
+		recordWalkerOutcome(&p, walkerOSPF, outcomeEdges)
+	case !hadPDUs:
+		recordWalkerOutcome(&p, walkerOSPF, outcomeMIBUnimplemented)
+	case decoded:
+		// PDUs arrived and at least one neighbour row decoded cleanly, but no
+		// usable edge resulted (e.g. every neighbour is below full/twoWay, or
+		// all filtered out of scope). Protocol up, nothing to report.
+		recordWalkerOutcome(&p, walkerOSPF, outcomeNoNeighbours)
+	default:
+		// PDUs arrived but no row carried a usable neighbour IP; the MIB is
+		// implemented but our decoder doesn't match this firmware.
+		recordWalkerOutcome(&p, walkerOSPF, outcomeWalkerDrift)
+	}
+
 	return edges, oos, nil
 }
 
-func walkOspfNbrTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*nbrRow, error) {
+func walkOspfNbrTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*nbrRow, bool, error) {
 	pdus, err := snmputil.BulkWalk(ctx, client, oidOspfNbrTable)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
+	hadPDUs := len(pdus) > 0
 	const prefix = ".1.3.6.1.2.1.14.10.1."
 	rows := make(map[string]*nbrRow)
 	for _, pdu := range pdus {
 		col, key, ok := parseNbrOID(pdu.Name, prefix)
 		if !ok {
+			snmputil.ReportDecodeIssue(ctx, walkerOSPF, oidOspfNbrTable, "oid_suffix_malformed", 1)
 			continue
 		}
 		row := rows[key]
@@ -109,17 +158,27 @@ func walkOspfNbrTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*nb
 		switch col {
 		case colNbrIPAddr:
 			row.nbrIP = snmputil.PDUIPv4(pdu)
+			if row.nbrIP == nil {
+				snmputil.ReportDecodeIssue(ctx, walkerOSPF, oidOspfNbrTable, "nbr_ip_undecodable", 1)
+			}
 		case colNbrState:
 			row.state = snmputil.PDUInt(pdu)
 		}
 	}
-	return rows, nil
+	return rows, hadPDUs, nil
 }
 
-func buildEdges(localDevice string, rows map[string]*nbrRow, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour) {
+// buildEdges returns (edges, oos, decoded). decoded reports whether at least
+// one neighbour row decoded cleanly — i.e. carried a usable (non-unspecified,
+// non-link-local, non-loopback) neighbour IP — regardless of its adjacency
+// state or scope membership. The Walk-level outcome accounting uses it to
+// distinguish "no_neighbours" (rows decoded, none usable) from "walker_drift"
+// (PDUs arrived but every row was decoder-rejected). See issue #98.
+func buildEdges(localDevice string, rows map[string]*nbrRow, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, bool) {
 	now := time.Now()
 	var edges []discovery.Edge
 	var oos []discovery.OutOfScopeNeighbour
+	var decoded bool
 
 	for _, row := range rows {
 		if row.nbrIP == nil {
@@ -130,6 +189,10 @@ func buildEdges(localDevice string, rows map[string]*nbrRow, allowedNets []*net.
 		if row.nbrIP.IsUnspecified() || row.nbrIP.IsLinkLocalUnicast() || row.nbrIP.IsLoopback() {
 			continue
 		}
+		// The row carries a usable neighbour IP: it decoded cleanly. A
+		// non-adjacent state or out-of-scope address below is a usability
+		// filter, not decoder drift (issue #98).
+		decoded = true
 		if row.state != stateFull && row.state != stateTwoWay {
 			continue
 		}
@@ -155,7 +218,7 @@ func buildEdges(localDevice string, rows map[string]*nbrRow, allowedNets []*net.
 			ObservedAt:     now,
 		})
 	}
-	return edges, oos
+	return edges, oos, decoded
 }
 
 // parseNbrOID extracts the column number and composite row key from an

@@ -70,11 +70,31 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 		}
 	}
 
-	edges, oos, _, err := walkAdjIPAddrs(ctx, client, localDevice, states, circIfNames, discovery.JoinReasonCodes(degradedReasons), allowedNets)
+	edges, oos, sawIPv6, err := walkAdjIPAddrs(ctx, client, localDevice, states, circIfNames, discovery.JoinReasonCodes(degradedReasons), allowedNets)
 	if err != nil {
 		return nil, nil, fmt.Errorf("isis adjIPAddr %s: %w", p.IP, err)
 	}
+	// Report skipped IPv6 adjacencies via the direct module sink rather than
+	// edge metadata: an IPv6-only device produces zero IPv4 edges, so there
+	// would be nothing to stamp (same zero-edge problem as FDB, issue #100).
+	// Once per walk regardless of how many IPv6 rows were skipped.
+	if sawIPv6 {
+		recordDegraded(&p, "isis", discovery.DegradedReasonUnsupportedIPVersion)
+	}
 	return edges, oos, nil
+}
+
+// recordDegraded forwards a {module, reason} degraded observation to
+// DiscoveryDegradedTotal via the metrics sink carried on Params. nil-safe: a
+// nil Params or nil WalkerMetrics drops the increment rather than panicking.
+// This is the zero-edge degraded path (issue #100): an IPv6-only IS-IS device
+// returns no IPv4 edge to carry the signal through the orchestrator's
+// edge-metadata channel, so the module reports it directly.
+func recordDegraded(p *snmputil.Params, module, reason string) {
+	if p == nil || p.WalkerMetrics == nil {
+		return
+	}
+	p.WalkerMetrics.RecordDegraded(module, reason)
 }
 
 func walkAdjStates(ctx context.Context, client *gsnmp.GoSNMP) (map[string]int, bool, error) {

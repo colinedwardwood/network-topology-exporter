@@ -159,6 +159,46 @@ type Metrics struct {
 	// "every row was decoder-rejected" must migrate to
 	// outcome="walker_drift".
 	BGPWalkerOutcomeTotal *prometheus.CounterVec
+
+	// WalkerOutcomeTotal counts the outcome of each non-BGP protocol walker
+	// pass (LLDP, CDP, OSPF, FDB). It is the generic sibling of
+	// BGPWalkerOutcomeTotal — kept as a SEPARATE metric so the BGP series
+	// operators already alert on is never renamed (issue #98).
+	// Labels:
+	//   walker  ∈ {lldp, cdp, ospf, fdb}
+	//   outcome ∈ {edges, mib_unimplemented, no_neighbours, walker_drift, error}
+	// One (walker, outcome) counter is incremented per device per cycle.
+	// Semantics mirror the BGP four-bucket categorisation (see
+	// BGPWalkerOutcomeTotal and internal/discovery/bgp/bgp.go):
+	//   - "edges" — the walk produced at least one discovery.Edge.
+	//   - "mib_unimplemented" — the base table BulkWalk returned zero PDUs;
+	//     the device does not implement the MIB at all. Expected on
+	//     non-applicable devices (e.g. CDP on a non-Cisco device); MUST NOT
+	//     page.
+	//   - "no_neighbours" — PDUs arrived AND at least one row decoded
+	//     cleanly, but zero usable edges resulted (e.g. neighbours present
+	//     but none in an up/usable state, or all filtered out of scope).
+	//     Operationally distinct from mib_unimplemented: the MIB is
+	//     implemented, the protocol is up, there is simply nothing to report.
+	//   - "walker_drift" — PDUs arrived but EVERY row was rejected by the
+	//     decoder (none decoded cleanly), zero edges. The MIB IS implemented
+	//     but our decoder doesn't match this firmware. Page-level signal that
+	//     the walker is broken on this device; distinct from no_neighbours
+	//     (which assumes at least one clean decode) and mib_unimplemented
+	//     (which is expected on non-applicable devices).
+	//   - "error" — the walk itself returned a non-nil error (SNMP failure).
+	WalkerOutcomeTotal *prometheus.CounterVec
+
+	// SystemWalkAnomalyTotal counts SNMP system-group walk outcomes that
+	// silently degrade downstream behaviour (issue #101). Low cardinality by
+	// construction: the ONLY label is reason, a closed two-value set —
+	//   - "empty_sysname"   — sysName was empty/garbage so the device ID fell
+	//     back to the management IP (unstable across re-addressing).
+	//   - "unknown_vendor"  — the sysObjectID resolved to no known vendor, so
+	//     Vendor stays "unknown" and the vendor-specific BGP4-V2 walker is
+	//     skipped (BGP still falls through to the observable RFC 4273 path).
+	// No device, IP, or sysObjectID is ever a label value here.
+	SystemWalkAnomalyTotal *prometheus.CounterVec
 }
 
 // New builds and registers the exporter's metric set. emitBoundaryObs should
@@ -301,6 +341,14 @@ func New(emitBoundaryObs bool) *Metrics {
 			Name: "network_topology_bgp_walker_outcome_total",
 			Help: "BGP walker pass outcomes. walker ∈ {vendor_cisco, vendor_arista, vendor_juniper, vendor_nokia, rfc4273}; outcome ∈ {edges, mib_unimplemented, no_peers, walker_drift, malformed_index, error}.",
 		}, []string{"walker", "outcome"}),
+		WalkerOutcomeTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "network_topology_walker_outcome_total",
+			Help: "Non-BGP protocol walker pass outcomes. walker ∈ {lldp, cdp, ospf, fdb}; outcome ∈ {edges, mib_unimplemented, no_neighbours, walker_drift, error}.",
+		}, []string{"walker", "outcome"}),
+		SystemWalkAnomalyTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "network_topology_system_walk_anomaly_total",
+			Help: "SNMP system-group walk outcomes that silently degrade downstream behaviour. reason ∈ {empty_sysname, unknown_vendor}.",
+		}, []string{"reason"}),
 		MetricsPayloadBytes: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name: "network_topology_metrics_payload_bytes",
 			Help: "Response body size of one /metrics scrape in bytes. Tracks growth as the topology scales.",
@@ -346,6 +394,8 @@ func New(emitBoundaryObs bool) *Metrics {
 		m.MetricsRenderDuration,
 		m.MetricsPayloadBytes,
 		m.BGPWalkerOutcomeTotal,
+		m.WalkerOutcomeTotal,
+		m.SystemWalkAnomalyTotal,
 	)
 
 	return m

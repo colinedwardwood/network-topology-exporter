@@ -43,6 +43,31 @@ const (
 	precedenceRank  = 2
 )
 
+// Walker label and outcome constants for network_topology_walker_outcome_total
+// (issue #98). The walker label is fixed per package; the outcome set is closed
+// and mirrors the four-bucket BGP categorisation documented on
+// internal/metrics/metrics.go (Metrics.WalkerOutcomeTotal). Keep in sync.
+const (
+	walkerLLDP = "lldp"
+
+	outcomeEdges            = "edges"
+	outcomeMIBUnimplemented = "mib_unimplemented"
+	outcomeNoNeighbours     = "no_neighbours"
+	outcomeWalkerDrift      = "walker_drift"
+	outcomeError            = "error"
+)
+
+// recordWalkerOutcome forwards a {walker, outcome} observation to the generic
+// non-BGP counter via the metrics sink carried on Params. nil-safe: a nil
+// Params or nil Params.WalkerMetrics drops the increment rather than panicking,
+// mirroring bgp.recordWalkerOutcome.
+func recordWalkerOutcome(p *snmputil.Params, walker, outcome string) {
+	if p == nil || p.WalkerMetrics == nil {
+		return
+	}
+	p.WalkerMetrics.RecordProtocolWalkerOutcome(walker, outcome)
+}
+
 // LldpPortIdSubtype values from IEEE 802.1AB Table 8-3.
 const (
 	portSubtypeInterfaceAlias = 1
@@ -99,21 +124,50 @@ type remEntry struct {
 func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
 	client, err := snmputil.Open(p)
 	if err != nil {
+		recordWalkerOutcome(&p, walkerLLDP, outcomeError)
 		return nil, nil, fmt.Errorf("lldp %s: %w", p.IP, err)
 	}
 	defer func() { _ = client.Conn.Close() }()
 
 	locPorts, err := walkLocPorts(ctx, client)
 	if err != nil {
+		recordWalkerOutcome(&p, walkerLLDP, outcomeError)
 		return nil, nil, fmt.Errorf("lldp locport %s: %w", p.IP, err)
 	}
 
-	remEntries, err := walkRemEntries(ctx, client)
+	// lldpRemTable is the base table for the outcome accounting: hadPDUs
+	// distinguishes "MIB unimplemented" (zero PDUs) from a device that does
+	// advertise neighbours.
+	remEntries, hadPDUs, err := walkRemEntries(ctx, client)
 	if err != nil {
+		recordWalkerOutcome(&p, walkerLLDP, outcomeError)
 		return nil, nil, fmt.Errorf("lldp remtable %s: %w", p.IP, err)
 	}
 
-	return buildEdges(localDevice, locPorts, remEntries, allowedNets)
+	edges, oos, decoded, err := buildEdges(ctx, localDevice, locPorts, remEntries, allowedNets)
+	if err != nil {
+		recordWalkerOutcome(&p, walkerLLDP, outcomeError)
+		return nil, nil, err
+	}
+
+	switch {
+	case len(edges) > 0:
+		recordWalkerOutcome(&p, walkerLLDP, outcomeEdges)
+	case !hadPDUs:
+		recordWalkerOutcome(&p, walkerLLDP, outcomeMIBUnimplemented)
+	case decoded:
+		// PDUs arrived and at least one row decoded cleanly, but no usable
+		// edge resulted (e.g. all neighbours filtered out of scope, or
+		// unresolvable device/port). Protocol up, nothing to report.
+		recordWalkerOutcome(&p, walkerLLDP, outcomeNoNeighbours)
+	default:
+		// PDUs arrived but every assembled row was rejected by the decoder
+		// (invalid subtype/length, unparseable IDs). The MIB is implemented;
+		// our decoder doesn't match this firmware.
+		recordWalkerOutcome(&p, walkerLLDP, outcomeWalkerDrift)
+	}
+
+	return edges, oos, nil
 }
 
 func walkLocPorts(ctx context.Context, client *gsnmp.GoSNMP) (map[int]locPort, error) {
@@ -152,11 +206,12 @@ func walkLocPorts(ctx context.Context, client *gsnmp.GoSNMP) (map[int]locPort, e
 	return ports, nil
 }
 
-func walkRemEntries(ctx context.Context, client *gsnmp.GoSNMP) (map[remKey]*remEntry, error) {
+func walkRemEntries(ctx context.Context, client *gsnmp.GoSNMP) (map[remKey]*remEntry, bool, error) {
 	pdus, err := snmputil.BulkWalk(ctx, client, oidRemTable)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
+	hadPDUs := len(pdus) > 0
 
 	const prefix = ".1.0.8802.1.1.2.1.4.1.1."
 	entries := make(map[remKey]*remEntry)
@@ -205,7 +260,7 @@ func walkRemEntries(ctx context.Context, client *gsnmp.GoSNMP) (map[remKey]*remE
 			e.sysName = snmputil.NormaliseName(snmputil.PDUString(pdu))
 		}
 	}
-	return entries, nil
+	return entries, hadPDUs, nil
 }
 
 // buildEdges converts the raw SNMP walks into topology edges.
@@ -213,9 +268,17 @@ func walkRemEntries(ctx context.Context, client *gsnmp.GoSNMP) (map[remKey]*remE
 // TTL liveness: lldpRemTable entries are aged out by the LLDP agent per
 // IEEE 802.1AB-2016 §9.6.3. Expired entries are removed before our walk,
 // so no explicit TTL field check is needed here.
-func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[remKey]*remEntry, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
+// buildEdges returns (edges, oos, decoded, err). decoded reports whether at
+// least one rem-table row decoded cleanly — i.e. passed the IEEE 802.1AB
+// subtype/length validation gates with non-empty IDs — regardless of whether
+// it ultimately yielded an in-scope edge. The Walk-level outcome accounting
+// uses it to distinguish "no_neighbours" (PDUs decoded, nothing usable) from
+// "walker_drift" (PDUs arrived but every row was decoder-rejected). See
+// issue #98.
+func buildEdges(ctx context.Context, localDevice string, locPorts map[int]locPort, remEntries map[remKey]*remEntry, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, bool, error) {
 	var edges []discovery.Edge
 	var oos []discovery.OutOfScopeNeighbour
+	var decoded bool
 	now := time.Now()
 
 	for k, rem := range remEntries {
@@ -223,6 +286,7 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 		if rem.chassisSubtype < 1 || rem.chassisSubtype > 7 {
 			slog.Debug("lldp: invalid chassis ID subtype; skipping entry",
 				"device", localDevice, "subtype", rem.chassisSubtype)
+			snmputil.ReportDecodeIssue(ctx, walkerLLDP, oidRemTable, "chassis_subtype_invalid", 1)
 			continue
 		}
 
@@ -230,6 +294,7 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 		if rem.portSubtype < 1 || rem.portSubtype > 7 {
 			slog.Debug("lldp: invalid port ID subtype; skipping entry",
 				"device", localDevice, "subtype", rem.portSubtype)
+			snmputil.ReportDecodeIssue(ctx, walkerLLDP, oidRemTable, "port_subtype_invalid", 1)
 			continue
 		}
 
@@ -237,6 +302,7 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 		if rem.chassisSubtype == chassisSubtypeMACAddress && len(rem.chassisID) != 6 {
 			slog.Debug("lldp: MAC chassis ID wrong length; skipping entry",
 				"device", localDevice, "got", len(rem.chassisID), "want", 6)
+			snmputil.ReportDecodeIssue(ctx, walkerLLDP, oidRemTable, "chassis_mac_bad_length", 1)
 			continue
 		}
 
@@ -246,6 +312,7 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 			if len(rem.chassisID) == 0 {
 				slog.Debug("lldp: zero-length network-address chassis ID; skipping entry",
 					"device", localDevice)
+				snmputil.ReportDecodeIssue(ctx, walkerLLDP, oidRemTable, "chassis_addr_malformed", 1)
 				continue
 			}
 			if len(rem.chassisID) < 2 ||
@@ -254,6 +321,7 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 				(rem.chassisID[0] != 1 && rem.chassisID[0] != 2) {
 				slog.Debug("lldp: malformed network-address chassis ID; skipping entry",
 					"device", localDevice, "family", rem.chassisID[0], "len", len(rem.chassisID))
+				snmputil.ReportDecodeIssue(ctx, walkerLLDP, oidRemTable, "chassis_addr_malformed", 1)
 				continue
 			}
 		}
@@ -262,12 +330,18 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 		if rem.portSubtype == portSubtypeMACAddress && len(rem.portID) != 6 {
 			slog.Debug("lldp: MAC port ID wrong length; skipping entry",
 				"device", localDevice, "got", len(rem.portID), "want", 6)
+			snmputil.ReportDecodeIssue(ctx, walkerLLDP, oidRemTable, "port_mac_bad_length", 1)
 			continue
 		}
 
 		if len(rem.chassisID) == 0 || len(rem.portID) == 0 {
 			continue
 		}
+
+		// The row passed all encoding-validation gates: it decoded cleanly.
+		// Anything that drops it below is a scope/resolution filter, not a
+		// decoder mismatch (issue #98).
+		decoded = true
 
 		// SanitisePortName at the variable assignment covers Edge.SrcPort,
 		// Edge.DstPort, and OutOfScopeNeighbour.ReportingPort with one wrap per
@@ -346,7 +420,7 @@ func buildEdges(localDevice string, locPorts map[int]locPort, remEntries map[rem
 		})
 	}
 
-	return edges, oos, nil
+	return edges, oos, decoded, nil
 }
 
 func resolveLocalPort(portNum int, locPorts map[int]locPort) string {

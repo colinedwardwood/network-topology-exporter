@@ -29,3 +29,28 @@ func NewWalkerMetricsAdapter(m *Metrics) *WalkerMetricsAdapter {
 func (a *WalkerMetricsAdapter) RecordWalkerOutcome(walker, outcome string) {
 	a.m.BGPWalkerOutcomeTotal.WithLabelValues(walker, outcome).Inc()
 }
+
+// RecordProtocolWalkerOutcome increments network_topology_walker_outcome_total
+// for the (walker, outcome) tuple. This is the generic, non-BGP counter used
+// by the LLDP, CDP, OSPF, and FDB walkers (issue #98). The label set and
+// semantics are documented on Metrics.WalkerOutcomeTotal.
+func (a *WalkerMetricsAdapter) RecordProtocolWalkerOutcome(walker, outcome string) {
+	a.m.WalkerOutcomeTotal.WithLabelValues(walker, outcome).Inc()
+}
+
+// RecordDegraded increments network_topology_discovery_degraded_total for the
+// (module, reason) tuple. Used for zero-edge degraded runs that cannot be
+// carried by the orchestrator's edge-metadata path (issue #100); the label
+// set and semantics are documented on Metrics.DiscoveryDegradedTotal.
+func (a *WalkerMetricsAdapter) RecordDegraded(module, reason string) {
+	a.m.DiscoveryDegradedTotal.WithLabelValues(module, reason).Inc()
+}
+
+// RecordSystemWalkAnomaly increments network_topology_system_walk_anomaly_total
+// for the given low-cardinality reason. Used by the SNMP system walk to surface
+// the empty-sysName fallback and the unresolved-vendor outcome (issue #101);
+// the closed reason set and semantics are documented on
+// Metrics.SystemWalkAnomalyTotal.
+func (a *WalkerMetricsAdapter) RecordSystemWalkAnomaly(reason string) {
+	a.m.SystemWalkAnomalyTotal.WithLabelValues(reason).Inc()
+}

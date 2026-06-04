@@ -36,8 +36,37 @@ import (
 // (no panic). The bgp module's recordWalkerOutcome helper encapsulates that
 // nil-check; other modules wanting the same observability should mirror the
 // pattern rather than calling Inc directly on a possibly-nil handle.
+// RecordWalkerOutcome routes to the BGP-specific counter
+// (network_topology_bgp_walker_outcome_total); RecordProtocolWalkerOutcome
+// routes to the generic counter (network_topology_walker_outcome_total) used
+// by the LLDP, CDP, OSPF, and FDB walkers (issue #98). The two are kept
+// separate so the long-standing BGP series operators alert on is never
+// renamed. As with RecordWalkerOutcome, callers reach these through the
+// nil-tolerant helper in their own package (see bgp.recordWalkerOutcome): a
+// nil Params or nil Params.WalkerMetrics drops the increment rather than
+// panicking.
+//
+// RecordDegraded increments network_topology_discovery_degraded_total for a
+// (module, reason) tuple. It exists for the zero-edge degraded case (issue
+// #100): when a sub-walk fails and the module returns no edge to stamp with
+// degraded metadata, the orchestrator's edge-metadata path (see
+// internal/app/cycle.go CollectDegradedReasons) has nothing to carry the
+// signal. Modules call this directly so a degraded run is still observable.
+// Same nil-tolerance contract as the outcome methods.
+//
+// RecordSystemWalkAnomaly increments network_topology_system_walk_anomaly_total
+// for a low-cardinality reason (issue #101). The system walk (Walk, below)
+// has two outcomes that silently degrade downstream behaviour with no metric
+// otherwise: an empty/garbage sysName that falls back to the management IP as
+// the device ID, and a sysObjectID that resolves to no known vendor (leaving
+// Vendor="unknown", which skips the vendor-specific BGP4-V2 walker). reason is
+// a closed two-value set — see the systemWalkAnomaly* constants. Same
+// nil-tolerance contract as the outcome methods.
 type WalkerMetrics interface {
 	RecordWalkerOutcome(walker, outcome string)
+	RecordProtocolWalkerOutcome(walker, outcome string)
+	RecordDegraded(module, reason string)
+	RecordSystemWalkAnomaly(reason string)
 }
 
 // WarnLimiter is the per-key Warn rate-limiter sink used by discovery
@@ -137,6 +166,30 @@ const (
 	dotOIDSysUpTime   = "." + oidSysUpTime
 	dotOIDSysName     = "." + oidSysName
 )
+
+// System-walk anomaly reasons for network_topology_system_walk_anomaly_total.
+// This is a CLOSED set of exactly two values; the metric carries only the
+// reason label (no device, IP, or sysObjectID — those would be high
+// cardinality). See WalkerMetrics.RecordSystemWalkAnomaly (issue #101).
+const (
+	// systemWalkAnomalyEmptySysName fires when sysName is empty/garbage and the
+	// device ID falls back to the management IP string.
+	systemWalkAnomalyEmptySysName = "empty_sysname"
+	// systemWalkAnomalyUnknownVendor fires when the sysObjectID does not resolve
+	// to a known vendor (Vendor stays "unknown").
+	systemWalkAnomalyUnknownVendor = "unknown_vendor"
+)
+
+// recordSystemWalkAnomaly routes a system-walk anomaly to the injected
+// WalkerMetrics sink, tolerating a nil Params.WalkerMetrics by dropping the
+// increment (mirrors the bgp.recordWalkerOutcome nil-check pattern so the
+// discovery layer never panics when observability is not wired).
+func recordSystemWalkAnomaly(p Params, reason string) {
+	if p.WalkerMetrics == nil {
+		return
+	}
+	p.WalkerMetrics.RecordSystemWalkAnomaly(reason)
+}
 
 // Open creates and connects a gosnmp session from the given parameters.
 // Callers must close the underlying connection (client.Conn.Close()) when done.
@@ -249,11 +302,17 @@ func Walk(ctx context.Context, p Params) (*discovery.Device, error) {
 		Vendor: "unknown",
 	}
 
+	// Track whether sysName resolved to a usable device ID; if not, dev.ID
+	// stays at the management-IP fallback and we emit an empty_sysname anomaly
+	// after the loop (the PDU may be present-but-garbage or entirely absent —
+	// both leave the IP fallback in place).
+	gotSysName := false
 	for _, pdu := range result.Variables {
 		switch pdu.Name {
 		case dotOIDSysName:
 			if s := NormaliseName(PDUString(pdu)); s != "" {
 				dev.ID = s
+				gotSysName = true
 			}
 		case dotOIDSysDescr:
 			dev.OSVersion = normalizeSysDescr(PDUString(pdu))
@@ -270,6 +329,18 @@ func Walk(ctx context.Context, p Params) (*discovery.Device, error) {
 				}
 			}
 		}
+	}
+
+	// Observe the two silently-degrading outcomes (issue #101). Both leave a
+	// usable Device for inventory but weaken downstream behaviour: an empty
+	// sysName means the device ID is the management IP (unstable across
+	// re-addressing), and an unknown vendor means vendorSpecFor("unknown")
+	// returns nil so the vendor-specific BGP4-V2 walker is skipped.
+	if !gotSysName {
+		recordSystemWalkAnomaly(p, systemWalkAnomalyEmptySysName)
+	}
+	if dev.Vendor == "unknown" {
+		recordSystemWalkAnomaly(p, systemWalkAnomalyUnknownVendor)
 	}
 
 	return dev, nil

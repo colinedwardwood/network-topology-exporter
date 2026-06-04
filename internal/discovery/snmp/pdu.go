@@ -66,6 +66,24 @@ func reportDecodeIssue(ctx context.Context, issue DecodeIssue) {
 	}
 }
 
+// ReportDecodeIssue surfaces a single per-row decode rejection to the decode
+// issue reporter installed on ctx (via ContextWithDecodeIssueReporter), if any.
+// It is the exported entry point for walker packages outside this package
+// (lldp/cdp/ospf/fdb) that cannot call the unexported reportDecodeIssue.
+//
+// oid MUST be a table-root OID (never a per-row instance OID) to keep the
+// resulting metric label low-cardinality; reason should be a short, stable
+// snake_case string suitable as a metric label value. count is the number of
+// rejected rows being reported (use 1 per row at a continue site).
+func ReportDecodeIssue(ctx context.Context, module string, oid TableOID, reason string, count int) {
+	reportDecodeIssue(ctx, DecodeIssue{
+		Module: module,
+		OID:    oid,
+		Reason: reason,
+		Count:  count,
+	})
+}
+
 func appendDecodeSample(samples []string, sample string) []string {
 	const maxSamples = 5
 	if len(samples) >= maxSamples {
