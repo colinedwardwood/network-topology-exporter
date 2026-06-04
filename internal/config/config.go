@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -202,6 +203,41 @@ type DiscoveryConfig struct {
 	// this value. Mirrors FederationHubConfig.MaxGraphEdges for standalone
 	// and spoke mode.
 	MaxGraphEdges int `yaml:"max_graph_edges"`
+
+	// PerTargetPDURatePerSecond caps the steady-state SNMP request (PDU) rate
+	// issued against a single device during a discovery cycle. A misconfigured
+	// high parallelism with all modules enabled can otherwise drive hundreds of
+	// PDUs/sec at one target and self-DoS its SNMP daemon (issue #72). The cap
+	// is applied per device per cycle (per-target isolation — limiters are not
+	// shared across devices). 0 (default) means unlimited, preserving today's
+	// behaviour. Must be >= 0.
+	PerTargetPDURatePerSecond int `yaml:"per_target_pdu_rate_per_second"`
+
+	// TargetOverrides scopes discovery to a subset of the globally-enabled
+	// modules on a per-CIDR basis (issue #74). For an IP matching an override's
+	// cidr, ONLY the listed modules run (intersected with modules.<m>.enabled);
+	// an IP matching no override runs ALL enabled modules — today's behaviour,
+	// unchanged. Heterogeneous fleets use this so e.g. BGP is not walked against
+	// an access switch that does not speak BGP (avoiding a guaranteed
+	// mib_unimplemented walker outcome). Most-specific CIDR wins (longest prefix
+	// match), the same precedence model as credentials.assignments.
+	TargetOverrides []TargetOverride `yaml:"target_overrides"`
+
+	// overrideResolver is the parsed, longest-prefix-sorted form of
+	// TargetOverrides, built once during validate() so the discovery loop never
+	// re-parses CIDRs per device per cycle. nil when no overrides are
+	// configured (the unchanged default path).
+	overrideResolver *targetOverrideResolver
+}
+
+// TargetOverride restricts the modules that run against IPs inside CIDR to the
+// listed Modules (issue #74). See DiscoveryConfig.TargetOverrides for the full
+// semantics. Each module name must be one of the canonical module identifiers
+// (lldp, cdp, fdb, ospf, bgp, isis, mpls_te) and must be enabled globally; an
+// empty Modules list is rejected as ambiguous.
+type TargetOverride struct {
+	CIDR    string   `yaml:"cidr"`
+	Modules []string `yaml:"modules"`
 }
 
 // ScopeConfig is the LD-11 polling-scope guard. CIDRAllowList is mandatory
@@ -448,6 +484,9 @@ func (c *Config) validate() error {
 	if c.Discovery.MaxGraphEdges < 0 {
 		return errors.New("discovery.max_graph_edges must be >= 0 (0 = unlimited)")
 	}
+	if c.Discovery.PerTargetPDURatePerSecond < 0 {
+		return errors.New("discovery.per_target_pdu_rate_per_second must be >= 0 (0 = unlimited)")
+	}
 	if c.Discovery.Interval <= 0 {
 		return errors.New("discovery.interval must be > 0")
 	}
@@ -455,6 +494,9 @@ func (c *Config) validate() error {
 		return errors.New("discovery.timeout_per_device must be > 0")
 	}
 	if err := c.validateScope(); err != nil {
+		return err
+	}
+	if err := c.validateTargetOverrides(); err != nil {
 		return err
 	}
 	if c.Modules.SNMP.Enabled {
@@ -793,6 +835,170 @@ func (c *Config) validateFDB() error {
 	if c.Modules.FDB.MaxVlans > 4096 {
 		return errors.New("fdb.max_vlans must be at most 4096")
 	}
+	return nil
+}
+
+// scopableModules is the canonical set of per-target-scopable module names,
+// matching the module dispatch table in internal/app/cycle.go and the toggles
+// on ModulesConfig. snmp/arp are intentionally excluded: snmp is the transport
+// (always required to reach a device) and arp is enrichment driven by fdb, not
+// an independently dispatched edge source.
+var scopableModules = map[string]struct{}{
+	"lldp":    {},
+	"cdp":     {},
+	"fdb":     {},
+	"ospf":    {},
+	"bgp":     {},
+	"isis":    {},
+	"mpls_te": {},
+}
+
+// moduleGloballyEnabled reports whether module m is enabled via modules.<m>.enabled.
+// m is assumed to be one of scopableModules (validated upstream).
+func (c *Config) moduleGloballyEnabled(m string) bool {
+	switch m {
+	case "lldp":
+		return c.Modules.LLDP.Enabled
+	case "cdp":
+		return c.Modules.CDP.Enabled
+	case "fdb":
+		return c.Modules.FDB.Enabled
+	case "ospf":
+		return c.Modules.OSPF.Enabled
+	case "bgp":
+		return c.Modules.BGP.Enabled
+	case "isis":
+		return c.Modules.ISIS.Enabled
+	case "mpls_te":
+		return c.Modules.MPLSTE.Enabled
+	default:
+		return false
+	}
+}
+
+// targetOverride is the parsed form of one TargetOverride: the CIDR is parsed
+// into a *net.IPNet once at validate() time, the prefix length is cached for
+// the longest-prefix sort, and the module set is materialised into a lookup map.
+type targetOverride struct {
+	net       *net.IPNet
+	prefixLen int
+	modules   map[string]bool
+}
+
+// targetOverrideResolver answers "which modules may run against this IP" by
+// longest-prefix match over the configured overrides. Built once during
+// validate(); read-only and safe for concurrent use thereafter. It mirrors the
+// most-specific-CIDR-wins model in internal/credentials (Resolver.cidrs).
+type targetOverrideResolver struct {
+	overrides []targetOverride
+}
+
+// buildTargetOverrideResolver parses the overrides and sorts them
+// longest-prefix-first so ModulesForIP returns the most-specific match on its
+// first hit. Tiebreak: when two overrides have an equal prefix length, the
+// first-declared (lower config index) wins — sort.SliceStable preserves config
+// order for equal keys, and validate() rejects exact-duplicate CIDRs so an
+// ambiguous equal-prefix overlap of the *same* network can never silently
+// shadow. CIDRs are assumed already validated by validateTargetOverrides.
+func buildTargetOverrideResolver(overrides []TargetOverride) *targetOverrideResolver {
+	if len(overrides) == 0 {
+		return nil
+	}
+	r := &targetOverrideResolver{overrides: make([]targetOverride, 0, len(overrides))}
+	for _, o := range overrides {
+		_, n, err := net.ParseCIDR(o.CIDR)
+		if err != nil {
+			continue // unreachable: validated upstream.
+		}
+		ones, _ := n.Mask.Size()
+		mods := make(map[string]bool, len(o.Modules))
+		for _, m := range o.Modules {
+			mods[m] = true
+		}
+		r.overrides = append(r.overrides, targetOverride{net: n, prefixLen: ones, modules: mods})
+	}
+	// Most-specific CIDR wins — longest prefix first. SliceStable keeps
+	// config order for equal prefix lengths (first-declared tiebreak).
+	sort.SliceStable(r.overrides, func(i, j int) bool {
+		return r.overrides[i].prefixLen > r.overrides[j].prefixLen
+	})
+	return r
+}
+
+// ModulesForIP returns the set of module names permitted to run against ip,
+// resolved by longest-prefix match over discovery.target_overrides. The
+// returned map is the override's module set (already intersected at config-load
+// time only against the canonical/enabled checks in validation — callers must
+// still AND against the live modules.<m>.enabled gate). When no override
+// matches ip, it returns (nil, false), the signal to run ALL globally-enabled
+// modules (today's unchanged default). The returned map must be treated as
+// read-only.
+func (c *Config) ModulesForIP(ip net.IP) (allowed map[string]bool, matched bool) {
+	r := c.Discovery.overrideResolver
+	if r == nil {
+		return nil, false
+	}
+	for _, o := range r.overrides {
+		if o.net.Contains(ip) {
+			return o.modules, true
+		}
+	}
+	return nil, false
+}
+
+// BuildTargetOverrideResolver validates discovery.target_overrides and rebuilds
+// the cached longest-prefix resolver consulted by ModulesForIP. Load() calls
+// this during validate(); it is also exported so code that constructs a Config
+// programmatically (e.g. tests) can populate the resolver without re-parsing a
+// YAML file. Returns the same errors as the load-time validation path.
+func (c *Config) BuildTargetOverrideResolver() error {
+	return c.validateTargetOverrides()
+}
+
+// validateTargetOverrides enforces the issue #74 invariants: every cidr parses,
+// every referenced module is a recognised name AND enabled globally, and the
+// modules list is non-empty. On success it builds the cached resolver.
+func (c *Config) validateTargetOverrides() error {
+	if len(c.Discovery.TargetOverrides) == 0 {
+		c.Discovery.overrideResolver = nil
+		return nil
+	}
+	seenCIDR := make(map[string]int, len(c.Discovery.TargetOverrides))
+	for i, o := range c.Discovery.TargetOverrides {
+		_, n, err := net.ParseCIDR(o.CIDR)
+		if err != nil {
+			return fmt.Errorf("discovery.target_overrides[%d]: invalid cidr %q: %w", i, o.CIDR, err)
+		}
+		// Reject exact-duplicate CIDRs: two overrides for the same network have
+		// equal prefix length and would make the winner depend on declaration
+		// order alone — an ambiguity better surfaced as a config error.
+		key := n.String()
+		if first, dup := seenCIDR[key]; dup {
+			return fmt.Errorf("discovery.target_overrides[%d]: duplicate cidr %q (already declared at [%d])", i, o.CIDR, first)
+		}
+		seenCIDR[key] = i
+		// An empty modules list is ambiguous: if an operator wants nothing
+		// polled at a CIDR they should exclude it from discovery.scope instead.
+		if len(o.Modules) == 0 {
+			return fmt.Errorf("discovery.target_overrides[%d] (cidr %q): modules must list at least one module (to poll nothing, remove the CIDR from discovery.scope)", i, o.CIDR)
+		}
+		seenMod := make(map[string]struct{}, len(o.Modules))
+		for _, m := range o.Modules {
+			if _, ok := scopableModules[m]; !ok {
+				return fmt.Errorf("discovery.target_overrides[%d] (cidr %q): unknown module %q (allowed: bgp, cdp, fdb, isis, lldp, mpls_te, ospf)", i, o.CIDR, m)
+			}
+			if _, dup := seenMod[m]; dup {
+				return fmt.Errorf("discovery.target_overrides[%d] (cidr %q): duplicate module %q", i, o.CIDR, m)
+			}
+			seenMod[m] = struct{}{}
+			// Acceptance criterion: an override may only narrow, never widen —
+			// every referenced module must be enabled globally.
+			if !c.moduleGloballyEnabled(m) {
+				return fmt.Errorf("discovery.target_overrides[%d] (cidr %q): module %q is not enabled globally (set modules.%s.enabled: true or remove it from the override)", i, o.CIDR, m, m)
+			}
+		}
+	}
+	c.Discovery.overrideResolver = buildTargetOverrideResolver(c.Discovery.TargetOverrides)
 	return nil
 }
 

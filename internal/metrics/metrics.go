@@ -40,6 +40,7 @@ type Metrics struct {
 	DiscoveryCycleDuration        prometheus.Histogram
 	DiscoveryModuleDuration       *prometheus.HistogramVec
 	SNMPWalksTotal                *prometheus.CounterVec
+	SNMPRateLimitWaitSeconds      prometheus.Histogram
 	DiscoveryDecodeIssues         *prometheus.CounterVec
 	DiscoveryQuarantinedRowsTotal *prometheus.CounterVec
 	DiscoveryDegradedTotal        *prometheus.CounterVec
@@ -249,6 +250,11 @@ func New(emitBoundaryObs bool) *Metrics {
 			Name: "network_topology_snmp_walks_total",
 			Help: "SNMP walk attempts, partitioned by terminal status and sub-reason. Reason values are the underlying strings of the WalkReason constants in sub_reason.go; status=ok and status=timeout rows carry reason=n/a.",
 		}, []string{"status", "reason"}), // status ∈ {ok, timeout, error}; reason ∈ WalkReason
+		SNMPRateLimitWaitSeconds: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "network_topology_snmp_rate_limit_wait_seconds",
+			Help:    "Time spent blocked on the per-target SNMP rate limiter before issuing a walk; non-zero observations mean the per_target_pdu_rate_per_second limit is biting (issue #72).",
+			Buckets: prometheus.ExponentialBuckets(0.001, 2, 12), // ~1ms .. ~4s
+		}),
 		DiscoveryDecodeIssues: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "network_topology_discovery_decode_issues_total",
 			Help: "SNMP decode anomalies by module, OID, and reason.",
@@ -371,6 +377,7 @@ func New(emitBoundaryObs bool) *Metrics {
 		m.DiscoveryCycleDuration,
 		m.DiscoveryModuleDuration,
 		m.SNMPWalksTotal,
+		m.SNMPRateLimitWaitSeconds,
 		m.DiscoveryDecodeIssues,
 		m.DiscoveryQuarantinedRowsTotal,
 		m.DiscoveryDegradedTotal,

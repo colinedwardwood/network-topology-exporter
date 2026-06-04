@@ -259,6 +259,12 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build-test, integration-test, lint, helm-lint, docker]
+    env:
+      # Secrets cannot be referenced directly in `if:` expressions, so derive a
+      # plain env flag from the Docker Hub token. When the DOCKERHUB_TOKEN secret
+      # is absent this is 'false' and the release stays GHCR-only; once the secret
+      # is provisioned it flips to 'true' and the image is mirrored to Docker Hub.
+      DOCKERHUB_ENABLED: ${{ secrets.DOCKERHUB_TOKEN != '' }}
     permissions:
       contents: write       # create GitHub release
       packages: write       # push to ghcr.io
@@ -281,13 +287,38 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Gated on DOCKERHUB_ENABLED: skipped (not failed) when the secret is absent.
+      - name: log in to Docker Hub
+        if: ${{ env.DOCKERHUB_ENABLED == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - uses: sigstore/cosign-installer@v3
+
+      # Build the metadata-action images list: GHCR always, Docker Hub appended
+      # only when the mirror is enabled. Emitting a multiline value via a heredoc
+      # to $GITHUB_OUTPUT lets metadata-action push every tag to both registries
+      # from a single build-push, so the cosign loop and binary steps stay shared.
+      - name: compute image registries
+        id: imgs
+        run: |
+          {
+            echo "images<<EOF"
+            echo "ghcr.io/${{ github.repository }}"
+            if [ "${DOCKERHUB_ENABLED}" = "true" ]; then
+              echo "docker.io/${{ github.repository }}"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ steps.imgs.outputs.images }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -325,6 +356,15 @@ jobs:
           subject-digest: ${{ steps.build_push.outputs.digest }}
           push-to-registry: true
 
+      # Same digest, mirrored to Docker Hub; only runs when the mirror is enabled.
+      - name: attest container image build provenance (Docker Hub)
+        if: ${{ env.DOCKERHUB_ENABLED == 'true' }}
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: docker.io/${{ github.repository }}
+          subject-digest: ${{ steps.build_push.outputs.digest }}
+          push-to-registry: true
+
       - name: go build release binaries
         run: |
           mkdir -p bin
@@ -353,6 +393,37 @@ jobs:
             bin/topology-exporter-linux-amd64
             bin/topology-exporter-linux-arm64
 
+      # Offline install bundle for air-gapped / proxy-restricted shops that can
+      # reach neither ghcr.io nor docker.io. Contains the static binaries plus
+      # their cosign sigs/certs, the example config, the Helm chart, and the
+      # Helm-free Kustomize overlay tree.
+      - name: assemble offline tarball
+        env:
+          TARBALL: network-topology-exporter-${{ github.ref_name }}-offline.tar.gz
+        run: |
+          staging="offline/network-topology-exporter-${{ github.ref_name }}"
+          mkdir -p "${staging}/bin" "${staging}/config" "${staging}/deploy"
+          cp bin/topology-exporter-linux-amd64 \
+             bin/topology-exporter-linux-amd64.sig \
+             bin/topology-exporter-linux-amd64.cert \
+             bin/topology-exporter-linux-arm64 \
+             bin/topology-exporter-linux-arm64.sig \
+             bin/topology-exporter-linux-arm64.cert \
+             "${staging}/bin/"
+          cp config/example.yaml "${staging}/config/"
+          cp -R deploy/helm/topology-exporter "${staging}/deploy/helm-chart"
+          cp -R deploy/kustomize "${staging}/deploy/kustomize"
+          tar -czf "${TARBALL}" -C offline "network-topology-exporter-${{ github.ref_name }}"
+
+      - name: sign offline tarball (cosign keyless)
+        env:
+          TARBALL: network-topology-exporter-${{ github.ref_name }}-offline.tar.gz
+        run: |
+          cosign sign-blob --yes \
+            --output-signature "${TARBALL}.sig" \
+            --output-certificate "${TARBALL}.cert" \
+            "${TARBALL}"
+
       - name: create github release
         uses: softprops/action-gh-release@v2
         with:
@@ -363,4 +434,7 @@ jobs:
             bin/topology-exporter-linux-arm64
             bin/topology-exporter-linux-arm64.sig
             bin/topology-exporter-linux-arm64.cert
+            network-topology-exporter-${{ github.ref_name }}-offline.tar.gz
+            network-topology-exporter-${{ github.ref_name }}-offline.tar.gz.sig
+            network-topology-exporter-${{ github.ref_name }}-offline.tar.gz.cert
           generate_release_notes: true

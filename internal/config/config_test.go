@@ -1860,6 +1860,33 @@ func TestDiscoveryMaxGraphEdgesNegativeFails(t *testing.T) {
 	}
 }
 
+// TestDiscoveryPerTargetPDURateNegativeFails verifies that a negative
+// discovery.per_target_pdu_rate_per_second causes validate to return an error
+// (issue #72). The default (0 = unlimited) is exercised implicitly by every
+// other config test that omits the field.
+func TestDiscoveryPerTargetPDURateNegativeFails(t *testing.T) {
+	c := &Config{}
+	c.applyDefaults()
+	c.Discovery.PerTargetPDURatePerSecond = -1
+	err := c.validate()
+	if err == nil {
+		t.Fatal("expected error for per_target_pdu_rate_per_second=-1, got nil")
+	}
+	if !strings.Contains(err.Error(), "per_target_pdu_rate_per_second") {
+		t.Errorf("error %q should mention per_target_pdu_rate_per_second", err.Error())
+	}
+}
+
+// TestDiscoveryPerTargetPDURateDefaultUnlimited verifies the field defaults to
+// 0 (unlimited) — applyDefaults must not set it, preserving today's behaviour.
+func TestDiscoveryPerTargetPDURateDefaultUnlimited(t *testing.T) {
+	c := &Config{}
+	c.applyDefaults()
+	if c.Discovery.PerTargetPDURatePerSecond != 0 {
+		t.Errorf("PerTargetPDURatePerSecond default = %d, want 0 (unlimited)", c.Discovery.PerTargetPDURatePerSecond)
+	}
+}
+
 // TestFederationHubMaxGraphDevicesNegativeFails verifies that a negative
 // federation.hub.max_graph_devices causes Load to return an error.
 func TestFederationHubMaxGraphDevicesNegativeFails(t *testing.T) {

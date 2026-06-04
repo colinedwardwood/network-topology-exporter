@@ -1,0 +1,16 @@
+# Hub deltas to the base Service: expose the federation listener port so
+# spokes can reach the hub for pushes.
+apiVersion: v1
+kind: Service
+metadata:
+  name: topology-exporter
+spec:
+  ports:
+    - name: metrics
+      port: 9100
+      targetPort: metrics
+      protocol: TCP
+    - name: hub
+      port: 9101
+      targetPort: hub
+      protocol: TCP

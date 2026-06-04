@@ -1,0 +1,30 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Hub overlay: pure aggregator that receives spoke pushes on a separate mTLS
+# listener (default :9101). Maps to config.federation.role: hub.
+resources:
+  - ../../base
+
+labels:
+  - pairs:
+      app.kubernetes.io/instance: hub
+
+# Replace the base config (federation.role: hub + listener/TLS settings).
+patches:
+  - path: configmap.yaml
+    target:
+      kind: ConfigMap
+      name: topology-exporter
+  - path: patch-deployment.yaml
+    target:
+      kind: Deployment
+      name: topology-exporter
+  - path: patch-service.yaml
+    target:
+      kind: Service
+      name: topology-exporter
+  - path: patch-networkpolicy.yaml
+    target:
+      kind: NetworkPolicy
+      name: topology-exporter

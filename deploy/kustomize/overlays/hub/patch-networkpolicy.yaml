@@ -1,0 +1,21 @@
+# Hub deltas to the base NetworkPolicy: allow spoke pods to push on the
+# federation port (9101) in addition to Prometheus scraping on 9100.
+# Tighten the second rule's `from` selector to match your spoke pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: topology-exporter
+spec:
+  ingress:
+    # Allow Prometheus scraping on the metrics port from anywhere.
+    - ports:
+        - port: 9100
+          protocol: TCP
+    # Allow spoke push on the hub federation port.
+    - from:
+        - podSelector:
+            matchLabels:
+              topology-exporter/role: spoke
+      ports:
+        - port: 9101
+          protocol: TCP

@@ -1,0 +1,50 @@
+# Hub-mode config: pure aggregator. No local SNMP discovery; receives spoke
+# pushes over mTLS on the federation listener (default :9101).
+# Replaces the base ConfigMap's config.yaml (federation.role: hub).
+#
+# You MUST provide the mTLS material referenced below via federation TLS files
+# mounted from a Secret (see deploy/kustomize/README.md). Paths shown match the
+# Helm chart's /etc/topology-exporter/pki mount.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: topology-exporter
+data:
+  config.yaml: |
+    discovery:
+      interval: 60s
+      timeout_per_device: 10s
+      parallelism: 20
+      unconfirmed_link_ttl_cycles: 3
+      scope:
+        cidr_allow_list: []
+    modules:
+      snmp:
+        enabled: false
+      lldp:
+        enabled: false
+      cdp:
+        enabled: false
+      bgp:
+        enabled: false
+      ospf:
+        enabled: false
+      fdb:
+        enabled: false
+    credentials:
+      profiles: []
+      assignments: []
+      fallback_order: []
+      trial_rate_per_second: 5
+    snapshot:
+      path: /var/lib/topology-exporter/snapshot.json
+    federation:
+      role: hub
+      spoke_timeout: 3m
+      known_inter_domain_links: []
+      hub:
+        listen_addr: ":9101"
+        tls_ca_cert: /etc/topology-exporter/pki/ca.crt
+        tls_cert: /etc/topology-exporter/pki/tls.crt
+        tls_key: /etc/topology-exporter/pki/tls.key
+    targets: []

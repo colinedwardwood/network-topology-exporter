@@ -1,0 +1,73 @@
+name: kustomize-smoke
+
+# Validates the Kustomize manifests under deploy/kustomize. The render job is
+# the REQUIRED check (fast, no external dependencies). The kind live-apply job
+# is best-effort: it needs the GHCR image to be pullable, so it is allowed to
+# fail without blocking PRs.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/kustomize/**'
+      - '.github/workflows/kustomize-smoke.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'deploy/kustomize/**'
+      - '.github/workflows/kustomize-smoke.yml'
+
+permissions:
+  contents: read
+
+jobs:
+
+  render:
+    name: render overlays (required)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # kubectl ships with kustomize built in (kubectl kustomize).
+      - name: validate overlays render
+        run: |
+          set -euo pipefail
+          for ov in standalone hub spoke; do
+            echo "::group::kubectl kustomize deploy/kustomize/overlays/$ov"
+            kubectl kustomize "deploy/kustomize/overlays/$ov"
+            echo "::endgroup::"
+          done
+
+  kind-apply:
+    name: kind live-apply (best-effort)
+    runs-on: ubuntu-latest
+    needs: render
+    # Soft gate: a failure here (e.g. the image tag is not yet in GHCR) must
+    # not block the PR. Keep the `render` job as the required status check.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          wait: 120s
+
+      - name: apply standalone overlay
+        run: kubectl apply -k deploy/kustomize/overlays/standalone
+
+      - name: wait for deployment to become Available
+        run: |
+          set -euo pipefail
+          # If the image is not pullable this will time out; that is acceptable
+          # for a best-effort job (continue-on-error keeps it non-blocking).
+          kubectl wait --for=condition=available \
+            --timeout=180s \
+            deployment/topology-exporter
+
+      - name: dump diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get pods -o wide || true
+          kubectl describe deployment/topology-exporter || true
+          kubectl get events --sort-by=.lastTimestamp || true

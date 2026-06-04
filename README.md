@@ -49,6 +49,42 @@ docker run --rm -p 9100:9100 \
   network-topology-exporter:dev
 ```
 
+## Installation
+
+Released images are multi-arch (`linux/amd64`, `linux/arm64`), cosign-keyless
+signed, and carry SLSA build-provenance attestations. Three install paths cover
+registry-restricted and air-gapped environments:
+
+1. **GHCR (default):**
+
+   ```bash
+   docker pull ghcr.io/colinedwardwood/network-topology-exporter:latest
+   ```
+
+2. **Docker Hub (mirror)** — for shops that cannot reach `ghcr.io`. The same
+   image (identical digest) is mirrored from each release:
+
+   ```bash
+   docker pull docker.io/colinedwardwood/network-topology-exporter:latest
+   ```
+
+3. **Offline tarball (air-gapped)** — each GitHub Release attaches a
+   cosign-signed `network-topology-exporter-<version>-offline.tar.gz` bundling
+   the static binaries (with sigs/certs), the example config, the Helm chart,
+   and the Kustomize overlays for `curl`-and-untar deployment.
+
+### Kubernetes
+
+| Method | Command |
+|---|---|
+| Helm | `helm install topology-exporter deploy/helm/topology-exporter` |
+| Kustomize | `kubectl apply -k deploy/kustomize/overlays/standalone` |
+
+The Kustomize overlays `standalone`, `hub`, and `spoke` map to the corresponding
+`federation.role`; they mirror the Helm chart's rendered output for GitOps
+(Argo CD / Flux) or Helm-free clusters. See
+[`deploy/kustomize/README.md`](deploy/kustomize/README.md).
+
 ## Emitted signals
 
 ### Prometheus metrics
@@ -304,6 +340,8 @@ Stability promises and GA criteria: [`docs/operator/stability.md`](docs/operator
 Upgrade runbook (per-minor-version breaking changes, backup steps, rollout order): [`docs/operator/upgrades.md`](docs/operator/upgrades.md).
 
 SLO guidance (SLI definitions, multi-burn-rate alerts, copy-pasteable PromQL): [`docs/operator/slos.md`](docs/operator/slos.md).
+
+Continuous fuzzing: the project's native Go fuzz harnesses run per-PR (short) and nightly (long) in CI, and are staged for Google OSS-Fuzz enrollment — see [`oss-fuzz/`](oss-fuzz/) for the integration files and submission steps.
 
 To report a vulnerability privately: [`SECURITY.md`](SECURITY.md).
 

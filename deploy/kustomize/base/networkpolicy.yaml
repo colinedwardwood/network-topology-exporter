@@ -1,0 +1,17 @@
+# Baseline NetworkPolicy: allow Prometheus to scrape the metrics port.
+# The hub overlay adds an ingress rule for the spoke-push federation port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: topology-exporter
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: topology-exporter
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow Prometheus scraping on the metrics port from anywhere.
+    - ports:
+        - port: 9100
+          protocol: TCP
