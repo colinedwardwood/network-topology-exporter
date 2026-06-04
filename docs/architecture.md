@@ -100,6 +100,13 @@ Discovery modules now classify SNMP inputs as **required** or **optional**:
 This split prevents silent topology corruption for required signals while
 preserving best-effort behavior for non-critical enrichments.
 
+The IS-IS and MPLS-TE contracts above are two rows of a full per-walker audit.
+[`docs/operator/failure-modes.md`](operator/failure-modes.md) is the complete
+dependency × failure-mode × operator-signal matrix for every walker (LLDP, CDP,
+OSPF, IS-IS, BGP, FDB, MPLS-TE, the SNMP system walk, and the ARP enrichment
+sub-walk), and records which walkers have full outcome-counter coverage versus
+which still degrade silently (issue #67).
+
 ## Intentional non-features
 
 **ARP tables are not a topology source.** ARP tables (IP-MIB `ipNetToPhysicalTable`) record IP→MAC mappings on directly attached subnets. They encode L3 reachability, not physical adjacency. Two devices sharing a /24 both appear in each other's ARP tables even when connected through several intermediate switches. Bejerano et al. ("Physical Topology Discovery for Large Multisubnet Networks", IEEE INFOCOM 2003) and Pandey et al. ("IP Network Topology Discovery Using SNMP", ICOIN 2009) both use ARP data only as an IP→MAC resolution helper alongside the Bridge FDB — never as an independent edge source. If MAC→IP resolution is needed in a future FDB enhancement, ARP queries belong as an internal helper inside `internal/discovery/fdb`, not as a standalone module.

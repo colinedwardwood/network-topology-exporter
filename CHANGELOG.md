@@ -178,6 +178,17 @@ v1.3.1 lands under this milestone instead, renamed to
 
 ### Documentation
 
+- **Per-walker failure-mode coverage audit (#67).** New
+  `docs/operator/failure-modes.md` — a dependency × failure-mode ×
+  operator-signal matrix for every discovery walker (LLDP, CDP, OSPF, IS-IS,
+  BGP, FDB, MPLS-TE, the SNMP system walk, and the ARP enrichment sub-walk),
+  every claim traced to a `file:line`. Records which walkers meet the GA
+  observability criterion (BGP via `bgp_walker_outcome_total`; IS-IS, MPLS-TE,
+  and the system walk via the hard-fail/degraded/sub-reason split) and which
+  still degrade silently (LLDP, CDP, OSPF, FDB lack a
+  `mib_unimplemented`/`no_peers`/`walker_drift` outcome split and drop rows with
+  bare `continue`+`slog.Debug`). Cross-referenced from `docs/architecture.md`
+  and `docs/operator/troubleshooting.md`. No code changes — audit + docs only.
 - **RFC 8345 YANG topology mapping (design reference for #75).** New
   `docs/operator/yang-topology.md` defines how the reconciled graph maps onto
   the RFC 8345 / RFC 8346 YANG models (Device → `node` + termination-points,
