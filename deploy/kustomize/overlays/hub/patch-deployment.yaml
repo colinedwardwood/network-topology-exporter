@@ -1,0 +1,17 @@
+# Hub deltas to the base Deployment: expose the federation listener port.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: topology-exporter
+spec:
+  template:
+    spec:
+      containers:
+        - name: topology-exporter
+          ports:
+            - name: metrics
+              containerPort: 9100
+              protocol: TCP
+            - name: hub
+              containerPort: 9101
+              protocol: TCP

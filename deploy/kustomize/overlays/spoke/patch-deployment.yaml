@@ -1,0 +1,11 @@
+# Spoke deltas to the base Deployment: tag the pods so the hub's NetworkPolicy
+# ingress rule (podSelector topology-exporter/role: spoke) admits their pushes.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: topology-exporter
+spec:
+  template:
+    metadata:
+      labels:
+        topology-exporter/role: spoke

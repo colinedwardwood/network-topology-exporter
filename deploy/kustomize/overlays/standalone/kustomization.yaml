@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Standalone overlay: single-instance discovery, no federation.
+# Maps to config.federation.role: standalone (the base default).
+resources:
+  - ../../base
+
+labels:
+  - pairs:
+      app.kubernetes.io/instance: standalone
+
+# The base ConfigMap already sets federation.role: standalone. This overlay is
+# the deltas-only entry point; customise config/secret here for your site.

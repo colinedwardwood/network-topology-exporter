@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: topology-exporter
+spec:
+  type: ClusterIP
+  ports:
+    - name: metrics
+      port: 9100
+      targetPort: metrics
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: topology-exporter
