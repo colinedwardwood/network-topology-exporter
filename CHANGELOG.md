@@ -8,6 +8,20 @@ the README. The lab-fixture-capture work previously slotted for
 v1.3.1 lands under this milestone instead, renamed to
 [v1.4.0-rc.1 — Lab Fixture Capture](https://github.com/colinedwardwood/network-topology-exporter/milestones).
 
+### Configuration
+
+- **#63 — Config schema parity audit.** `config/example.yaml` is now the
+  authoritative schema document for all accepted YAML keys (ROADMAP v1.5.0
+  freeze). The following keys were present in the struct but absent from the
+  example: `listen` block (`addr`, `web_config_file`), `modules.isis.enabled`,
+  `modules.mpls_te.enabled`, `credentials.profiles[].retries`,
+  `credentials.profiles[].context_name`, and
+  `federation.hub.min_push_interval`. All are now documented in the example
+  (commented-out where optional, with defaults and valid ranges). A new test
+  `TestExampleConfigLoadsCleanly` loads `config/example.yaml` under
+  `KnownFields(true)` on every CI run to keep the example and the struct in
+  sync. `CONTRIBUTING.md` gains a "Config schema sync" rule. Closes #63.
+
 ### Configuration (breaking)
 
 - **#60 (breaking — config schema)** — `modules.bgp.use_v2_mib` removed. The key was deprecated in v1.4.0 and carried with a startup warning for one release. Configs that set `use_v2_mib` now fail to load with a parse error. Use `modules.bgp.disable_v2_mib` (default `false` = v2 walkers enabled; set `true` to fall back to RFC 4273-only behaviour). Closes #60.

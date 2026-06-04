@@ -91,6 +91,16 @@ Open an issue describing the change before sending a large PR. Branch from `main
 
 Changes to config keys, metric names and label sets, CLI flags, the snapshot schema, or the federation API are **breaking changes** — see [`docs/operator/stability.md`](docs/operator/stability.md) for the full contract and deprecation policy. Breaking changes require a changelog entry labelled `(breaking)` and, at GA, a major-version bump.
 
+### Config schema sync
+
+`config/example.yaml` is the authoritative schema document (ROADMAP v1.5.0). Every change to a `yaml:"..."` struct tag in `internal/config/config.go` — adding, renaming, or removing a field — **requires a corresponding edit to `config/example.yaml`**:
+
+- **Added field**: add the key to the example (commented-out if optional) with a one-line comment naming its default and valid range/values.
+- **Renamed field**: update the key name in the example.
+- **Removed field**: remove the key from the example (the config loader uses `KnownFields(true)` and will reject the old key with a parse error).
+
+The test `TestExampleConfigLoadsCleanly` in `internal/config/config_test.go` loads `config/example.yaml` under `KnownFields(true)` on every CI run — any key in the example that is not a real struct tag will cause this test to fail.
+
 ## Code style
 
 `gofmt` / `goimports` and `golangci-lint` (config in `.golangci.yml`) are enforced in CI. Tests live next to the code they test as `internal/discovery/<module>/<module>_test.go`. Integration tests under `tests/integration/` use containerlab or simulated SNMP targets.

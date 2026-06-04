@@ -4,12 +4,38 @@
 # Change events are log lines; ship them to Loki/Elasticsearch with the
 # collector agent already in your stack (Promtail, Alloy, Fluentd, etc.).
 # See README.md for the full metric reference and docs/operator/ for runbooks.
+#
+# This file is the authoritative schema document for the config (ROADMAP v1.5.0).
+# Every accepted YAML key path is listed here (active or commented-out).
+# Keys intentionally absent from the active section use sensible defaults:
+#   listen.addr                         ":9100"
+#   listen.web_config_file              "" (plain HTTP, no auth)
+#   discovery.timeout_per_module        0 (no per-module cap)
+#   discovery.max_graph_devices         0 (unlimited)
+#   discovery.max_graph_edges           0 (unlimited)
+#   modules.isis.enabled                false
+#   modules.mpls_te.enabled             false
+#   credentials.profiles[].retries      1
+#   credentials.profiles[].context_name "" (no SNMPv3 context)
+#   federation.role                     "standalone"
+#   federation.spoke_timeout            3 × discovery.interval
+#   federation.hub.listen_addr          ":9101"
+#   federation.hub.min_push_interval    0 (rate limit disabled)
+#   output.otlp.enabled                 false
+
+# ─── HTTP listen address and optional auth ───────────────────────────────────
+# listen:
+#   addr: :9100                   # default ":9100"; host:port or :port
+#   # web_config_file points at a Prometheus exporter-toolkit web-config YAML
+#   # (same schema as snmp_exporter, node_exporter, blackbox_exporter).
+#   # Supports basic_auth, server TLS, and full mTLS.  Omit for plain HTTP.
+#   # web_config_file: /etc/topology-exporter/web-config.yml
 
 # ─── Discovery cycle controls ───────────────────────────────────────────────
 discovery:
-  interval: 60s
-  timeout_per_device: 10s
-  parallelism: 20
+  interval: 60s              # default 60s; how often the full discovery cycle runs
+  timeout_per_device: 10s   # default 10s; SNMP deadline per device per cycle
+  parallelism: 20            # default 32; max concurrent device polls
 
   # Cycle budget: cancel device walks still running after this fraction of
   # the interval (default 0.8 = 80%). Cancelled targets increment
@@ -18,7 +44,7 @@ discovery:
 
   # Per-module timeout within a device's total timeout_per_device budget.
   # Prevents one slow protocol walk from consuming the whole device budget.
-  # 0 = no additional cap (default).
+  # 0 = no additional cap (default); must be < timeout_per_device when set.
   # timeout_per_module: 3s
 
   # Polling-scope guard (hard allow-list). The exporter polls only IPs within
@@ -30,29 +56,29 @@ discovery:
       - 198.51.100.0/24
 
   # Unidirectional link expiry: remove a link that has not been confirmed from
-  # both sides after this many consecutive cycles (default 3).
+  # both sides after this many consecutive cycles (default 3; must be >= 1).
   unconfirmed_link_ttl_cycles: 3
 
   # Graph size admission control: reject a local graph update if it exceeds
   # these limits. 0 = unlimited (default). Counter:
   #   network_topology_graph_updates_rejected_total
-  # max_graph_devices: 5000
-  # max_graph_edges: 20000
+  # max_graph_devices: 5000   # default 0 (unlimited); >= 0
+  # max_graph_edges: 20000    # default 0 (unlimited); >= 0
 
 # ─── Per-protocol modules ──────────────────────────────────────────────────
 modules:
   snmp:
     enabled: true
-    version: v2c               # v2c | v3
+    version: v2c               # default "v2c"; v2c | v3
     # Legacy single-community path. Production deployments should leave this
     # unset and use credentials.profiles below.
     community_env: SNMP_COMMUNITY
   lldp:
-    enabled: true              # IEEE 802.1AB / RFC 4957
+    enabled: true              # default false; IEEE 802.1AB / RFC 4957
   cdp:
-    enabled: true              # CISCO-CDP-MIB
+    enabled: true              # default false; CISCO-CDP-MIB
   bgp:
-    enabled: false             # RFC 4273 BGP4-MIB (IPv4) + vendor BGP4-V2 tables (IPv6)
+    enabled: false             # default false; RFC 4273 BGP4-MIB (IPv4) + vendor BGP4-V2 tables (IPv6)
     # disable_v2_mib: false    # default false since v1.3.0 (v2 walkers enabled).
     #                          # With v2 enabled, the BGP walker picks a vendor
     #                          # table based on sysObjectID and falls back to
@@ -70,14 +96,18 @@ modules:
     #                          # so silent zero-edge dropouts are alertable.
     #                          # Replaces the removed v1.3.0 `use_v2_mib` key (removed in v1.5.0).
   ospf:
-    enabled: false             # RFC 4750 OSPF-MIB
+    enabled: false             # default false; RFC 4750 OSPF-MIB
   fdb:
-    enabled: false             # RFC 4188 BRIDGE-MIB — noisy without filtering; disabled by default
-    # max_vlans: 64            # cap VLAN community-string walks on IOS devices (default 64)
+    enabled: false             # default false; RFC 4188 BRIDGE-MIB — noisy without filtering
+    # max_vlans: 64            # default 100; cap VLAN community-string walks on IOS (1–4096)
   arp:
-    enabled: false             # RFC 1213 ipNetToMediaTable; enrichment only (MAC→IP
+    enabled: false             # default false; RFC 1213 ipNetToMediaTable; enrichment only (MAC→IP
                                # backfill for FDB stitching), not an edge source.
                                # Only useful when modules.fdb.enabled is also true.
+  isis:
+    enabled: false             # default false; IS-IS adjacencies via IS-IS MIB (RFC 4444)
+  mpls_te:
+    enabled: false             # default false; MPLS-TE tunnels via MPLS-TE-MIB (RFC 3812)
 
 # ─── Credential management ─────────────────────────────────────────────────
 # Named profiles, per-IP/CIDR assignment, ordered fallback, and a global
@@ -86,15 +116,18 @@ modules:
 credentials:
   profiles:
     - name: edge-v2c
-      type: snmp_v2c
+      type: snmp_v2c           # snmp_v2c | snmp_v3
       community_env: SNMP_COMMUNITY
+      # retries: 1             # default 1; SNMP retries per request (>= 0)
     - name: core-v3
       type: snmp_v3
       username_env: SNMP_V3_USER
-      auth_protocol: SHA-256
+      auth_protocol: SHA-256   # SHA | SHA-256 | SHA-384 | SHA-512 (MD5 rejected)
       auth_key_env: SNMP_V3_AUTH_KEY
-      priv_protocol: AES-256
+      priv_protocol: AES-256   # AES | AES-192 | AES-256 (DES rejected)
       priv_key_env: SNMP_V3_PRIV_KEY
+      # retries: 1             # default 1; SNMP retries per request (>= 0)
+      # context_name: ""       # default "" (no context); SNMPv3 context name for VRF-aware access
   assignments:
     - cidr: 198.51.100.0/25
       profiles: [core-v3]
@@ -103,14 +136,14 @@ credentials:
   fallback_order: [edge-v2c]
   # Token bucket shared across all device polls. Caps the cold-start trial
   # rate so a fresh exporter does not trigger SNMP auth-lockout policies.
-  trial_rate_per_second: 5
+  trial_rate_per_second: 5     # default 5; must be >= 1
 
 # ─── Startup snapshot ──────────────────────────────────────────────────────
 # Versioned JSON snapshot of the reconciled graph plus the credential cache.
 # Loaded on startup so /metrics serves stale-but-valid data (with
 # network_topology_graph_stale=1) until the first live cycle completes.
 snapshot:
-  path: /var/lib/network-topology-exporter/snapshot.json
+  path: /var/lib/network-topology-exporter/snapshot.json  # default path
 
 # ─── Federation ────────────────────────────────────────────────────────────
 # Three modes beyond standalone:
@@ -127,8 +160,8 @@ snapshot:
 #   Exposes /spoke/push on a separate mTLS listener.
 #
 # federation:
-#   role: standalone                  # standalone (default) | uncoordinated | spoke | hub
-#   spoke_timeout: 3m                 # evict a silent spoke after this duration
+#   role: standalone                  # default "standalone"; standalone | uncoordinated | spoke | hub
+#   spoke_timeout: 3m                 # default 3×discovery.interval; evict a silent spoke after this duration
 #
 #   # Static stitching overrides for boundary ports with inconsistent names.
 #   known_inter_domain_links:
@@ -136,10 +169,11 @@ snapshot:
 #       local_port: Gi0/1
 #       remote_device: sw-dc-b
 #       remote_port: Gi0/2
+#       link_kind: ethernet           # default "ethernet"; free-form link type label
 #
 #   # Hub-side settings (role: hub). mTLS is required.
 #   hub:
-#     listen_addr: :9101
+#     listen_addr: :9101              # default ":9101"; separate from the metrics listen address
 #     tls_ca_cert: /etc/topology-exporter/pki/ca.pem
 #     tls_cert:    /etc/topology-exporter/pki/hub.crt
 #     tls_key:     /etc/topology-exporter/pki/hub.key
@@ -154,8 +188,13 @@ snapshot:
 #     # loose_device_name_matching: false
 #
 #     # Graph size admission control for the hub's combined graph.
-#     # max_graph_devices: 10000
-#     # max_graph_edges: 50000
+#     # max_graph_devices: 10000      # default 0 (unlimited); >= 0
+#     # max_graph_edges: 50000        # default 0 (unlimited); >= 0
+#
+#     # Rate-limit per-spoke pushes. Rejects pushes arriving sooner than this
+#     # duration after the previous accepted push from the same spoke with HTTP
+#     # 429 + Retry-After. 0 = disabled (default). Must be < spoke_timeout.
+#     # min_push_interval: 30s        # default 0 (disabled); set to ~½ spoke discovery_interval
 #
 #   # Spoke-side settings (role: spoke). mTLS is required.
 #   spoke:
@@ -168,18 +207,18 @@ snapshot:
 # output: optional push-mode output paths (complement to /metrics pull)
 # output:
 #   otlp:
-#     enabled: false
+#     enabled: false                  # default false
 #     # For protocol: http use a full URL base (paths /v1/metrics and /v1/logs
 #     # are appended by the OpenTelemetry SDK). For protocol: grpc use a bare
 #     # host:port authority (e.g. "alloy:4317").
 #     endpoint: "http://alloy:4318"
-#     timeout: 10s
-#     heartbeat_cycles: 10
+#     timeout: 10s                    # default 10s; OTLP export timeout per push
+#     heartbeat_cycles: 10            # default 10; emit a full graph push every N cycles even without changes
 #     # protocol selects the OTLP transport: http (default) or grpc.
 #     # The payload encoding is always protobuf (the OpenTelemetry Go SDK
 #     # exporters do not implement OTLP/JSON) — a wire-format change from the
 #     # pre-v1.5.0 hand-rolled JSON path. Receivers must accept protobuf.
-#     protocol: http
+#     protocol: http                  # default "http"; http | grpc
 #     # traces: opt-in OpenTelemetry tracing of the exporter's own discovery
 #     # cycle (v1.7.0, issue #68). Disabled by default. When enabled, spans are
 #     # exported over the SAME endpoint + protocol + auth as the metrics/logs
@@ -191,7 +230,7 @@ snapshot:
 #       # discovery.cycle span; child spans inherit the parent decision
 #       # (ParentBased). Default 0.1. Use 1.0 to trace every cycle while
 #       # debugging; keep it small in production to bound trace volume.
-#       sample_rate: 0.1
+#       sample_rate: 0.1              # default 0.1; [0, 1]
 
 # ─── Per-device enrichment ─────────────────────────────────────────────────
 # Targets attach enrichment metadata (SNMP port, site label, custom labels)
@@ -199,7 +238,7 @@ snapshot:
 # the allow-list is rejected at startup.
 targets:
   - host: 198.51.100.10
-    port: 161
-    site: lab
-    labels:
+    port: 161              # default 161; SNMP UDP port (1–65535)
+    site: lab              # optional; site label attached to this device
+    labels:                # optional; free-form key/value labels attached to this device
       environment: dev
