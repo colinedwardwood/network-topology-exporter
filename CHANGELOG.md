@@ -255,6 +255,20 @@ v1.3.1 lands under this milestone instead, renamed to
   SNMP cycle. An override referencing a globally-disabled module is a config
   error; IPs matching no override run all enabled modules (unchanged default).
   The admin `/admin/rediscover` path honours overrides too. Closes #74.
+- **#83 — Opt-in per-target SNMP session pool.** `discovery.snmp.session_pool`
+  (default `enabled: false`) reuses one SNMP session per `(target, credential
+  profile)` across that target's sequential module walks and across cycles,
+  instead of dialing a fresh UDP socket per `(target × module)` each cycle —
+  cutting per-cycle session opens by ~96% on large fleets (~9 → ~1 dial per
+  target), which relieves the conntrack/socket churn documented in
+  `docs/operator/scale.md`. Sessions are evicted when idle past `max_idle`
+  (default `5 × discovery.interval`), on connection error, and on credential
+  rotation (`InvalidateProfile`); pooled sessions retain their credential until
+  evicted, so the pool stays default-off until it has operator hours behind it.
+  New metrics `network_topology_snmp_session_pool_size` /
+  `…_hits_total` / `…_misses_total` / `…_evictions_total{reason}`. When disabled
+  the discovery path is byte-identical to before. Closes #83 and the #33
+  session-lifecycle follow-up.
 
 ### Operability
 
@@ -289,6 +303,14 @@ v1.3.1 lands under this milestone instead, renamed to
   -k`, Argo CD, or Flux without Helm. The manifests mirror the Helm chart's
   rendered output; a new `kustomize-smoke` CI workflow validates that all three
   overlays render. Closes the Helm-only deployment gap (#79).
+- **#69 — Opt-in pprof debug endpoint.** Set `listen.debug_listen_addr`
+  (default empty = off) to expose `net/http/pprof` (`/debug/pprof/*`:
+  `profile`, `heap`, `goroutine`, `allocs`, `mutex`, `block`) on a **separate**
+  listener for CPU/heap/goroutine/contention profiling during incidents. No auth
+  or TLS — bind to localhost or a management interface only; it is never served
+  on the main metrics port (enforced by test). Mutex/block profiling is enabled
+  only while the endpoint is on, so there is zero overhead when off. See
+  `docs/operator/troubleshooting.md` § "Profiling with pprof". Closes #69.
 
 ### Documentation
 
