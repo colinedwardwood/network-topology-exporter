@@ -120,6 +120,31 @@ jobs:
       - name: govulncheck
         run: govulncheck ./...
 
+  license-check:
+    name: license compliance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+          cache: true
+
+      - name: install go-licenses
+        run: go install github.com/google/go-licenses@latest
+
+      # Fails the build if any dependency carries a forbidden or unidentifiable
+      # license. The project is AGPL-3.0, so copyleft (GPL/LGPL/MPL) deps are
+      # compatible and intentionally NOT disallowed; "forbidden" catches truly
+      # incompatible/proprietary licenses and "unknown" forces a human to
+      # classify anything go-licenses can't detect before it ships.
+      - name: check dependency licenses
+        run: |
+          go-licenses check ./... \
+            --disallowed_types=forbidden,unknown \
+            --ignore github.com/colinedwardwood/network-topology-exporter
+
   helm-lint:
     name: helm lint
     runs-on: ubuntu-latest
@@ -393,6 +418,41 @@ jobs:
             bin/topology-exporter-linux-amd64
             bin/topology-exporter-linux-arm64
 
+      # SBOM (SPDX) for the published image — the third leg of the supply-chain
+      # story alongside cosign signatures and SLSA provenance. Generated with
+      # syft (via anchore/sbom-action), attested to the registry as an in-toto
+      # SPDX predicate, signed as a blob, and attached to the release + the
+      # offline tarball.
+      - name: generate image SBOM (SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ghcr.io/${{ github.repository }}@${{ steps.build_push.outputs.digest }}
+          format: spdx-json
+          output-file: network-topology-exporter-${{ github.ref_name }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: attest image SBOM
+        env:
+          DIGEST: ${{ steps.build_push.outputs.digest }}
+          SBOM: network-topology-exporter-${{ github.ref_name }}.spdx.json
+        run: |
+          cosign attest --yes --type spdxjson --predicate "${SBOM}" \
+            "ghcr.io/${{ github.repository }}@${DIGEST}"
+          if [ "${DOCKERHUB_ENABLED}" = "true" ]; then
+            cosign attest --yes --type spdxjson --predicate "${SBOM}" \
+              "docker.io/${{ github.repository }}@${DIGEST}"
+          fi
+
+      - name: sign SBOM (cosign keyless)
+        env:
+          SBOM: network-topology-exporter-${{ github.ref_name }}.spdx.json
+        run: |
+          cosign sign-blob --yes \
+            --output-signature "${SBOM}.sig" \
+            --output-certificate "${SBOM}.cert" \
+            "${SBOM}"
+
       # Offline install bundle for air-gapped / proxy-restricted shops that can
       # reach neither ghcr.io nor docker.io. Contains the static binaries plus
       # their cosign sigs/certs, the example config, the Helm chart, and the
@@ -411,6 +471,7 @@ jobs:
              bin/topology-exporter-linux-arm64.cert \
              "${staging}/bin/"
           cp config/example.yaml "${staging}/config/"
+          cp network-topology-exporter-${{ github.ref_name }}.spdx.json "${staging}/"
           cp -R deploy/helm/topology-exporter "${staging}/deploy/helm-chart"
           cp -R deploy/kustomize "${staging}/deploy/kustomize"
           tar -czf "${TARBALL}" -C offline "network-topology-exporter-${{ github.ref_name }}"
@@ -437,4 +498,7 @@ jobs:
             network-topology-exporter-${{ github.ref_name }}-offline.tar.gz
             network-topology-exporter-${{ github.ref_name }}-offline.tar.gz.sig
             network-topology-exporter-${{ github.ref_name }}-offline.tar.gz.cert
+            network-topology-exporter-${{ github.ref_name }}.spdx.json
+            network-topology-exporter-${{ github.ref_name }}.spdx.json.sig
+            network-topology-exporter-${{ github.ref_name }}.spdx.json.cert
           generate_release_notes: true
