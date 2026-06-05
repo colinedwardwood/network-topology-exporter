@@ -95,6 +95,20 @@ func Run(ctx context.Context, args []string) int {
 	// re-alerted hourly thereafter without flooding the log.
 	warnLimiter := loglimit.New(logger, loglimit.DefaultCooldown)
 
+	// Issue #83: opt-in per-target SNMP session pool. Constructed once and
+	// threaded into the discovery loop so each target reuses one session across
+	// its modules, cutting socket/conntrack churn on large fleets. nil when
+	// disabled (the default) → snmpwalk.Acquire uses the fresh open+close path,
+	// byte-identical to pre-#83. Closed during graceful shutdown below.
+	var sessionPool *snmpwalk.SessionPool
+	if cfg.Discovery.SNMP.SessionPool.Enabled {
+		sessionPool = snmpwalk.NewSessionPool(snmpwalk.SessionPoolOptions{
+			MaxIdle: cfg.Discovery.SNMP.SessionPool.MaxIdle,
+			Metrics: metrics.NewSessionPoolMetricsAdapter(m),
+		})
+		logger.Info("snmp session pool enabled", "max_idle", cfg.Discovery.SNMP.SessionPool.MaxIdle)
+	}
+
 	var status atomic.Pointer[httpx.CycleStatus]
 	var ready atomic.Bool // set to true after the first live cycle or spoke push
 
@@ -299,6 +313,7 @@ func Run(ctx context.Context, args []string) int {
 				OtlpSem:       otlpSem,
 				OtlpWg:        &otlpWg,
 				CycleMu:       &cycleMu,
+				Pool:          sessionPool,
 			})
 		}()
 	}
@@ -365,6 +380,13 @@ func Run(ctx context.Context, args []string) int {
 	}
 	otlpWg.Wait()
 	logger.Info("otlp push goroutines drained")
+	// Issue #83: close the SNMP session pool after discovery has drained so no
+	// in-flight walk loses its session mid-walk. Closing every pooled session
+	// also clears the credentials they held. No-op when the pool is disabled.
+	if sessionPool != nil {
+		sessionPool.Close()
+		logger.Info("snmp session pool closed")
+	}
 	if traceProvider != nil {
 		if err := traceProvider.Shutdown(shutdownCtx); err != nil {
 			logger.Error("tracer provider shutdown error", "error", err)

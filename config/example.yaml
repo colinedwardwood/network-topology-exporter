@@ -61,6 +61,33 @@ discovery:
   # target's agent struggles under load.
   # per_target_pdu_rate_per_second: 50
 
+  # SNMP transport tuning that is not per-module (the on/off module toggles
+  # live under modules.snmp).
+  snmp:
+    # Opt-in per-target SNMP session pool (issue #83). By default every
+    # (target × enabled module) walk opens and closes a fresh UDP SNMP session
+    # — roughly 9 sessions/target/cycle. On large fleets that churn of sockets
+    # (and the matching conntrack entries on stateful firewalls/NAT) can become
+    # the dominant cost. When enabled, a target reuses ONE session across its
+    # modules within a cycle and across cycles, keyed by (target IP, credential
+    # profile). Bounded at one session per (target × profile) (~50KB each), so
+    # memory scales with fleet size, not module count.
+    #
+    # Default OFF: behaviour is byte-identical to a fresh session per walk.
+    # Enable on large fleets where socket/conntrack churn matters — see
+    # docs/operator/scale.md.
+    #
+    # Tradeoff: a pooled session holds its own copy of the credential inside
+    # the SNMP library until the session is evicted; the per-cycle credential
+    # zeroization cannot reach that copy. Idle eviction, shutdown, and
+    # credential-rotation invalidation all close the session and clear that
+    # copy. Rotate credentials with this in mind (see docs/operator/security.md).
+    session_pool:
+      enabled: false
+      # How long an unused pooled session may sit before it is closed and its
+      # credentials cleared. 0 (default) = 5 × discovery.interval.
+      # max_idle: 5m
+
   # Polling-scope guard (hard allow-list). The exporter polls only IPs within
   # these CIDRs. LLDP/CDP-discovered neighbours outside this range surface as
   # network_topology_out_of_scope_neighbours_total but are never polled.

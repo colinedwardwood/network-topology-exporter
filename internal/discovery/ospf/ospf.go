@@ -100,12 +100,12 @@ type nbrRow struct {
 // in state full(8) or twoWay(4) produce edges. Neighbours outside allowedNets
 // go to the OutOfScopeNeighbour slice; pass nil to skip scope enforcement.
 func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
-	client, err := snmputil.Open(p)
+	client, release, err := snmputil.Acquire(p)
 	if err != nil {
 		recordWalkerOutcome(&p, walkerOSPF, outcomeError)
 		return nil, nil, fmt.Errorf("ospf %s: %w", p.IP, err)
 	}
-	defer func() { _ = client.Conn.Close() }()
+	defer release()
 
 	// ospfNbrTable is the base table for the outcome accounting: hadPDUs
 	// distinguishes "MIB unimplemented" (zero PDUs — common on modern OS that

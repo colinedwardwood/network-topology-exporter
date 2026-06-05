@@ -2422,3 +2422,76 @@ func TestExampleConfigLoadsCleanly(t *testing.T) {
 		t.Fatalf("config/example.yaml failed to load: %v", err)
 	}
 }
+
+// Issue #83: session pool defaults to OFF with max_idle = 5 × interval.
+func TestSessionPoolDefaultsOff(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("targets: []\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if c.Discovery.SNMP.SessionPool.Enabled {
+		t.Errorf("session_pool.enabled default = true, want false")
+	}
+	if c.Discovery.SNMP.SessionPool.MaxIdle != 5*c.Discovery.Interval {
+		t.Errorf("session_pool.max_idle default = %v, want 5×interval (%v)",
+			c.Discovery.SNMP.SessionPool.MaxIdle, 5*c.Discovery.Interval)
+	}
+}
+
+// Issue #83: explicit session_pool config round-trips through strict decode.
+func TestSessionPoolRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+discovery:
+  interval: 30s
+  snmp:
+    session_pool:
+      enabled: true
+      max_idle: 2m
+  scope:
+    cidr_allow_list:
+      - 10.0.0.0/8
+targets: []
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !c.Discovery.SNMP.SessionPool.Enabled {
+		t.Errorf("session_pool.enabled = false, want true")
+	}
+	if c.Discovery.SNMP.SessionPool.MaxIdle != 2*time.Minute {
+		t.Errorf("session_pool.max_idle = %v, want 2m", c.Discovery.SNMP.SessionPool.MaxIdle)
+	}
+}
+
+// Issue #83: a negative max_idle is rejected.
+func TestSessionPoolNegativeMaxIdleRejected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+discovery:
+  snmp:
+    session_pool:
+      max_idle: -1s
+  scope:
+    cidr_allow_list:
+      - 10.0.0.0/8
+targets: []
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatalf("expected error for negative session_pool.max_idle, got nil")
+	}
+}

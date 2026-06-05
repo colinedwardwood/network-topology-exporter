@@ -89,6 +89,7 @@ func RunCycle(
 	resolver *credentials.Resolver,
 	allowedNets []*net.IPNet,
 	prevAges map[graph.EdgeKey]int,
+	pool *snmpwalk.SessionPool,
 ) (discovery.Graph, map[graph.EdgeKey]int, []graph.Conflict, int) {
 	type probeResult struct {
 		targetIdx    int
@@ -262,6 +263,16 @@ func RunCycle(
 			params.UseBGPV2MIB = !cfg.Modules.BGP.DisableV2MIB
 			params.WalkerMetrics = walkerMetrics
 			params.WarnLimiter = warnLimiter
+			// Issue #83: opt-in per-target SNMP session pool. When pool is nil
+			// (the default), params.Pool stays nil and snmpwalk.Acquire uses the
+			// fresh open+close path — byte-identical to pre-#83 behaviour. When a
+			// pool is wired, the (IP, CredentialProfile) key lets a target reuse
+			// one session across its sequential module walks. CredentialProfile
+			// is the winning profile from WalkSystemWithCredentials above; it
+			// must be part of the key so a credential change yields a new entry
+			// and InvalidateProfile can evict a rotated profile's sessions.
+			params.Pool = pool
+			params.CredentialProfile = profileName
 
 			mods := []Module{
 				{"lldp", cfg.Modules.LLDP.Enabled, lldp.Walk},
@@ -364,13 +375,13 @@ func RunCycle(
 			// neighbour identity. Failures are non-fatal: LLDP-based
 			// correlation still works without ARP data.
 			if cfg.Modules.ARP.Enabled {
-				arpClient, arpErr := snmpwalk.Open(params)
+				arpClient, arpRelease, arpErr := snmpwalk.Acquire(params)
 				if arpErr != nil {
 					logger.Debug("ARP table walk failed; MAC→IP resolution unavailable for this device",
 						"device", dev.ID, "err", arpErr)
 				} else {
 					arpMACToIP, arpErr := snmpwalk.WalkARPTable(devCtx, arpClient)
-					_ = arpClient.Conn.Close()
+					arpRelease()
 					if arpErr != nil {
 						logger.Debug("ARP table walk failed; MAC→IP resolution unavailable for this device",
 							"device", dev.ID, "err", arpErr)

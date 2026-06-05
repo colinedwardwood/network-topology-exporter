@@ -186,7 +186,7 @@ At 10k targets on a 60s discovery interval with all modules enabled, that's on t
 
 ### Why it's done this way
 
-`gosnmp`'s `*GoSNMP` struct is not goroutine-safe (see `internal/discovery/snmp/snmp.go:142`), so the exporter's parallel module fan-out per target cannot share one session across modules. Each module owns its own session for the duration of its walk; the alternatives (per-target session pools with checkout/return, serialising modules per target) were judged not worth the complexity for the current scale ceiling.
+`gosnmp`'s `*GoSNMP` struct is not goroutine-safe (see `internal/discovery/snmp/snmp.go:142`), so a single session cannot be shared across concurrent goroutines. Within a target's per-device goroutine, however, modules run **sequentially**, so one session can safely be reused across that target's modules. By default each module still opens its own fresh session for the duration of its walk (byte-identical, lowest-memory behaviour); the optional session pool below reuses one session per target instead.
 
 ### When it matters
 
@@ -210,15 +210,16 @@ The exporter itself will report these as ordinary SNMP timeouts in `network_topo
 
 In rough order of leverage:
 
+0. **Enable the per-target SNMP session pool** (`discovery.snmp.session_pool.enabled: true`, issue #83). Default off. When on, each target reuses one SNMP session across its modules and across cycles instead of opening a fresh one per (target × module), collapsing the per-cycle new-flow count from ~9 per target to ~1 per target — an ≥80% reduction in socket/conntrack churn. Bounded at one session per (target × credential profile) at ~50 KB each, so memory scales with fleet size, not module count. Observe `network_topology_snmp_session_pool_size`, `..._hits_total`, `..._misses_total`, and `..._evictions_total{reason}`. **Credential-retention tradeoff:** a pooled session holds its own copy of the credential inside gosnmp until the session is evicted; the per-cycle credential zeroization cannot reach that copy. Idle eviction (`discovery.snmp.session_pool.max_idle`, default 5 × `discovery.interval`), shutdown, and credential-rotation invalidation all close the session and clear that copy. Rotate credentials with this in mind — see [security.md](security.md).
 1. **Raise `nf_conntrack_max`** on Linux firewalls and the exporter host (`sysctl -w net.netfilter.nf_conntrack_max=1048576`). Cheapest, has no downside if the host has the memory (~300 bytes per entry).
 2. **Increase `discovery.interval`.** Doubling the cycle time halves the steady-state new-flow rate. Trades freshness for kernel headroom.
 3. **Lower `discovery.parallelism`.** Flattens the burst so peak new-flow rate drops, even if total flows per cycle stay the same. Cycle time grows.
 4. **Disable FDB unless you need it.** FDB's per-VLAN walks are by far the biggest contributor on Cisco IOS gear.
 5. **Set `modules.snmp.timeout` ≤ `nf_conntrack_udp_timeout`** so SNMP gives up before conntrack does, surfacing failures as exporter-side timeouts rather than mysterious packet drops.
 
-### What we're evaluating
+### Session pooling (shipped, opt-in)
 
-Pooling SNMP sessions per target across cycles is on the table but not currently planned. The implementation would need to handle credential rotation (#5 territory), dead-session detection over UDP (no surface signal), and per-target memory cost (~50 KB × targets × modules). No current operator incident is driving the work; tracked as [#33](https://github.com/colinedwardwood/network-topology-exporter/issues/33).
+Pooling SNMP sessions per target across cycles (the [#33](https://github.com/colinedwardwood/network-topology-exporter/issues/33) follow-up, implemented in [#83](https://github.com/colinedwardwood/network-topology-exporter/issues/83)) is now available behind `discovery.snmp.session_pool.enabled` (default off — see mitigation 0 above). Reuse is safe because a target's modules run sequentially, so one session is only ever touched by one walk at a time; the pool itself is mutex-protected for the cross-target case. Credential rotation is handled by closing and evicting a profile's sessions on `InvalidateProfile`, and dead sessions are evicted on the next unhealthy return or after `max_idle`. The per-target memory cost is bounded at one session per (target × credential profile), ~50 KB each — not per module.
 
 ---
 
