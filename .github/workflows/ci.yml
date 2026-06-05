@@ -20,7 +20,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26.4'
           cache: true
 
       - name: go vet
@@ -47,7 +47,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26.4'
           cache: true
 
       - name: integration tests
@@ -62,7 +62,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26.4'
           cache: true
 
       # Short fuzz pass per target — ~30s each — runs on every push / PR.
@@ -96,7 +96,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26.4'
           cache: true
 
       - uses: golangci/golangci-lint-action@v7
@@ -111,7 +111,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26.4'
           cache: true
 
       - name: install govulncheck
@@ -183,7 +183,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26.4'
           cache: true
 
       - name: install containerlab
@@ -206,7 +206,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26.4'
           cache: true
 
       - name: install containerlab
@@ -275,7 +275,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26.4'
 
       - uses: docker/setup-qemu-action@v3
 

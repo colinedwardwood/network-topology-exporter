@@ -191,6 +191,11 @@ v1.3.1 lands under this milestone instead, renamed to
   documented in `docs/operator/security.md` § "Verifying release artefact
   provenance." Closes the supply-chain attestation gap identified in the
   May 2026 architectural review.
+- **Go toolchain bumped to 1.26.4** (`go.mod` `toolchain` directive + CI/Docker
+  pins) to pick up the standard-library fixes for `GO-2026-5037` (inefficient
+  candidate hostname parsing in `crypto/x509`) and `GO-2026-5039` (unescaped
+  inputs in `net/textproto` errors), both reachable from the federation hub's
+  HTTP server. `govulncheck ./...` is clean again.
 - **#72 — Per-target SNMP PDU rate limiter.** New
   `discovery.per_target_pdu_rate_per_second` (default `0` = unlimited, today's
   behaviour) caps the steady-state SNMP request rate against an individual
