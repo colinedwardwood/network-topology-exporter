@@ -10,6 +10,26 @@ v1.3.1 lands under this milestone instead, renamed to
 
 ### Security & correctness (post-merge hardening)
 
+- **SNMP transport goroutines now recover from panics.** The raw `go func()`
+  bodies in `internal/discovery/snmp` that call gosnmp `BulkWalkAll`/`WalkAll`/
+  `Get` previously ran with no `recover()` on their stack, so a panic decoding a
+  hostile/truncated PDU — the exact class the fuzz harnesses target, on the most
+  network-exposed path — crashed the whole process. They now recover, return a
+  sentinel error to the caller, and count the event as
+  `network_topology_panics_total{site="snmp_walk"}`. Also: a recovered hub-serve
+  panic now cancels the root context (so a wedged-listener pod restarts instead
+  of lingering as a zombie), the stale-graph watchdog is escalate-only (the
+  discovery loop exclusively clears `graph_stale`, removing a write race), and
+  the OTLP drain on shutdown is now bounded by a timeout.
+- **Documentation corrected against code (round-2 audit).** Fixed a
+  spoke-down alerting flaw in `slos.md` (spoke eviction deletes *both*
+  `federation_spoke_up` and `..._last_push_timestamp_seconds`, so the old
+  `time() - last_push` alert silently stopped firing — now uses `spoke_up == 0`
+  + `absent()`), a nonexistent `snmp_timeout_total` metric, an understated
+  decode-issue reason cardinality, hub reject status codes (413/409/400),
+  OTLP-TLS-by-endpoint-scheme, the `device_uptime_seconds` label set, OSPF
+  `twoWay(4)`, rune-boundary truncation, and a GETTING_STARTED spoke `hub_url`
+  that doubled the `/spoke/push` path.
 - **Liveness now detects a wedged discovery loop.** `/healthz` returns **503**
   once no cycle has completed within `discovery.interval ×
   discovery.liveness_max_stale_cycles` (new field, default `3`, `0` disables),
