@@ -32,6 +32,19 @@ jobs:
       - name: unit tests
         run: go test ./... -race -count=1 -timeout 120s -coverprofile=coverage.out
 
+      # Gate: total statement coverage must not regress below the floor. Set
+      # below the current level (~85%) with headroom for normal fluctuation;
+      # raise the floor as coverage improves. Prevents silent erosion.
+      - name: enforce coverage floor
+        run: |
+          min=83.0
+          pct=$(go tool cover -func=coverage.out | awk '/^total:/ {gsub(/%/,"",$3); print $3}')
+          echo "total coverage: ${pct}% (floor: ${min}%)"
+          awk -v p="$pct" -v m="$min" 'BEGIN { exit (p+0 >= m+0) ? 0 : 1 }' || {
+            echo "::error::total coverage ${pct}% is below the required floor of ${min}%"
+            exit 1
+          }
+
       - name: upload coverage
         uses: actions/upload-artifact@v4
         with:
