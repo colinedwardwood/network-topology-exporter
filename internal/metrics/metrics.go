@@ -36,20 +36,20 @@ type Metrics struct {
 	SnapshotLoadedDevicesTotal prometheus.Gauge
 
 	// Discovery cycle health. All aggregates — no per-device label values.
-	DiscoveryDevicesTotal         *prometheus.GaugeVec
-	DiscoveryCycleDuration        prometheus.Histogram
-	DiscoveryModuleDuration       *prometheus.HistogramVec
-	SNMPWalksTotal                *prometheus.CounterVec
-	SNMPRateLimitWaitSeconds      prometheus.Histogram
+	DiscoveryDevicesTotal    *prometheus.GaugeVec
+	DiscoveryCycleDuration   prometheus.Histogram
+	DiscoveryModuleDuration  *prometheus.HistogramVec
+	SNMPWalksTotal           *prometheus.CounterVec
+	SNMPRateLimitWaitSeconds prometheus.Histogram
 
 	// SNMP session pool (issue #83). Zero unless discovery.snmp.session_pool is
 	// enabled. SNMPSessionPoolSize is the current count of pooled sessions;
 	// hits/misses partition Checkout outcomes; evictions partition session
 	// removal by reason (idle | credential_rotation | connection_error).
-	SNMPSessionPoolSize      prometheus.Gauge
-	SNMPSessionPoolHits      prometheus.Counter
-	SNMPSessionPoolMisses    prometheus.Counter
-	SNMPSessionPoolEvictions *prometheus.CounterVec
+	SNMPSessionPoolSize           prometheus.Gauge
+	SNMPSessionPoolHits           prometheus.Counter
+	SNMPSessionPoolMisses         prometheus.Counter
+	SNMPSessionPoolEvictions      *prometheus.CounterVec
 	DiscoveryDecodeIssues         *prometheus.CounterVec
 	DiscoveryQuarantinedRowsTotal *prometheus.CounterVec
 	DiscoveryDegradedTotal        *prometheus.CounterVec
