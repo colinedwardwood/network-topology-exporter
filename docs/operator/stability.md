@@ -112,7 +112,7 @@ Current federation API shape:
 | Endpoint | `POST /spoke/push` on `federation.hub.listen_addr` (default `:9101`) |
 | Transport | mTLS — client cert required, verified against `federation.hub.tls_ca_cert` |
 | Payload | `SpokePayload` serialised as JSON |
-| Reject response | HTTP 400 with `{"reason": "...", "detail": {...}}` JSON body |
+| Reject response | HTTP 413 (size budget) / 409 (stale generation) / 400 (invalid label or structural), with `{"reason": "...", "detail": {...}}` JSON body |
 | Accept response | HTTP 204 (no body) |
 | `SpokePayload` fields | `spoke_id` (string), `cycle_at` (RFC 3339), `devices` (array), `edges` (array), `out_of_scope` (array), `ages` (map) |
 

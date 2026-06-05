@@ -86,7 +86,7 @@ for "metrics endpoint that reflects current state".
 | OSPFv3 | ❌ (yet — there's a plan at `plans/bgp4v2-ipv6.md`) | ✅ `Ospfv3Nbr` model |
 | IS-IS | ✅ `internal/discovery/isis/isis.go` | partial — sensor-level only |
 | MPLS-TE | ✅ implied by README ("MPLS-TE discovery") | ❌ |
-| FDB (Q-BRIDGE) | ✅ `internal/discovery/fdb/fdb.go` (554 LOC) — handles per-VLAN community walks, 7-byte MAC, max_vlans cap | ✅ `includes/discovery/fdb-table/bridge.inc.php` — also handles 7-byte MAC, but per-OS branching for IOS/IOSXE/NX-OS |
+| FDB (Q-BRIDGE) | ✅ `internal/discovery/fdb/fdb.go` — handles per-VLAN community walks, 7-byte MAC, max_vlans cap | ✅ `includes/discovery/fdb-table/bridge.inc.php` — also handles 7-byte MAC, but per-OS branching for IOS/IOSXE/NX-OS |
 | FDP (Brocade) | ❌ | ✅ Brocade-specific branch |
 | ARP / ipNetToMedia | partial (used as enrichment, not first-class) | ✅ `LibreNMS/Modules/ArpTable.php` writes to `ipv4_mac` table |
 | Vendor proprietary LLDP variants | ❌ — strict RFC compliance; non-conforming devices skipped with debug log | ✅ Mikrotik, TPLink JetStream, Nokia TIMETRA, PBN/BDCOM (≈7 vendor-specific OID branches in xdp) |
@@ -148,7 +148,7 @@ Both walk `1.0.8802.1.1.2.1.4.1.1.*` (lldpRemTable). The exporter does it
 once, RFC-style:
 
 ```go
-// internal/discovery/lldp/lldp.go:155
+// internal/discovery/lldp/lldp.go — walkRemEntries
 func walkRemEntries(ctx, client) (map[remKey]*remEntry, error) {
     pdus, _ := snmputil.BulkWalk(ctx, client, oidRemTable)
     for _, pdu := range pdus {
@@ -161,11 +161,12 @@ func walkRemEntries(ctx, client) (map[remKey]*remEntry, error) {
 }
 ```
 
-The walker validates every value before storing: chassis-id subtype must
-be 1–7 (`lldp.go:223`), MAC chassis IDs must be exactly 6 bytes (`:237`),
-network-address chassis IDs must have a sane IANA address family byte
-(`:245`). Out-of-spec PDUs are skipped with a `slog.Debug` and a counter
-increment, not silently dropped.
+The walker validates every value before storing (see `walkRemEntries` in
+`lldp.go`): the chassis-id subtype must be 1–7, MAC chassis IDs must be
+exactly 6 bytes, and network-address chassis IDs must have a sane IANA address
+family byte. Out-of-spec PDUs are skipped with a counter increment
+(`ReportDecodeIssue` with reasons like `chassis_subtype_invalid`,
+`chassis_mac_bad_length`), not silently dropped.
 
 LibreNMS (`discovery-protocols.inc.php` LLDP branch):
 
@@ -357,7 +358,7 @@ failures fan out as unbounded SNMP retries.
 | Fuzz/property tests | a couple of fuzz seeds in `internal/discovery/bgp/` | none |
 | Panic recovery | per-device `recover()` with metric counter | n/a — PHP exception model |
 | Audit history | `docs/audits/2026-05-architectural-review.md` + REMEDIATION.md tracking | issue tracker driven |
-| Supply chain | `go.sum`, no vendored deps, `make sbom` target | composer.lock + composer audit; PHP ecosystem larger and noisier |
+| Supply chain | `go.sum`, no vendored deps, SBOM generated in the release workflow (anchore/sbom-action, SPDX) | composer.lock + composer audit; PHP ecosystem larger and noisier |
 | License | AGPL-3.0 (copyleft, incl. network/SaaS use) | GPL v3 (copyleft) |
 
 The exporter is post-audit code: the May 2026 review

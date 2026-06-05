@@ -197,7 +197,7 @@ modules:
 
 ### OSPF (RFC 4750)
 
-Walks `ospfNbrTable`. Only neighbours in state `full(8)` or `twoWay(2)` produce edges. `DstDevice` is `ospfNbrIpAddr`; unnumbered P2P links (`0.0.0.0`), link-local, and loopback neighbour addresses are skipped to avoid emitting unusable edges.
+Walks `ospfNbrTable`. Only neighbours in state `full(8)` or `twoWay(4)` produce edges. `DstDevice` is `ospfNbrIpAddr`; unnumbered P2P links (`0.0.0.0`), link-local, and loopback neighbour addresses are skipped to avoid emitting unusable edges.
 
 ```yaml
 modules:

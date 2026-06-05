@@ -269,79 +269,83 @@ A tolerance of 1 accommodates planned maintenance (rolling a spoke for upgrades,
 
 `network_topology_federation_spoke_last_push_timestamp_seconds` — gauge, label `spoke_id`. Hub mode only. Unix timestamp of the most recent push. Confirmed present in `internal/metrics/metrics.go` (registered as `FederationSpokeLastPushUnix`).
 
-The existing Helm PrometheusRule's `TopologyFederationSpokeDown` alert fires on `network_topology_federation_spoke_up == 0` — but because the series is deleted on eviction (not set to 0), the alert fires only when a spoke that previously pushed is evicted and the series momentarily shows 0 before deletion. The absence of the series entirely (for a spoke that never pushed since hub restart) requires an `absent()` query.
+**Eviction deletes both series.** `evictSilentSpokes()` in `internal/federation/hub.go` calls `DeleteLabelValues(id)` on *both* `FederationSpokeUp` and `FederationSpokeLastPushUnix` when a spoke exceeds `spoke_timeout`. This is the central fact for alerting: a `time() - last_push > spoke_timeout` expression silently **stops firing** the moment the spoke is evicted, because the `last_push` series it references disappears. Such an expression only catches the spoke during the narrow window between "overdue" and "evicted" — and on a hub restart the series is never present at all. Reliable silent-spoke detection therefore must use `absent()` against a known `spoke_id`, or `… == 0` over a pre-eviction window, not the age of a series that is deleted out from under the query.
 
 ### PromQL
 
-**Is any spoke currently evicted (instantaneous)?**
+**Is a known spoke currently down (instantaneous)?**
+
+Because eviction deletes both the `spoke_up` and `last_push` series (see above), a "spoke down" query cannot rely on the *age* of a series that vanishes on eviction. Detect it against a **known** `spoke_id` instead:
 
 ```promql
-# A spoke whose last push is older than spoke_timeout.
-# Use time() minus last push timestamp, compared to the spoke_timeout.
-# Replace 180 with your federation.spoke_timeout in seconds (default 3m = 180s).
-time() - network_topology_federation_spoke_last_push_timestamp_seconds > 180
+# A known spoke whose liveness gauge is 0 (overdue, not yet evicted) OR whose
+# series has been deleted entirely (evicted, or never pushed since hub restart).
+# Enumerate your expected spoke_ids — absent() needs an explicit label match.
+network_topology_federation_spoke_up{spoke_id="dc-a"} == 0
+  or absent(network_topology_federation_spoke_up{spoke_id="dc-a"})
 ```
 
-**Count of distinct eviction events over 7 days:**
-
-The hub deletes the `spoke_up` series on eviction rather than setting it to 0 — see `internal/federation/hub.go::evictSilentSpokes()`. Counting evictions from a gauge that disappears requires tracking transitions. The practical approach for SLO tracking is to count the number of times the `spoke_last_push` timestamp crosses the `spoke_timeout` threshold:
+**Count of spokes currently down over a fleet:**
 
 ```promql
-# Spokes whose last push is older than spoke_timeout (currently evicted or at risk).
-count(
-  time() - network_topology_federation_spoke_last_push_timestamp_seconds
-  > 180
-) or vector(0)
+# Spokes reporting liveness 0 (overdue). Note this CANNOT see already-evicted
+# spokes — their series is deleted. Pair with one absent() rule per expected
+# spoke_id (below) to catch full eviction.
+count(network_topology_federation_spoke_up == 0) or vector(0)
 ```
 
-**7-day burn: count eviction windows (ticket-level tracking):**
+**7-day burn: count down-events (ticket-level tracking):**
 
 ```promql
-# Count distinct spoke_ids where last push crossed spoke_timeout at any point in 7d.
-# This is a proxy — Prometheus cannot count historical transitions from a gauge.
+# Count, over 7d, the samples where a known spoke reported liveness 0.
 # Use a recording rule to materialise it:
-#   record: network_topology_federation_spoke_eviction_windows_7d
-#   expr: count_over_time(
-#           (time() - network_topology_federation_spoke_last_push_timestamp_seconds > 180)[7d:1m]
-#         )
-count_over_time(
-  (time() - network_topology_federation_spoke_last_push_timestamp_seconds > 180)[7d:1m]
-)
+#   record: network_topology_federation_spoke_down_windows_7d
+#   expr: count_over_time((network_topology_federation_spoke_up == 0)[7d:1m])
+# Eviction deletes the series, so the most reliable long-window signal is an
+# ALERTS/absent()-based rule per spoke_id — count_over_time on a deleted series
+# undercounts. See the absent() alert below.
+count_over_time((network_topology_federation_spoke_up == 0)[7d:1m])
 ```
 
 ### Multi-window multi-burn-rate alerts
 
+Eviction deletes both per-spoke series, so the page alert must combine `spoke_up == 0` (overdue, pre-eviction) with `absent()` against each **known** `spoke_id` (evicted, or never pushed since hub restart). Template one `absent()` arm per expected spoke via Helm values.
+
 ```yaml
-# SLI 3 — Federation spoke-down rate (SLO: ≤1 eviction per hub per 7 days)
-# Requires hub mode. Replace 180 with your federation.spoke_timeout in seconds.
+# SLI 3 — Federation spoke-down rate (SLO: ≤1 down-event per hub per 7 days)
+# Requires hub mode. Enumerate your expected spoke_ids — absent() needs an
+# explicit label match because an evicted spoke's series is deleted entirely.
 
 - alert: TopologySpokeDownPage
-  # A spoke is currently evicted (or overdue). Page if it has been absent for
-  # more than 5 minutes — giving one retry window before alerting.
+  # A known spoke is down: liveness gauge reads 0 (overdue), or the series has
+  # been deleted (evicted / never pushed since hub restart). Page after 5m,
+  # giving one retry window before alerting. Repeat per expected spoke_id.
   expr: |
-    time() - network_topology_federation_spoke_last_push_timestamp_seconds
-    > 180
+    network_topology_federation_spoke_up{spoke_id="dc-a"} == 0
+      or absent(network_topology_federation_spoke_up{spoke_id="dc-a"})
   for: 5m
   labels:
     severity: page
+    spoke_id: dc-a
   annotations:
-    summary: "Federation spoke {{ $labels.spoke_id }} is not pushing (spoke down)"
+    summary: "Federation spoke dc-a is down (overdue or evicted)"
     description: >-
-      Hub {{ $labels.instance }} has not received a push from spoke
-      {{ $labels.spoke_id }} in more than spoke_timeout ({{ $value | humanizeDuration }} ago).
-      The spoke's topology contribution is absent from the hub's unified
-      metrics. Check spoke health, mTLS certificate validity, and network
-      connectivity to the hub federation listener on port 9101.
+      Hub {{ $labels.instance }} reports spoke dc-a as down — its liveness
+      gauge is 0 or its series has been evicted after spoke_timeout. The
+      spoke's topology contribution is absent from the hub's unified metrics.
+      Check spoke health, mTLS certificate validity, and network connectivity
+      to the hub federation listener on port 9101.
       See docs/operator/federation.md § FederationSpokeDown runbook entry.
     runbook_url: "https://github.com/colinedwardwood/network-topology-exporter/blob/main/docs/operator/federation.md#federationspokedown"
 
 - alert: TopologySpokeDownTicket
-  # Budget alert: more than 1 spoke has been evicted in the last 24h.
-  # Fires if the SLO (≤1 event per 7d) is trending to be violated.
+  # Budget alert: more than 1 spoke currently reports liveness 0.
+  # Fires if the SLO (≤1 down-event per 7d) is trending to be violated.
+  # Note: already-evicted spokes are NOT counted here (series deleted) — the
+  # per-spoke absent() arms in TopologySpokeDownPage cover full eviction.
   expr: |
     count by (instance) (
-      time() - network_topology_federation_spoke_last_push_timestamp_seconds
-      > 180
+      network_topology_federation_spoke_up == 0
     ) > 1
   for: 10m
   labels:
@@ -349,34 +353,15 @@ count_over_time(
   annotations:
     summary: "Multiple spokes down on hub {{ $labels.instance }} (SLO risk)"
     description: >-
-      More than one spoke is currently evicted on hub {{ $labels.instance }}.
-      The 7-day SLO (≤1 eviction event) is at risk. Investigate fleet-wide
-      connectivity or certificate expiry. See docs/operator/federation.md.
-
-- alert: TopologySpokeNeverPushed
-  # A spoke_id appears in config but has never pushed since hub restart.
-  # absent() fires when the series doesn't exist at all.
-  # Define expected spoke_ids and check for absence:
-  #   absent(network_topology_federation_spoke_last_push_timestamp_seconds{spoke_id="dc-a"})
-  # This template requires one rule per expected spoke_id; manage it via
-  # the Helm values or a templated PrometheusRule.
-  expr: |
-    absent(network_topology_federation_spoke_last_push_timestamp_seconds{spoke_id="dc-a"})
-  for: 15m
-  labels:
-    severity: ticket
-  annotations:
-    summary: "Expected spoke dc-a has never pushed to hub (possible mis-config)"
-    description: >-
-      The spoke_id dc-a has no entry in
-      network_topology_federation_spoke_last_push_timestamp_seconds,
-      meaning it has not pushed since the hub last started.
-      Check spoke configuration, mTLS certs, and hub reachability.
+      More than one spoke currently reports liveness 0 on hub
+      {{ $labels.instance }}. The 7-day SLO (≤1 down-event) is at risk.
+      Investigate fleet-wide connectivity or certificate expiry.
+      See docs/operator/federation.md.
 ```
 
 ### Helm chart integration
 
-The existing `TopologyFederationSpokeDown` alert in `deploy/helm/topology-exporter/templates/prometheusrule.yaml` fires on `network_topology_federation_spoke_up == 0`. Because the series is deleted on eviction (not set to 0), this alert fires during the brief window between eviction and series deletion. The `TopologySpokeDownPage` rule above using `time() - last_push > spoke_timeout` is more reliable because it fires on the timestamp metric, which is not deleted on eviction — it persists until the hub restarts. Consider replacing the existing Helm alert with this form, or running both in parallel.
+The existing `TopologyFederationSpokeDown` alert in `deploy/helm/topology-exporter/templates/prometheusrule.yaml` fires on `network_topology_federation_spoke_up == 0`. This catches a spoke only while it is *overdue but not yet evicted* — once `evictSilentSpokes()` runs, the series is deleted and `== 0` no longer matches. To cover full eviction (and the post-restart case where the series never existed), add a per-spoke `absent()` arm as shown in `TopologySpokeDownPage` above. Template one arm per expected `spoke_id` from the Helm values so the alert continues to fire after the series is deleted.
 
 ---
 
@@ -405,13 +390,14 @@ groups:
       - record: network_topology:snapshot_drops:rate1h
         expr: rate(network_topology_snapshot_drops_total[1h])
 
-      # SLI 3: count of currently evicted spokes per hub instance
-      - record: network_topology:federation_spokes_overdue:count
+      # SLI 3: count of spokes currently reporting liveness 0 per hub instance.
+      # Note: already-evicted spokes are NOT counted (their series is deleted);
+      # pair with per-spoke absent() alerts to catch full eviction.
+      - record: network_topology:federation_spokes_down:count
         expr: |
           count by (instance) (
-            time() - network_topology_federation_spoke_last_push_timestamp_seconds > 180
+            network_topology_federation_spoke_up == 0
           ) or vector(0)
-        # Replace 180 with your federation.spoke_timeout in seconds.
 
       # Uncoordinated mode: cross-boundary link presence with staleness tolerance
       - record: network_topology_confirmed_cross_boundary_link
@@ -431,11 +417,11 @@ The following table lists the metric names used in this document and confirms th
 |---|---|---|
 | `network_topology_discovery_cycle_duration_seconds` | `DiscoveryCycleDuration` histogram | SLI 1 cycle-duration headroom |
 | `network_topology_snapshot_drops_total` | `SnapshotDropsTotal` counter | SLI 2 snapshot-drop rate |
-| `network_topology_federation_spoke_up` | `FederationSpokeUp` gauge | Hub spoke liveness (supplemental) |
-| `network_topology_federation_spoke_last_push_timestamp_seconds` | `FederationSpokeLastPushUnix` gauge | SLI 3 spoke-down rate |
+| `network_topology_federation_spoke_up` | `FederationSpokeUp` gauge | SLI 3 spoke-down rate (deleted on eviction) |
+| `network_topology_federation_spoke_last_push_timestamp_seconds` | `FederationSpokeLastPushUnix` gauge | Push recency (supplemental; also deleted on eviction) |
 | `network_topology_boundary_observation_info` | `TopologyCollector` gauge | Uncoordinated cross-boundary link presence |
 
 **Metric names not found / clarifications:**
 
 - `network_topology_snapshot_dropped_total` — this name does **not exist**. The real metric is `network_topology_snapshot_drops_total` (with a `reason` label). The brief in issue #65 used the wrong name; the correct name above was verified in source.
-- There is no per-spoke eviction counter emitted on eviction events. The eviction is signalled by the deletion of the `network_topology_federation_spoke_up` series and the age of `network_topology_federation_spoke_last_push_timestamp_seconds`. The PromQL above uses the timestamp metric because it survives eviction (the spoke_up series is deleted on eviction per `hub.go::evictSilentSpokes()`).
+- There is no per-spoke eviction counter emitted on eviction events. On eviction, `hub.go::evictSilentSpokes()` deletes **both** the `network_topology_federation_spoke_up` and `network_topology_federation_spoke_last_push_timestamp_seconds` series. Neither survives eviction, so the PromQL above detects a down spoke via `spoke_up == 0` (overdue, pre-eviction) combined with a per-`spoke_id` `absent()` check (evicted, or never pushed since hub restart) rather than the age of a series that is deleted out from under the query.
