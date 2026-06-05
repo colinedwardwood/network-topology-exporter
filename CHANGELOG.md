@@ -10,6 +10,21 @@ v1.3.1 lands under this milestone instead, renamed to
 
 ### Security & correctness (post-merge hardening)
 
+- **Liveness now detects a wedged discovery loop.** `/healthz` returns **503**
+  once no cycle has completed within `discovery.interval ×
+  discovery.liveness_max_stale_cycles` (new field, default `3`, `0` disables),
+  so Kubernetes restarts a deadlocked loop instead of leaving it "live" forever.
+  A watchdog re-asserts `network_topology_graph_stale=1` on a running stall and
+  clears it on recovery. Both are inert for `federation.role: hub` (no local
+  discovery loop) and when the field is `0`.
+- **Background goroutines now recover from panics.** The discovery loop,
+  snapshot writers, OTLP push, stale watchdog, hub serve/eviction/snapshot
+  writer, and FDB per-VLAN walkers each recover, log a stack trace, and count
+  the event via the new `network_topology_panics_total{site}` metric instead of
+  crashing the process — previously a single panic anywhere (e.g. in hub
+  reconcile) took down aggregation for every spoke. Any non-zero value indicates
+  a bug; alert on increase.
+
 - **`/admin/rediscover` auth gate now requires real client authentication.** The
   endpoint previously enabled itself whenever `listen.web_config_file` was set —
   but a TLS-only web-config encrypts without authenticating the caller, so any

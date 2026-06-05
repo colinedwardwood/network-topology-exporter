@@ -76,6 +76,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -475,6 +476,28 @@ func walkVlanCommunityFdbs(ctx context.Context, pp *snmputil.Params, client *gsn
 		wg.Add(1)
 		go func(idx, vlan int) {
 			defer wg.Done()
+
+			// Recover a panic in this per-VLAN walk so one bad VLAN cannot
+			// crash the whole discovery process (and, in spoke/standalone
+			// mode, take the discovery loop down with it). The recover is
+			// local because the panicking unit IS this goroutine; on recovery
+			// we log the stack, report it under site "fdb_vlan_walk" through
+			// the nil-tolerant PanicReporter seam (keeps this package free of
+			// any prometheus/app import), and leave results[idx] zero so the
+			// merge below simply skips this VLAN. Mirrors the per-device probe
+			// recover in internal/app/cycle.go. Registered first so it runs
+			// last in the defer chain, after the semaphore release and session
+			// close below.
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("fdb: per-VLAN walk panicked; recovered",
+						"device", p.IP, "vlan", vlan, "panic", r,
+						"stack", string(debug.Stack()))
+					if p.PanicReporter != nil {
+						p.PanicReporter("fdb_vlan_walk")
+					}
+				}
+			}()
 
 			// Acquire semaphore slot; respect context cancellation while waiting.
 			select {

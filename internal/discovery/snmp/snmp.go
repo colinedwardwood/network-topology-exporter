@@ -151,6 +151,19 @@ type Params struct {
 	// case. See WarnLimiter interface above.
 	WarnLimiter WarnLimiter
 
+	// PanicReporter is the nil-tolerant observer a walker calls when it
+	// recovers a panic in one of its own background goroutines (the FDB
+	// per-VLAN walkers spawn one goroutine per VLAN). It mirrors the
+	// WalkerMetrics/WarnLimiter injection seam: the discovery layer must not
+	// import the prometheus client or internal/app, so the production wiring
+	// in internal/app passes a closure that bumps
+	// network_topology_panics_total{site}. site is one of the closed,
+	// low-cardinality strings documented on metrics.PanicsRecoveredTotal
+	// (FDB uses "fdb_vlan_walk"). May be nil — callers MUST nil-check before
+	// calling (the recover still happens; only the counter bump is skipped),
+	// so a one-off walk without metrics wiring does not panic.
+	PanicReporter func(site string)
+
 	// CredentialProfile is the name of the credential profile that won the
 	// system-group walk for this target (set in cycle.go from the profileName
 	// WalkSystemWithCredentials returns). It is part of the session-pool key

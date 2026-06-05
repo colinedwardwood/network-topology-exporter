@@ -199,6 +199,28 @@ Other categories of disagreement (port-name encoding differences, direction asym
 
 5. Verify `cidr_allow_list` is non-empty and covers at least one reachable device.
 
+### graph_stale flips back to 1 on a *running* exporter
+
+If `network_topology_graph_stale` was `0` and then returns to `1` while the
+process keeps running, the discovery loop has **wedged** mid-run: it completed
+at least one cycle but has not completed another within
+`discovery.interval × discovery.liveness_max_stale_cycles` (default 3). A
+watchdog re-asserts the gauge so the `TopologyGraphStale` alert fires for the
+running-wedge case, not only at cold start.
+
+In the same window, `/healthz` (the Kubernetes liveness target) returns **503**
+with `{"status":"stale", ...}`, so Kubernetes restarts the pod and recovers a
+deadlocked loop on its own. Confirm with:
+
+```
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:9100/healthz
+curl -s http://localhost:9100/healthz | jq .
+```
+
+To tune or disable the gate, set `discovery.liveness_max_stale_cycles` (0
+disables it — `/healthz` then stays 200 once up). The gate and watchdog are
+always inert for `federation.role: hub`, which runs no local discovery loop.
+
 ---
 
 ## 8. Snapshot issues

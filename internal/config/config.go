@@ -242,6 +242,30 @@ type DiscoveryConfig struct {
 	// (the per-module on/off toggles live under modules.snmp). Currently this is
 	// just the opt-in session pool (issue #83).
 	SNMP DiscoverySNMPConfig `yaml:"snmp"`
+
+	// LivenessMaxStaleCycles gates the /healthz liveness probe on discovery
+	// staleness. When the most recent cycle is older than
+	// interval × liveness_max_stale_cycles, /healthz returns 503 so Kubernetes
+	// restarts a process whose discovery loop has wedged (a deadlocked loop can
+	// no longer update its own last-cycle timestamp). Default 3. A value of 0
+	// disables the gate, restoring the prior behaviour where /healthz is always
+	// 200 once the process is up. The gate is inert in pure-hub mode regardless
+	// of this value, since a hub runs no local discovery loop.
+	//
+	// A pointer so the loader can distinguish "unset" (nil → default 3) from an
+	// explicit 0 (disable the gate). After applyDefaults this is always non-nil;
+	// read it via LivenessMaxStaleCyclesValue. Must be >= 0.
+	LivenessMaxStaleCycles *int `yaml:"liveness_max_stale_cycles"`
+}
+
+// LivenessMaxStaleCyclesValue returns the resolved liveness-gate cycle count.
+// applyDefaults guarantees the field is non-nil, but this accessor is nil-safe
+// (returns 0 → gate disabled) so callers never dereference a nil pointer.
+func (d DiscoveryConfig) LivenessMaxStaleCyclesValue() int {
+	if d.LivenessMaxStaleCycles == nil {
+		return 0
+	}
+	return *d.LivenessMaxStaleCycles
 }
 
 // DiscoverySNMPConfig groups discovery-wide SNMP transport options.
@@ -443,6 +467,14 @@ func (c *Config) applyDefaults() {
 	if c.Discovery.CycleBudgetFraction == 0 {
 		c.Discovery.CycleBudgetFraction = 0.8
 	}
+	// Liveness staleness gate defaults to 3 cycles. The field is a pointer so an
+	// unset value (nil) gets the default 3, while an explicit 0 in YAML is
+	// preserved as "disable the gate" — the two are otherwise indistinguishable
+	// for a plain int. See DiscoveryConfig.LivenessMaxStaleCycles.
+	if c.Discovery.LivenessMaxStaleCycles == nil {
+		def := 3
+		c.Discovery.LivenessMaxStaleCycles = &def
+	}
 	// Session-pool idle TTL defaults to 5 × interval (issue #83). Computed after
 	// the interval default above so a fully-defaulted config still gets a sane
 	// non-zero TTL. Only meaningful when the pool is enabled, but harmless to set
@@ -538,6 +570,9 @@ func (c *Config) validate() error {
 	}
 	if c.Discovery.Interval <= 0 {
 		return errors.New("discovery.interval must be > 0")
+	}
+	if c.Discovery.LivenessMaxStaleCyclesValue() < 0 {
+		return errors.New("discovery.liveness_max_stale_cycles must be >= 0 (0 = liveness staleness gate disabled)")
 	}
 	if c.Discovery.TimeoutPerDevice <= 0 {
 		return errors.New("discovery.timeout_per_device must be > 0")

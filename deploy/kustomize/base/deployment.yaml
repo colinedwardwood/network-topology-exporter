@@ -39,6 +39,10 @@ spec:
             - name: metrics
               containerPort: 9100
               protocol: TCP
+          # /healthz returns 503 once the discovery loop has gone stale (no
+          # completed cycle within discovery.interval ×
+          # discovery.liveness_max_stale_cycles, default 3 cycles), so a wedged
+          # loop is restarted. Inert for federation.role: hub (no local loop).
           livenessProbe:
             httpGet:
               path: /healthz
