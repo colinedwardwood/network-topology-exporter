@@ -28,8 +28,10 @@ type SessionPoolMetrics interface {
 
 // Eviction reasons for SessionPoolMetrics.RecordEviction. Closed low-cardinality set.
 const (
-	evictionReasonIdle               = "idle"
-	evictionReasonCredentialRotation = "credential_rotation"
+	evictionReasonIdle = "idle"
+	// evictionReasonCredentialRotation is a metric label value, not a secret;
+	// gosec G101 trips on the "credential" substring in the identifier.
+	evictionReasonCredentialRotation = "credential_rotation" //nolint:gosec // G101 false positive: metric label value, not a credential
 	evictionReasonConnectionError    = "connection_error"
 )
 
