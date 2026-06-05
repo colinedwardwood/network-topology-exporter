@@ -70,6 +70,12 @@ type LoopConfig struct {
 	// May be nil (e.g. in unit tests that drive the loop without the admin
 	// endpoint); a nil mutex means "no serialisation needed".
 	CycleMu *sync.Mutex
+	// Pool is the opt-in per-target SNMP session pool (issue #83). nil (the
+	// default) means each walk opens and closes a fresh session — behaviour
+	// byte-identical to pre-#83. Non-nil when discovery.snmp.session_pool.enabled
+	// is true; RunCycle threads it into every Params so a target reuses one
+	// session across its sequential module walks.
+	Pool *snmpwalk.SessionPool
 }
 
 // WarnSnapshot rate-limits chronic snapshot Warns via lc.WarnLimiter,
@@ -262,7 +268,7 @@ func RunDiscoveryLoop(ctx context.Context, lc LoopConfig) {
 		if lc.CycleMu != nil {
 			lc.CycleMu.Lock()
 		}
-		newGraph, newAges, conflicts, deviceErrors := RunCycle(cycleCtx, lc.Logger, lc.Cfg, lc.M, lc.WalkerMetrics, lc.WarnLimiter, resolver, allowedNets, ages)
+		newGraph, newAges, conflicts, deviceErrors := RunCycle(cycleCtx, lc.Logger, lc.Cfg, lc.M, lc.WalkerMetrics, lc.WarnLimiter, resolver, allowedNets, ages, lc.Pool)
 		if lc.CycleMu != nil {
 			lc.CycleMu.Unlock()
 		}

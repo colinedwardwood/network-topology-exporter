@@ -14,6 +14,7 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -149,6 +150,24 @@ type Params struct {
 	// May be nil — walkers must fall back to a direct slog.Warn in that
 	// case. See WarnLimiter interface above.
 	WarnLimiter WarnLimiter
+
+	// CredentialProfile is the name of the credential profile that won the
+	// system-group walk for this target (set in cycle.go from the profileName
+	// WalkSystemWithCredentials returns). It is part of the session-pool key
+	// (IP, CredentialProfile) so that a credential change for a target yields a
+	// different pool entry and InvalidateProfile can evict all sessions for a
+	// rotated profile (issue #83). Empty when no pool is in use — the default
+	// fresh-open path ignores it.
+	CredentialProfile string
+
+	// Pool, when non-nil, opts this Params into the per-target SNMP session
+	// pool (issue #83): Acquire checks out a reused session keyed by
+	// (IP, CredentialProfile) instead of dialing a fresh socket per walk, and
+	// the release func returns it to the pool rather than closing it. When nil
+	// (the default), Acquire is byte-identical to Open + Conn.Close — a fresh
+	// session per walk, closed on release. The pool itself is concurrency-safe;
+	// a single pooled session is only ever handed to one caller at a time.
+	Pool *SessionPool
 }
 
 // System group OIDs fetched as scalars via SNMP GET (RFC 3418).
@@ -201,7 +220,52 @@ func Open(p Params) (*g.GoSNMP, error) {
 	if err := client.Connect(); err != nil {
 		return nil, fmt.Errorf("snmp connect %s: %w", p.IP, err)
 	}
+	openCount.Add(1)
 	return client, nil
+}
+
+// openCount counts successful fresh-session opens (socket dials) across the
+// package. Each Open == one new UDP session, which is the quantity that drives
+// conntrack/socket churn (issue #83). Exposed via OpenCount for the
+// session-pool open-reduction test; it is a cheap atomic increment with no
+// effect on production behaviour.
+var openCount atomic.Int64
+
+// OpenCount returns the cumulative number of fresh SNMP session opens since
+// process start. Used by the session-pool ≥80%-open-reduction test (issue #83)
+// to compare pooled vs unpooled dial counts deterministically without raw
+// syscall counting. Not part of the operational API.
+func OpenCount() int64 { return openCount.Load() }
+
+// Acquire returns an SNMP session for p plus a release func the caller MUST
+// defer. It is the single seam every walker uses to obtain a session (issue
+// #83), replacing the historical `client, err := Open(p); defer
+// client.Conn.Close()` pair.
+//
+// When p carries no pool (p.Pool == nil, the default), Acquire opens a fresh
+// session via Open and the returned release closes its connection — this path
+// is byte-identical to the pre-#83 Open + Conn.Close behaviour, which is the
+// single most important property of this change and is protected by a test.
+//
+// When a pool is present, Acquire checks out a session reused across this
+// target's sequential module walks, keyed by (p.IP, p.CredentialProfile), and
+// release returns it to the pool WITHOUT closing it. release is always
+// non-nil; on the error path it is a no-op so callers may `defer release()`
+// unconditionally after the error check.
+//
+// gosnmp is not goroutine-safe, but a pooled session is only ever handed to
+// one caller at a time (checkout/return), and a target's modules run
+// sequentially within its per-device goroutine (see internal/app/cycle.go), so
+// reuse across that target's modules within a cycle is safe.
+func Acquire(p Params) (*g.GoSNMP, func(), error) {
+	if p.Pool == nil {
+		client, err := Open(p)
+		if err != nil {
+			return nil, func() {}, err
+		}
+		return client, func() { _ = client.Conn.Close() }, nil
+	}
+	return p.Pool.acquire(p)
 }
 
 type rateLimiterKey struct{}

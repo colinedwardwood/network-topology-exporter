@@ -41,6 +41,15 @@ type Config struct {
 type ListenConfig struct {
 	Addr          string `yaml:"addr"`            // default ":9100"
 	WebConfigFile string `yaml:"web_config_file"` // exporter-toolkit web-config YAML
+
+	// DebugListenAddr, when non-empty, enables a SEPARATE listener serving
+	// net/http/pprof at /debug/pprof/* (issue #69). Empty (the default) means
+	// OFF: no debug listener is created and there is zero runtime overhead. The
+	// debug surface has NO auth and NO TLS — the same model as node_exporter's
+	// debug endpoints — so it MUST NOT be exposed to the internet. Bind it to
+	// localhost or a management interface only (e.g. "127.0.0.1:6060"). It is
+	// never served on the main metrics listener (listen.addr).
+	DebugListenAddr string `yaml:"debug_listen_addr"`
 }
 
 // OutputConfig holds optional push-mode output paths.
@@ -228,6 +237,36 @@ type DiscoveryConfig struct {
 	// re-parses CIDRs per device per cycle. nil when no overrides are
 	// configured (the unchanged default path).
 	overrideResolver *targetOverrideResolver
+
+	// SNMP holds discovery-layer SNMP transport tuning that is not per-module
+	// (the per-module on/off toggles live under modules.snmp). Currently this is
+	// just the opt-in session pool (issue #83).
+	SNMP DiscoverySNMPConfig `yaml:"snmp"`
+}
+
+// DiscoverySNMPConfig groups discovery-wide SNMP transport options.
+type DiscoverySNMPConfig struct {
+	SessionPool SessionPoolConfig `yaml:"session_pool"`
+}
+
+// SessionPoolConfig configures the opt-in per-target SNMP session pool (issue
+// #83). When disabled (the default), every (target × module) walk opens and
+// closes a fresh UDP session, exactly as before. When enabled, a target reuses
+// one session across its modules within a cycle and across cycles, keyed by
+// (target IP, credential profile), cutting socket / conntrack churn on large
+// fleets (see docs/operator/scale.md). The session is bounded at one per
+// (target × profile) (~50KB each), so memory cost scales with fleet size, not
+// module count.
+type SessionPoolConfig struct {
+	// Enabled turns the pool on. Default false: behaviour is byte-identical to
+	// pre-#83 (fresh session per walk).
+	Enabled bool `yaml:"enabled"`
+
+	// MaxIdle is how long a pooled session may sit unused before the background
+	// evictor closes it. 0 (the default) means "5 × discovery.interval",
+	// computed in applyDefaults. Must be >= 0. Closing an idle session also
+	// clears the credentials it held (issue #5 retention bound).
+	MaxIdle time.Duration `yaml:"max_idle"`
 }
 
 // TargetOverride restricts the modules that run against IPs inside CIDR to the
@@ -404,6 +443,13 @@ func (c *Config) applyDefaults() {
 	if c.Discovery.CycleBudgetFraction == 0 {
 		c.Discovery.CycleBudgetFraction = 0.8
 	}
+	// Session-pool idle TTL defaults to 5 × interval (issue #83). Computed after
+	// the interval default above so a fully-defaulted config still gets a sane
+	// non-zero TTL. Only meaningful when the pool is enabled, but harmless to set
+	// regardless.
+	if c.Discovery.SNMP.SessionPool.MaxIdle == 0 {
+		c.Discovery.SNMP.SessionPool.MaxIdle = 5 * c.Discovery.Interval
+	}
 	if c.Modules.SNMP.Version == "" {
 		c.Modules.SNMP.Version = "v2c"
 	}
@@ -486,6 +532,9 @@ func (c *Config) validate() error {
 	}
 	if c.Discovery.PerTargetPDURatePerSecond < 0 {
 		return errors.New("discovery.per_target_pdu_rate_per_second must be >= 0 (0 = unlimited)")
+	}
+	if c.Discovery.SNMP.SessionPool.MaxIdle < 0 {
+		return errors.New("discovery.snmp.session_pool.max_idle must be >= 0 (0 = default 5× interval)")
 	}
 	if c.Discovery.Interval <= 0 {
 		return errors.New("discovery.interval must be > 0")

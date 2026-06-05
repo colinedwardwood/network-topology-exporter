@@ -56,7 +56,7 @@ func TestCycleHonoursTargetOverride(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	ctx, root := tracing.Tracer().Start(ctx, "discovery.cycle")
-	g, _, _, _ := RunCycle(ctx, slogDiscard(), cfg, m, nil, nil, resolver, allow, map[graph.EdgeKey]int{})
+	g, _, _, _ := RunCycle(ctx, slogDiscard(), cfg, m, nil, nil, resolver, allow, map[graph.EdgeKey]int{}, nil)
 	root.End()
 
 	if len(g.Devices) != 1 {
@@ -108,7 +108,7 @@ func TestCycleNoOverrideRunsAllEnabled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	ctx, root := tracing.Tracer().Start(ctx, "discovery.cycle")
-	RunCycle(ctx, slogDiscard(), cfg, m, nil, nil, resolver, allow, map[graph.EdgeKey]int{})
+	RunCycle(ctx, slogDiscard(), cfg, m, nil, nil, resolver, allow, map[graph.EdgeKey]int{}, nil)
 	root.End()
 
 	names := map[string]bool{}

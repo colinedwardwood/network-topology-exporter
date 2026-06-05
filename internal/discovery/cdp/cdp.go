@@ -81,12 +81,12 @@ type cacheEntry struct {
 // Walk returns CDP-discovered edges for the device at p.IP. localDevice is
 // the sysName from the SNMP SYSTEM walk.
 func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
-	client, err := snmputil.Open(p)
+	client, release, err := snmputil.Acquire(p)
 	if err != nil {
 		recordWalkerOutcome(&p, walkerCDP, outcomeError)
 		return nil, nil, fmt.Errorf("cdp %s: %w", p.IP, err)
 	}
-	defer func() { _ = client.Conn.Close() }()
+	defer release()
 
 	ifNames, err := snmputil.WalkIfNamesWithFallback(ctx, client)
 	if err != nil {

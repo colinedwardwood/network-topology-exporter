@@ -314,6 +314,34 @@ jq '.devices | length' < /path/to/snapshot.json
 
 ---
 
+## Profiling with pprof
+
+When a symptom needs runtime introspection — a slow cycle, runaway memory, a stuck goroutine, lock contention — the exporter can expose Go's `net/http/pprof` profiles on a **separate, opt-in** listener.
+
+**Enable it** by setting a listen address under `listen:`:
+
+```yaml
+listen:
+  debug_listen_addr: 127.0.0.1:6060   # default empty = OFF
+```
+
+Empty (the default) means the debug listener is never created and there is zero profiling overhead. When enabled, mutex and block profiling are turned on automatically (they are empty otherwise), which adds minor runtime overhead — another reason it is opt-in.
+
+> **Warning — never expose this to the internet.** The pprof endpoint has **no authentication and no TLS** (the same model as node_exporter's debug surfaces). Profiles can reveal memory contents, goroutine stacks, and command-line arguments. Bind `debug_listen_addr` to `127.0.0.1` or a trusted management interface only, never `0.0.0.0` on a public network. It is served only on this dedicated listener — never on the main metrics port (`:9100`).
+
+**Symptom → endpoint:**
+
+| Symptom | Command |
+| --- | --- |
+| Slow discovery cycle (CPU-bound) | `go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30` |
+| High cardinality / memory growth | `go tool pprof http://localhost:6060/debug/pprof/heap` |
+| Stuck cycle / goroutine leak | `curl -s 'http://localhost:6060/debug/pprof/goroutine?debug=2'` |
+| Lock contention under load | `go tool pprof http://localhost:6060/debug/pprof/mutex` and `…/debug/pprof/block` |
+
+The index at `http://localhost:6060/debug/pprof/` lists all available profiles (`heap`, `goroutine`, `allocs`, `mutex`, `block`, `threadcreate`).
+
+---
+
 ## 11. OTLP push goroutine overlapping with the next scrape cycle
 
 **Symptom:** `network_topology_otlp_push_total{status="error"}` is rising; log lines show push timeouts or context cancellation errors; discovery cycle duration is increasing.

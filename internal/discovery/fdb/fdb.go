@@ -185,12 +185,12 @@ type fdbEntry struct {
 // sysName from the SNMP SYSTEM walk. allowedNets is accepted for interface
 // compatibility but not applied — FDB entries carry no IP address to check.
 func Walk(ctx context.Context, p snmputil.Params, localDevice string, _ []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
-	client, err := snmputil.Open(p)
+	client, release, err := snmputil.Acquire(p)
 	if err != nil {
 		recordWalkerOutcome(&p, walkerFDB, outcomeError)
 		return nil, nil, fmt.Errorf("fdb %s: %w", p.IP, err)
 	}
-	defer func() { _ = client.Conn.Close() }()
+	defer release()
 
 	// dot1dTpFdbTable (B-MIB) is the base table for the outcome accounting:
 	// hadFdbPDUs distinguishes "MIB unimplemented" (zero PDUs — device is not

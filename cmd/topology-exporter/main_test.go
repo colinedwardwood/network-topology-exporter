@@ -95,7 +95,7 @@ func TestRunCycleTwoDevices(t *testing.T) {
 
 	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
 
-	g, _, _, _ := app.RunCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil)
+	g, _, _, _ := app.RunCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil, nil)
 
 	if len(g.Devices) != 2 {
 		t.Fatalf("expected 2 devices, got %d", len(g.Devices))
@@ -162,7 +162,7 @@ func TestRunCycleTriesFallbackCredentialProfiles(t *testing.T) {
 	}
 
 	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
-	g, _, _, _ := app.RunCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil)
+	g, _, _, _ := app.RunCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil, nil)
 
 	if len(g.Devices) != 1 {
 		t.Fatalf("expected fallback credential to discover 1 device, got %d", len(g.Devices))
@@ -348,7 +348,7 @@ func TestRunCycleLLDPEdge(t *testing.T) {
 
 	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
 
-	g, _, _, _ := app.RunCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil)
+	g, _, _, _ := app.RunCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil, nil)
 
 	if len(g.Devices) != 2 {
 		t.Fatalf("expected 2 devices, got %d", len(g.Devices))
@@ -1375,7 +1375,7 @@ func TestRunCycleAllCredentialsFail(t *testing.T) {
 	}
 
 	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
-	g, _, _, fails := app.RunCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil)
+	g, _, _, fails := app.RunCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil, nil)
 
 	if len(g.Devices) != 0 {
 		t.Errorf("expected 0 devices when all credentials fail, got %d", len(g.Devices))
@@ -1427,7 +1427,7 @@ func TestRunCycleDeviceLabels(t *testing.T) {
 	}
 
 	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
-	g, _, _, _ := app.RunCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil)
+	g, _, _, _ := app.RunCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil, nil)
 
 	if len(g.Devices) != 1 {
 		t.Fatalf("expected 1 device, got %d", len(g.Devices))
@@ -1500,7 +1500,7 @@ func TestRunCycleExpiredUnconfirmedEdge(t *testing.T) {
 	// First cycle: get the unidirectional edge and its EdgeKey.
 	// Pass a non-nil empty map so AgeUnconfirmed actually populates the ages.
 	initialAges := make(map[graph.EdgeKey]int)
-	g1, ages1, _, _ := app.RunCycle(context.Background(), slog.Default(), cfg, m, nil, nil, resolver, allowedNets, initialAges)
+	g1, ages1, _, _ := app.RunCycle(context.Background(), slog.Default(), cfg, m, nil, nil, resolver, allowedNets, initialAges, nil)
 	if len(g1.Edges) == 0 {
 		t.Skip("no edges produced; LLDP PDU may not have been parsed")
 	}
@@ -1516,7 +1516,7 @@ func TestRunCycleExpiredUnconfirmedEdge(t *testing.T) {
 	// Second cycle: the unidirectional sw-a→sw-b edge is incremented to TTL
 	// and expires. The bidirectional sw-c↔sw-d edge is kept (covers
 	// `kept = append(kept, e)` in the filter loop).
-	g2, _, _, _ := app.RunCycle(context.Background(), slog.Default(), cfg, m, nil, nil, resolver, allowedNets, ages1)
+	g2, _, _, _ := app.RunCycle(context.Background(), slog.Default(), cfg, m, nil, nil, resolver, allowedNets, ages1, nil)
 
 	// The sw-a→sw-b unidirectional edge must be absent from g2.
 	for _, e := range g2.Edges {
@@ -1579,7 +1579,7 @@ func TestRunCycleHostnameDNSFailure(t *testing.T) {
 	}
 
 	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
-	g, _, _, fails := app.RunCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil)
+	g, _, _, fails := app.RunCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil, nil)
 
 	if len(g.Devices) != 0 {
 		t.Errorf("expected 0 devices for unresolvable hostname, got %d", len(g.Devices))
@@ -1631,7 +1631,7 @@ func TestRunCycleHostnameOutsideAllowList(t *testing.T) {
 	}
 
 	allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
-	g, _, _, fails := app.RunCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil)
+	g, _, _, fails := app.RunCycle(context.Background(), slog.Default(), cfg, metrics.New(false), nil, nil, resolver, allowedNets, nil, nil)
 
 	if len(g.Devices) != 0 {
 		t.Errorf("expected 0 devices (target outside allow-list), got %d", len(g.Devices))

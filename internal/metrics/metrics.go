@@ -41,6 +41,15 @@ type Metrics struct {
 	DiscoveryModuleDuration       *prometheus.HistogramVec
 	SNMPWalksTotal                *prometheus.CounterVec
 	SNMPRateLimitWaitSeconds      prometheus.Histogram
+
+	// SNMP session pool (issue #83). Zero unless discovery.snmp.session_pool is
+	// enabled. SNMPSessionPoolSize is the current count of pooled sessions;
+	// hits/misses partition Checkout outcomes; evictions partition session
+	// removal by reason (idle | credential_rotation | connection_error).
+	SNMPSessionPoolSize      prometheus.Gauge
+	SNMPSessionPoolHits      prometheus.Counter
+	SNMPSessionPoolMisses    prometheus.Counter
+	SNMPSessionPoolEvictions *prometheus.CounterVec
 	DiscoveryDecodeIssues         *prometheus.CounterVec
 	DiscoveryQuarantinedRowsTotal *prometheus.CounterVec
 	DiscoveryDegradedTotal        *prometheus.CounterVec
@@ -250,6 +259,22 @@ func New(emitBoundaryObs bool) *Metrics {
 			Name: "network_topology_snmp_walks_total",
 			Help: "SNMP walk attempts, partitioned by terminal status and sub-reason. Reason values are the underlying strings of the WalkReason constants in sub_reason.go; status=ok and status=timeout rows carry reason=n/a.",
 		}, []string{"status", "reason"}), // status ∈ {ok, timeout, error}; reason ∈ WalkReason
+		SNMPSessionPoolSize: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "network_topology_snmp_session_pool_size",
+			Help: "Current number of pooled SNMP sessions (issue #83). One per (target, credential profile). Zero unless discovery.snmp.session_pool.enabled.",
+		}),
+		SNMPSessionPoolHits: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "network_topology_snmp_session_pool_hits_total",
+			Help: "SNMP session-pool checkouts that reused a live pooled session (issue #83).",
+		}),
+		SNMPSessionPoolMisses: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "network_topology_snmp_session_pool_misses_total",
+			Help: "SNMP session-pool checkouts that opened a fresh session (cold key or in-use fallback) (issue #83).",
+		}),
+		SNMPSessionPoolEvictions: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "network_topology_snmp_session_pool_evictions_total",
+			Help: "SNMP sessions closed and removed from the pool, by reason. reason ∈ {idle, credential_rotation, connection_error} (issue #83).",
+		}, []string{"reason"}),
 		SNMPRateLimitWaitSeconds: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "network_topology_snmp_rate_limit_wait_seconds",
 			Help:    "Time spent blocked on the per-target SNMP rate limiter before issuing a walk; non-zero observations mean the per_target_pdu_rate_per_second limit is biting (issue #72).",
@@ -378,6 +403,10 @@ func New(emitBoundaryObs bool) *Metrics {
 		m.DiscoveryModuleDuration,
 		m.SNMPWalksTotal,
 		m.SNMPRateLimitWaitSeconds,
+		m.SNMPSessionPoolSize,
+		m.SNMPSessionPoolHits,
+		m.SNMPSessionPoolMisses,
+		m.SNMPSessionPoolEvictions,
 		m.DiscoveryDecodeIssues,
 		m.DiscoveryQuarantinedRowsTotal,
 		m.DiscoveryDegradedTotal,

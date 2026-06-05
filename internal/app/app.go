@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -94,6 +95,20 @@ func Run(ctx context.Context, args []string) int {
 	// re-alerted hourly thereafter without flooding the log.
 	warnLimiter := loglimit.New(logger, loglimit.DefaultCooldown)
 
+	// Issue #83: opt-in per-target SNMP session pool. Constructed once and
+	// threaded into the discovery loop so each target reuses one session across
+	// its modules, cutting socket/conntrack churn on large fleets. nil when
+	// disabled (the default) → snmpwalk.Acquire uses the fresh open+close path,
+	// byte-identical to pre-#83. Closed during graceful shutdown below.
+	var sessionPool *snmpwalk.SessionPool
+	if cfg.Discovery.SNMP.SessionPool.Enabled {
+		sessionPool = snmpwalk.NewSessionPool(snmpwalk.SessionPoolOptions{
+			MaxIdle: cfg.Discovery.SNMP.SessionPool.MaxIdle,
+			Metrics: metrics.NewSessionPoolMetricsAdapter(m),
+		})
+		logger.Info("snmp session pool enabled", "max_idle", cfg.Discovery.SNMP.SessionPool.MaxIdle)
+	}
+
 	var status atomic.Pointer[httpx.CycleStatus]
 	var ready atomic.Bool // set to true after the first live cycle or spoke push
 
@@ -130,6 +145,31 @@ func Run(ctx context.Context, args []string) int {
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       120 * time.Second,
+	}
+
+	// Issue #69: opt-in pprof debug endpoint on a SEPARATE listener. Off by
+	// default (empty addr): no extra listener, no profiling overhead. When
+	// enabled, /debug/pprof/* is served ONLY on this listener — never on the
+	// main metrics mux above — and carries no auth/TLS, so it must be bound to
+	// localhost or a management interface only (documented in example.yaml).
+	var debugSrv *http.Server
+	if cfg.Listen.DebugListenAddr != "" {
+		// Mutex and block profiles are empty unless sampling is enabled at
+		// runtime. Enable conservative sampling ONLY when the debug endpoint is
+		// on, so there is zero overhead when it is off. These add minor runtime
+		// overhead (per-contention bookkeeping), which is why they are gated
+		// behind the opt-in debug listener rather than always on.
+		runtime.SetMutexProfileFraction(100) // sample ~1/100 mutex contention events
+		runtime.SetBlockProfileRate(10000)   // sample blocking events ~every 10µs of block time
+		debugSrv = &http.Server{
+			Addr:              cfg.Listen.DebugListenAddr,
+			Handler:           newDebugMux(),
+			ReadHeaderTimeout: 10 * time.Second,
+			// No WriteTimeout: CPU/trace profiles stream for a caller-chosen
+			// number of seconds (e.g. ?seconds=30) and a write deadline would
+			// truncate them.
+			IdleTimeout: 120 * time.Second,
+		}
 	}
 
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
@@ -273,6 +313,7 @@ func Run(ctx context.Context, args []string) int {
 				OtlpSem:       otlpSem,
 				OtlpWg:        &otlpWg,
 				CycleMu:       &cycleMu,
+				Pool:          sessionPool,
 			})
 		}()
 	}
@@ -304,6 +345,19 @@ func Run(ctx context.Context, args []string) int {
 		}
 	}()
 
+	if debugSrv != nil {
+		logger.Warn("pprof debug endpoint listening — no auth/TLS; do not expose to the internet",
+			"addr", cfg.Listen.DebugListenAddr)
+		go func() {
+			// A bind failure on the debug listener must NOT take down the
+			// exporter: profiling is an optional operability aid. Log it and
+			// carry on rather than cancelling the root context.
+			if err := debugSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("pprof debug server error", "error", err)
+			}
+		}()
+	}
+
 	<-ctx.Done()
 	logger.Info("shutdown signal received, draining")
 
@@ -311,6 +365,11 @@ func Run(ctx context.Context, args []string) int {
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("http shutdown error", "error", err)
+	}
+	if debugSrv != nil {
+		if err := debugSrv.Shutdown(shutdownCtx); err != nil {
+			logger.Error("pprof debug server shutdown error", "error", err)
+		}
 	}
 	drainDone := make(chan struct{})
 	go func() { workerDone.Wait(); close(drainDone) }()
@@ -321,6 +380,13 @@ func Run(ctx context.Context, args []string) int {
 	}
 	otlpWg.Wait()
 	logger.Info("otlp push goroutines drained")
+	// Issue #83: close the SNMP session pool after discovery has drained so no
+	// in-flight walk loses its session mid-walk. Closing every pooled session
+	// also clears the credentials they held. No-op when the pool is disabled.
+	if sessionPool != nil {
+		sessionPool.Close()
+		logger.Info("snmp session pool closed")
+	}
 	if traceProvider != nil {
 		if err := traceProvider.Shutdown(shutdownCtx); err != nil {
 			logger.Error("tracer provider shutdown error", "error", err)

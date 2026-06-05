@@ -43,11 +43,11 @@ const (
 // in state up(3) produce edges. Neighbours outside allowedNets go to the
 // OutOfScopeNeighbour slice; pass nil to skip scope enforcement.
 func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
-	client, err := snmputil.Open(p)
+	client, release, err := snmputil.Acquire(p)
 	if err != nil {
 		return nil, nil, fmt.Errorf("isis %s: %w", p.IP, err)
 	}
-	defer func() { _ = client.Conn.Close() }()
+	defer release()
 
 	states, stateDegraded, err := walkAdjStates(ctx, client)
 	if err != nil {

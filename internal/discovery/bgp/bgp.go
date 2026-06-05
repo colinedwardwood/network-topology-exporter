@@ -189,11 +189,11 @@ type bgpPeer struct {
 // draft at that OID; each vendor publishes under its enterprise OID
 // instead. See plans/bgp4v2-ipv6.md for the design history.
 func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
-	client, err := snmputil.Open(p)
+	client, release, err := snmputil.Acquire(p)
 	if err != nil {
 		return nil, nil, fmt.Errorf("bgp %s: %w", p.IP, err)
 	}
-	defer func() { _ = client.Conn.Close() }()
+	defer release()
 
 	// vendorErr / vendorSpec capture a vendor-walk error so we can promote
 	// it to Warn iff RFC 4273 succeeds afterwards. Per issue #8: a silently
