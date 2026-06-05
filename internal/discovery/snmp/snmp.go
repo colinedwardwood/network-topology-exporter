@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -323,6 +324,56 @@ func rateLimitWaitObserverFrom(ctx context.Context) func(time.Duration) {
 	return fn
 }
 
+type panicReporterKey struct{}
+
+// ContextWithPanicReporter returns a child context carrying a nil-tolerant
+// panic reporter for the raw transport goroutines this package spawns
+// (BulkWalk's BulkWalkAll/WalkAll goroutines and Walk's Get goroutine). Those
+// goroutines run on their own stacks, so neither the per-device recover in
+// internal/app/cycle.go nor app.recoverGoroutine protects them: a panic while
+// decoding a hostile/truncated PDU would otherwise crash the whole process on
+// the most-exposed path. The deferred recover in each goroutine calls this
+// reporter with site "snmp_walk" so the panic is counted as
+// network_topology_panics_total{site="snmp_walk"} and converts the walk into a
+// normal error rather than a crash.
+//
+// Like ContextWithRateLimiter/ContextWithDecodeIssueReporter it lives behind a
+// context seam so this package stays free of any prometheus-client dependency;
+// the production wiring in internal/app/cycle.go injects a closure that bumps
+// metrics.PanicsRecoveredTotal. A nil reporter returns the original context
+// unchanged (the recover still happens; only the counter bump is skipped).
+func ContextWithPanicReporter(ctx context.Context, fn func(site string)) context.Context {
+	if fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, panicReporterKey{}, fn)
+}
+
+func panicReporterFrom(ctx context.Context) func(site string) {
+	fn, _ := ctx.Value(panicReporterKey{}).(func(site string))
+	return fn
+}
+
+// reportWalkPanic is the shared recover body for the raw transport goroutines.
+// It recovers r (does NOT re-panic), reports it through the nil-tolerant
+// context seam under site "snmp_walk", and returns a sentinel error the
+// goroutine sends on its result channel so the walk returns a normal error
+// instead of crashing. Callers invoke it as:
+//
+//	defer func() {
+//		if r := recover(); r != nil {
+//			ch <- walkResult{nil, reportWalkPanic(ctx, r)}
+//		}
+//	}()
+func reportWalkPanic(ctx context.Context, r any) error {
+	slog.Error("snmp: transport goroutine panicked; recovered",
+		"panic", r, "stack", string(debug.Stack()))
+	if fn := panicReporterFrom(ctx); fn != nil {
+		fn("snmp_walk")
+	}
+	return fmt.Errorf("snmp walk panic: %v", r)
+}
+
 // BulkWalk walks rootOID using BulkWalkAll, falling back to WalkAll for
 // devices that reject GetBulk PDUs (some older IOS/JunOS revisions, some AP
 // controllers). ctx is checked before each attempt and wraps the blocking
@@ -354,6 +405,11 @@ func BulkWalk(ctx context.Context, client *g.GoSNMP, rootOID string) ([]g.SnmpPD
 
 	ch := make(chan walkResult, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				ch <- walkResult{nil, reportWalkPanic(ctx, r)}
+			}
+		}()
 		pdus, err := client.BulkWalkAll(rootOID)
 		ch <- walkResult{pdus, err}
 	}()
@@ -377,6 +433,11 @@ func BulkWalk(ctx context.Context, client *g.GoSNMP, rootOID string) ([]g.SnmpPD
 
 	ch2 := make(chan walkResult, 1)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				ch2 <- walkResult{nil, reportWalkPanic(ctx, r)}
+			}
+		}()
 		pdus, err := client.WalkAll(rootOID)
 		ch2 <- walkResult{pdus, err}
 	}()
@@ -409,6 +470,12 @@ func Walk(ctx context.Context, p Params) (*discovery.Device, error) {
 	var getErr error
 	go func() {
 		defer close(done)
+		defer func() {
+			if r := recover(); r != nil {
+				result = nil
+				getErr = reportWalkPanic(ctx, r)
+			}
+		}()
 		result, getErr = client.Get([]string{
 			oidSysDescr,
 			oidSysObjectID,

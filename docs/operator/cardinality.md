@@ -3,7 +3,7 @@
 Every Prometheus label with values controlled by network data or configuration
 has a documented bound. Violating these bounds silently bloats TSDB.
 
-## network_topology_device_info / network_topology_device_uptime_seconds
+## network_topology_device_info
 Labels: `device_id`, `vendor`, `model`, `os_version`, `site`
 
 Cardinality = number of discovered devices. Expected: 1–5 000 for a single
@@ -12,6 +12,14 @@ exporter instance. Hub mode aggregates spoke graphs; expect up to hub's
 
 `vendor`, `model`, `os_version` are truncated to 128 bytes and sanitized;
 they should have low cardinality within any single fleet.
+
+## network_topology_device_uptime_seconds
+Labels: `device_id`
+
+Carries only `device_id` (verified in `internal/metrics/topology_collector.go`) —
+the descriptive `vendor`/`model`/`os_version`/`site` labels live on
+`network_topology_device_info`, not here. Join to `device_info` on `device_id`
+when you need those dimensions. Cardinality = number of discovered devices.
 
 ## network_topology_edge_info
 Labels: `src_device`, `src_port`, `dst_device`, `dst_port`, `discovery_proto`, `link_kind`, `direction`
@@ -27,7 +35,28 @@ Labels: `module`, `oid`, `reason`
 `oid` is always a table-root OID (e.g., `1.3.6.1.2.1.17.4.3.1`), never a
 per-row instance OID. The type system enforces this via `snmputil.TableOID`.
 Current table OIDs walked: ~12. `module` is one of the ~9 discovery modules.
-`reason` is one of: `invalid_type`, `invalid_oid`. Maximum cardinality: ~200.
+
+`reason` is **not** a two-value enum. It is an open set of snake_case strings
+emitted at the per-row `snmputil.ReportDecodeIssue` call sites across the
+protocol modules, plus the two generic reasons from `WalkToIntMapStrict`
+(`invalid_type`, `invalid_oid`). As of this writing the distinct reasons are:
+
+- LLDP: `chassis_subtype_invalid`, `port_subtype_invalid`,
+  `chassis_mac_bad_length`, `chassis_addr_malformed`, `port_mac_bad_length`
+- CDP: `index_unparseable`, `empty_device_id`
+- OSPF: `oid_suffix_malformed`, `nbr_ip_undecodable`
+- FDB: `bridge_port_index_invalid`, `ifindex_unmapped`
+- Generic (`WalkToIntMapStrict`, used by IS-IS/MPLS and others):
+  `invalid_type`, `invalid_oid`
+
+That is ≥13 distinct reasons today, and the set grows whenever a module adds
+a decode guard — treat it as an **open set**. Cardinality is bounded by
+(modules walked) × (table OIDs) × (distinct reasons), not by any fixed small
+number; with ~9 modules, ~12 OIDs, and ≥13 reasons the worst-case bound is on
+the order of low thousands, though in practice only a handful of (module, oid,
+reason) tuples ever appear because each reason is emitted from one specific
+walker. Watch this series for unexpected growth rather than assuming a small
+fixed ceiling.
 
 ## network_topology_snapshot_drops_total
 Labels: `reason`

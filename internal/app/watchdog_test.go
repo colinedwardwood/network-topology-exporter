@@ -46,12 +46,13 @@ func TestLivenessMaxStale(t *testing.T) {
 	}
 }
 
-// TestRunStaleWatchdogFlipsGauge drives the watchdog with a fast tick and a
-// controllable clock, asserting that GraphStale flips to 1 when the last cycle
-// ages past maxStale and back to 0 once a fresh cycle lands inside the window.
-// It also confirms the goroutine exits on context cancellation (the package
-// goleak TestMain catches a leak if it does not).
-func TestRunStaleWatchdogFlipsGauge(t *testing.T) {
+// TestRunStaleWatchdogEscalatesOnly drives the watchdog with a fast tick and a
+// controllable clock, asserting the escalate-only ownership split: GraphStale
+// flips to 1 when the last cycle ages past maxStale, and the watchdog does NOT
+// clear it back to 0 once a fresh cycle lands (clearing is owned exclusively by
+// RunDiscoveryLoop's success path). It also confirms the goroutine exits on
+// context cancellation (the package goleak TestMain catches a leak if not).
+func TestRunStaleWatchdogEscalatesOnly(t *testing.T) {
 	m := metrics.New(false)
 	var status atomic.Pointer[httpx.CycleStatus]
 
@@ -99,8 +100,18 @@ func TestRunStaleWatchdogFlipsGauge(t *testing.T) {
 	advance(maxStale + time.Minute)
 	waitFor(1)
 
-	// A fresh cycle lands: the watchdog must clear stale.
+	// A fresh cycle lands: the watchdog must NOT clear stale — clearing is
+	// owned exclusively by RunDiscoveryLoop's success path. The gauge stays 1
+	// until the loop itself sets it to 0. Give the watchdog several ticks to
+	// (incorrectly) clear it and assert it does not.
 	status.Store(&httpx.CycleStatus{LastCycleAt: now()})
+	time.Sleep(40 * time.Millisecond)
+	if got := testutil.ToFloat64(m.GraphStale); got != 1 {
+		t.Errorf("GraphStale = %v, want 1 (watchdog must not clear; the loop owns Set(0))", got)
+	}
+
+	// The loop's success path (simulated) is the only writer that clears.
+	m.GraphStale.Set(0)
 	waitFor(0)
 
 	// Cancellation must stop the goroutine cleanly.

@@ -331,7 +331,7 @@ func New(emitBoundaryObs bool) *Metrics {
 		}),
 		GraphUpdatesRejectedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "network_topology_graph_updates_rejected_total",
-			Help: "Combined-graph updates rejected at publish time, partitioned by reason (size_budget_exceeded, invalid_label_key, invalid_label_value).",
+			Help: "Combined-graph updates rejected at publish time, partitioned by reason (size_budget_exceeded, invalid_label_key, invalid_label_value, structural_invalid, stale_generation).",
 		}, []string{"reason"}),
 		HubOOSUnmatchedTotal: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "network_topology_hub_oos_unmatched_total",

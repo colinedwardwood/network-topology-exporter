@@ -188,7 +188,7 @@ At 10k targets on a 60s discovery interval with all modules enabled, that's on t
 
 ### Why it's done this way
 
-`gosnmp`'s `*GoSNMP` struct is not goroutine-safe (see `internal/discovery/snmp/snmp.go:142`), so a single session cannot be shared across concurrent goroutines. Within a target's per-device goroutine, however, modules run **sequentially**, so one session can safely be reused across that target's modules. By default each module still opens its own fresh session for the duration of its walk (byte-identical, lowest-memory behaviour); the optional session pool below reuses one session per target instead.
+`gosnmp`'s `*GoSNMP` struct is not goroutine-safe (see the `Acquire` checkout/return note in `internal/discovery/snmp/snmp.go`, which serialises a pooled session to one caller at a time), so a single session cannot be shared across concurrent goroutines. Within a target's per-device goroutine, however, modules run **sequentially**, so one session can safely be reused across that target's modules. By default each module still opens its own fresh session for the duration of its walk (byte-identical, lowest-memory behaviour); the optional session pool below reuses one session per target instead.
 
 ### When it matters
 
@@ -203,10 +203,10 @@ The kernel cost is modest in isolation — UDP has no TIME_WAIT, so socket-table
 Symptoms surface on the firewall or NAT device, not the exporter. Look for:
 
 - Linux: `cat /proc/sys/net/netfilter/nf_conntrack_count` climbing under exporter load; `dmesg | grep -i conntrack` showing "table full, dropping packet" entries
-- `nf_conntrack_udp_timeout` set lower than the SNMP timeout (`modules.snmp.timeout`, default 5s) — entries time out mid-walk, packet drops manifest as SNMP timeouts on the exporter side
+- `nf_conntrack_udp_timeout` set lower than the SNMP timeout (`discovery.timeout_per_device`, default 10s) — entries time out mid-walk, packet drops manifest as SNMP timeouts on the exporter side
 - Cloud NAT gateways logging port exhaustion or connection-rate-limit hits
 
-The exporter itself will report these as ordinary SNMP timeouts in `network_topology_snmp_timeout_total`. The firewall is where the root cause lives.
+The exporter itself will report these as ordinary SNMP timeouts in `network_topology_snmp_walks_total{status="timeout"}`. The firewall is where the root cause lives.
 
 ### Operator mitigations available today
 
@@ -217,7 +217,7 @@ In rough order of leverage:
 2. **Increase `discovery.interval`.** Doubling the cycle time halves the steady-state new-flow rate. Trades freshness for kernel headroom.
 3. **Lower `discovery.parallelism`.** Flattens the burst so peak new-flow rate drops, even if total flows per cycle stay the same. Cycle time grows.
 4. **Disable FDB unless you need it.** FDB's per-VLAN walks are by far the biggest contributor on Cisco IOS gear.
-5. **Set `modules.snmp.timeout` ≤ `nf_conntrack_udp_timeout`** so SNMP gives up before conntrack does, surfacing failures as exporter-side timeouts rather than mysterious packet drops.
+5. **Set `discovery.timeout_per_device` ≤ `nf_conntrack_udp_timeout`** so SNMP gives up before conntrack does, surfacing failures as exporter-side timeouts rather than mysterious packet drops.
 
 ### Session pooling (shipped, opt-in)
 

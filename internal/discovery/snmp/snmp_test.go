@@ -1599,3 +1599,86 @@ func TestBulkWalkRateLimiterCtxCancel(t *testing.T) {
 		t.Error("rate-limit wait observer should not fire when Wait returns an error")
 	}
 }
+
+// ContextWithPanicReporter: a nil reporter returns the original context
+// unchanged and panicReporterFrom is nil on a bare context (the default —
+// recover still happens, only the counter bump is skipped).
+func TestContextWithPanicReporterNil(t *testing.T) {
+	ctx := context.Background()
+	if got := ContextWithPanicReporter(ctx, nil); got != ctx {
+		t.Error("ContextWithPanicReporter(nil) should return the original context")
+	}
+	if panicReporterFrom(ctx) != nil {
+		t.Error("panicReporterFrom should be nil on a bare context")
+	}
+}
+
+// reportWalkPanic: recovers a panic, reports it under site "snmp_walk" through
+// the injected reporter, and returns a sentinel error (does NOT re-panic).
+func TestReportWalkPanicReportsAndReturnsSentinel(t *testing.T) {
+	var gotSite string
+	var calls int
+	ctx := ContextWithPanicReporter(context.Background(), func(site string) {
+		gotSite = site
+		calls++
+	})
+
+	err := reportWalkPanic(ctx, "boom")
+	if err == nil {
+		t.Fatal("reportWalkPanic should return a non-nil sentinel error")
+	}
+	if !strings.Contains(err.Error(), "snmp walk panic") || !strings.Contains(err.Error(), "boom") {
+		t.Errorf("sentinel error = %q, want it to mention the panic value", err.Error())
+	}
+	if calls != 1 {
+		t.Errorf("reporter called %d times, want 1", calls)
+	}
+	if gotSite != "snmp_walk" {
+		t.Errorf("reporter site = %q, want %q", gotSite, "snmp_walk")
+	}
+}
+
+// reportWalkPanic: the nil-reporter path is safe — it still returns a sentinel
+// error and does not panic when no reporter is installed on the context.
+func TestReportWalkPanicNilReporterSafe(t *testing.T) {
+	err := reportWalkPanic(context.Background(), "boom")
+	if err == nil {
+		t.Fatal("reportWalkPanic should return a sentinel error even with no reporter")
+	}
+}
+
+// The transport-goroutine recover pattern: a panic inside a goroutine body
+// that mirrors BulkWalk's BulkWalkAll/WalkAll goroutines is recovered, the
+// reporter is bumped, and a sentinel error arrives on the result channel
+// instead of crashing the process.
+func TestTransportGoroutineRecoverDeliversSentinel(t *testing.T) {
+	var gotSite string
+	ctx := ContextWithPanicReporter(context.Background(), func(site string) {
+		gotSite = site
+	})
+
+	type walkResult struct {
+		pdus []gsnmp.SnmpPDU
+		err  error
+	}
+	ch := make(chan walkResult, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				ch <- walkResult{nil, reportWalkPanic(ctx, r)}
+			}
+		}()
+		panic("hostile PDU decode")
+	}()
+
+	r := <-ch
+	if r.err == nil {
+		t.Fatal("recovered transport panic should deliver a sentinel error on the channel")
+	}
+	if !strings.Contains(r.err.Error(), "snmp walk panic") {
+		t.Errorf("channel error = %q, want snmp walk panic sentinel", r.err.Error())
+	}
+	if gotSite != "snmp_walk" {
+		t.Errorf("reporter site = %q, want %q", gotSite, "snmp_walk")
+	}
+}

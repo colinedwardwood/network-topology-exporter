@@ -217,6 +217,15 @@ func RunCycle(
 				m.DiscoveryDecodeIssues.WithLabelValues(issue.Module, string(issue.OID), issue.Reason).Add(float64(issue.Count))
 				m.DiscoveryQuarantinedRowsTotal.WithLabelValues(issue.Module, string(issue.OID), issue.Reason).Add(float64(issue.Count))
 			})
+			// Nil-tolerant panic-reporter seam for the raw SNMP transport
+			// goroutines (snmpwalk.BulkWalk / Walk spawn their own goroutine
+			// stacks for BulkWalkAll/WalkAll/Get; this per-device recover does
+			// not cover them). On a recovered transport panic the walk returns a
+			// normal error and bumps network_topology_panics_total{site="snmp_walk"}
+			// without the discovery package importing the prometheus client.
+			devCtx = snmpwalk.ContextWithPanicReporter(devCtx, func(site string) {
+				m.PanicsRecoveredTotal.WithLabelValues(site).Inc()
+			})
 
 			// Issue #72: per-target SNMP PDU rate limiter. When configured, cap
 			// the steady-state request rate against this single device so a high

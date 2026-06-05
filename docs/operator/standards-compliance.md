@@ -19,7 +19,7 @@ add explicit `credentials.assignments` for those devices and expect no topology 
 
 ### sysName (1.3.6.1.2.1.1.5.0)
 sysName is capped at 255 bytes before use as a graph key or Prometheus label
-(RFC 1213 limit). Values exceeding this are silently truncated at the byte boundary.
+(RFC 1213 limit). Values exceeding this are silently truncated at a UTF-8 rune boundary (≤255 bytes), so a multi-byte rune is never split.
 This is enforced in `snmputil.NormaliseName`.
 
 ### sysUpTime (1.3.6.1.2.1.1.3.0)

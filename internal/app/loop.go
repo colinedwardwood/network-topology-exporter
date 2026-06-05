@@ -138,10 +138,17 @@ func (lc LoopConfig) OtlpPush(ctx context.Context, fn func(context.Context) erro
 // running discovery loop wedges. The wedged loop cannot set its own gauge (it
 // is stuck inside a cycle), so this independent goroutine ticks roughly every
 // `interval` and, once at least one cycle has completed (status != nil), sets
-// the gauge to 1 when the last cycle is older than maxStale and back to 0 when
-// a fresh cycle has landed inside the window. It deliberately does nothing
-// before the first cycle so it never fights the cold-start GraphStale=1 /
-// first-success GraphStale=0 logic in RunDiscoveryLoop.
+// the gauge to 1 when the last cycle is older than maxStale. It deliberately
+// does nothing before the first cycle so it never fights the cold-start
+// GraphStale=1 / first-success GraphStale=0 logic in RunDiscoveryLoop.
+//
+// Write-ownership split (single clearer): the watchdog ONLY escalates — it
+// sets the gauge to 1 when stale and never clears it. RunDiscoveryLoop
+// exclusively owns clearing, setting GraphStale=0 on each successful cycle.
+// Two independent writers (the watchdog also clearing on its own ticker)
+// caused gauge flicker / alert-noise on slow-but-healthy cycles. On a
+// stall→recovery the loop's next successful cycle clears the gauge via its
+// existing success-path Set(0); the watchdog need not (and must not) clear it.
 //
 // The watchdog is only started when a local discovery loop runs (hub mode is
 // excluded by the caller) and when the gate is enabled (maxStale > 0). It stops
@@ -164,10 +171,10 @@ func RunStaleWatchdog(ctx context.Context, status *atomic.Pointer[httpx.CycleSta
 				// owned by RunDiscoveryLoop untouched.
 				continue
 			}
+			// Escalate-only: set stale when wedged, never clear. Clearing is
+			// owned exclusively by RunDiscoveryLoop's success path (Set(0)).
 			if httpx.IsStale(now(), s.LastCycleAt, maxStale) {
 				m.GraphStale.Set(1)
-			} else {
-				m.GraphStale.Set(0)
 			}
 		}
 	}
