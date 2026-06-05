@@ -252,6 +252,14 @@ func Run(ctx context.Context, args []string) int {
 			// graph. One-shot: on recovery the goroutine exits (the deferred
 			// workerDone.Done fires) and shutdown proceeds; the process keeps
 			// serving the last-published metrics.
+			// cancel() is registered before recoverGoroutine so it runs AFTER
+			// the recover (defers are LIFO). A recovered hub-serve panic leaves
+			// the listener dead but the goroutine alive; without this the
+			// process kept /readyz ready and /healthz hub-inert, so Kubernetes
+			// never restarted the pod. Treat a recovered panic like a serve
+			// failure: cancel so shutdown/restart proceeds. context.CancelFunc
+			// is idempotent, so the normal-exit double-cancel is harmless.
+			defer cancel()
 			defer recoverGoroutine("hub_serve", logger, m)
 			if err := hub.Serve(ctx); err != nil && ctx.Err() == nil {
 				logger.Error("hub federation server error", "error", err)
@@ -410,15 +418,25 @@ func Run(ctx context.Context, args []string) int {
 			logger.Error("pprof debug server shutdown error", "error", err)
 		}
 	}
+	drainTimeout := time.Duration(float64(cfg.Discovery.Interval)*cfg.Discovery.CycleBudgetFraction) + cfg.Discovery.TimeoutPerDevice
 	drainDone := make(chan struct{})
 	go func() { workerDone.Wait(); close(drainDone) }()
 	select {
 	case <-drainDone:
-	case <-time.After(time.Duration(float64(cfg.Discovery.Interval)*cfg.Discovery.CycleBudgetFraction) + cfg.Discovery.TimeoutPerDevice):
+	case <-time.After(drainTimeout):
 		logger.Warn("discovery drain timed out, forcing exit")
 	}
-	otlpWg.Wait()
-	logger.Info("otlp push goroutines drained")
+	// Bound the OTLP drain on the same timeout as the discovery drain so a
+	// stuck OTLP push cannot hang shutdown indefinitely (the discovery drain is
+	// bounded but this Wait previously was not).
+	otlpDone := make(chan struct{})
+	go func() { otlpWg.Wait(); close(otlpDone) }()
+	select {
+	case <-otlpDone:
+		logger.Info("otlp push goroutines drained")
+	case <-time.After(drainTimeout):
+		logger.Warn("otlp drain timed out, forcing exit")
+	}
 	// Issue #83: close the SNMP session pool after discovery has drained so no
 	// in-flight walk loses its session mid-walk. Closing every pooled session
 	// also clears the credentials they held. No-op when the pool is disabled.
