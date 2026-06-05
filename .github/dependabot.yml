@@ -1,0 +1,44 @@
+version: 2
+
+updates:
+  # Go module dependencies. Grouped so a routine bump week is one PR, not ten.
+  # The govulncheck CI job gates security relevance; this keeps deps fresh.
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    groups:
+      go-minor-patch:
+        update-types:
+          - minor
+          - patch
+      # Major bumps stay individual — they may carry breaking changes.
+
+  # GitHub Actions used by the workflows in .github/workflows/.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        update-types:
+          - minor
+          - patch
+
+  # The runtime/builder base images in the Dockerfile.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps"
