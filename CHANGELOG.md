@@ -10,6 +10,13 @@ v1.3.1 lands under this milestone instead, renamed to
 
 ### Security & correctness (post-merge hardening)
 
+- **Nightly fuzz no longer false-alarms (#107).** The `fuzz-nightly` workflow ran
+  `-fuzztime=10m` with the default 10m test timeout, so the test deadline raced
+  the fuzz deadline and a clean run died with a benign `context deadline
+  exceeded` — auto-filing a HIGH "regression detected" issue with no actual
+  crash. Fixed: `-timeout=15m` gives headroom over `-fuzztime`, and the step now
+  fails (and files an issue) only when Go actually writes a crashing input, so a
+  benign fuzztime deadline can never page as a security regression again.
 - **SNMP transport goroutines now recover from panics.** The raw `go func()`
   bodies in `internal/discovery/snmp` that call gosnmp `BulkWalkAll`/`WalkAll`/
   `Get` previously ran with no `recover()` on their stack, so a panic decoding a

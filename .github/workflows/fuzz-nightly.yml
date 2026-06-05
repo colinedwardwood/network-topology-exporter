@@ -23,19 +23,46 @@ jobs:
           go-version: '1.26.4'
           cache: true
 
-      # 10 minutes per target across 16 fuzz harnesses. Coverage-guided
+      # 10 minutes per target across the fuzz harnesses. Coverage-guided
       # engine reaches deeper paths than the per-PR short pass.
+      #
+      # Two correctness points learned from a false-positive regression alert
+      # (#107):
+      #   1. -timeout MUST exceed -fuzztime. With the default 10m test timeout
+      #      and -fuzztime=10m the test deadline races the fuzz deadline and the
+      #      run dies with a benign "context deadline exceeded" — no crash. We
+      #      give the timeout generous headroom.
+      #   2. Only a GENUINE crasher must fail the build. Go writes a minimised
+      #      crashing input ("Failing input written to testdata/fuzz/...") on a
+      #      real find; a fuzztime-deadline artifact does not. We fail (and let
+      #      the next step file an issue) only when a crasher was actually found,
+      #      so a clean deep run can never page as a security regression again.
       - name: deep fuzz parsers
         id: fuzz
         run: |
-          set -e
+          set -uo pipefail
+          crash=0
           for pkg in bgp fdb ospf mpls lldp snmp; do
             FUZZ_TARGETS=$(go test -list 'Fuzz.*' "./internal/discovery/$pkg" | grep '^Fuzz')
             for t in $FUZZ_TARGETS; do
               echo "▼ $pkg.$t"
-              go test -run=NONE -fuzz="^$t\$" -fuzztime=10m "./internal/discovery/$pkg"
+              if out=$(go test -run=NONE -fuzz="^$t\$" -fuzztime=10m -timeout=15m "./internal/discovery/$pkg" 2>&1); then
+                printf '%s\n' "$out"
+                continue
+              fi
+              printf '%s\n' "$out"
+              if printf '%s\n' "$out" | grep -qE 'Failing input written|^[[:space:]]*panic:'; then
+                echo "::error::fuzz crash found in $pkg.$t — crasher written to testdata/fuzz/"
+                crash=1
+              elif printf '%s\n' "$out" | grep -q 'context deadline exceeded'; then
+                echo "::warning::$pkg.$t reached the fuzztime deadline with no crasher (benign); continuing"
+              else
+                echo "::error::$pkg.$t fuzz run failed for a non-crash reason (build/setup); investigate"
+                crash=1
+              fi
             done
           done
+          exit "$crash"
 
       - name: upload fuzz corpus on failure
         if: failure()
