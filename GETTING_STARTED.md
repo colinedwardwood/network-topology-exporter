@@ -250,7 +250,7 @@ federation:
   role: spoke
   spoke:
     spoke_id: dc1-spoke-a
-    hub_url: https://hub.internal:9101/spoke/push
+    hub_url: https://hub.internal:9101   # base URL only — the exporter appends the /spoke/push path
     tls_ca_cert: /etc/topology-exporter/tls/ca.pem
     tls_cert: /etc/topology-exporter/tls/spoke.pem
     tls_key: /etc/topology-exporter/tls/spoke-key.pem
