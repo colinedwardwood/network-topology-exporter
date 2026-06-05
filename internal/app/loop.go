@@ -108,6 +108,12 @@ func (lc LoopConfig) OtlpPush(ctx context.Context, fn func(context.Context) erro
 		lc.OtlpWg.Add(1)
 	}
 	go func() { //nolint:gosec // G118: OTLP push must survive the originating cycle's context — the push is a side-effect of a completed cycle and should reach the collector even if the cycle's deadline already expired
+		// Recover a panic in the push body so a bug in the OTLP exporter
+		// cannot crash the process. Registered first so it runs LAST in the
+		// defer chain — after the semaphore release and OtlpWg.Done below —
+		// keeping the concurrency cap and shutdown drain correct on panic.
+		// One-shot: the push goroutine exits on recovery.
+		defer recoverGoroutine("otlp_push", lc.Logger, lc.M)
 		if lc.OtlpWg != nil {
 			defer lc.OtlpWg.Done()
 		}
@@ -230,6 +236,12 @@ func RunDiscoveryLoop(ctx context.Context, lc LoopConfig) {
 		snapWg.Add(1)
 		go func() {
 			defer snapWg.Done()
+			// Recover a panic in the snapshot writer so a bug in the write
+			// path cannot crash the process (and, in spoke mode, take the
+			// live discovery loop with it). One-shot: on recovery the writer
+			// exits; the loop's enqueue path then trips queue_full and counts
+			// the dropped snapshots, so the failure stays observable.
+			defer recoverGoroutine("snapshot_writer", lc.Logger, lc.M)
 			var writeDone chan error // non-nil while a write goroutine is in flight
 			for f := range snapshotCh {
 				lc.M.SnapshotQueueDepth.Set(float64(len(snapshotCh)))
@@ -258,7 +270,15 @@ func RunDiscoveryLoop(ctx context.Context, lc LoopConfig) {
 					}
 				}
 				writeDone = make(chan error, 1)
-				go func(f snapshot.File, done chan error) { done <- snapshot.Write(lc.Cfg.Snapshot.Path, f) }(f, writeDone)
+				go func(f snapshot.File, done chan error) {
+					// Recover a panic in snapshot.Write so it cannot crash the
+					// process; the buffered done channel still receives nothing
+					// on panic, so the parent's timeout branch handles it as a
+					// stalled write. The deferred recover runs before the
+					// goroutine unwinds, so the counter is bumped here too.
+					defer recoverGoroutine("snapshot_writer", lc.Logger, lc.M)
+					done <- snapshot.Write(lc.Cfg.Snapshot.Path, f)
+				}(f, writeDone)
 				select {
 				case err := <-writeDone:
 					writeDone = nil
@@ -287,6 +307,13 @@ func RunDiscoveryLoop(ctx context.Context, lc LoopConfig) {
 	prevAboveThreshold := false
 	lastWarnCycle := -LargeTopologyWarnCooldownCycles
 	cycle := func() {
+		// Per-cycle panic recovery (ops hardening): the discovery loop is
+		// long-lived, so a panic in one cycle's reconcile/diff/publish path
+		// must NOT kill the scheduler — recover here, count it under
+		// discovery_loop, and let the next tick run a fresh cycle. The
+		// per-device probe recover in cycle.go covers panics inside a single
+		// target's walk; this covers everything else in a cycle.
+		defer recoverGoroutine("discovery_loop", lc.Logger, lc.M)
 		cycleNum++
 		lc.M.GoRoutines.Set(float64(runtime.NumGoroutine()))
 		start := time.Now()

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -86,6 +87,36 @@ func NewHub(cfg config.FederationConfig, m *metrics.Metrics, logger *slog.Logger
 		h.snapshotCh = make(chan discovery.Graph, 1)
 	}
 	return h
+}
+
+// recoverGoroutine is the hub's panic-recovery body for its long-lived
+// background goroutines (eviction loop, snapshot writer). Without it, a panic
+// in any of them crashes the whole aggregator and destroys the combined graph
+// for every spoke. It mirrors the per-device recover block in
+// internal/app/cycle.go: it logs the panic value plus stack trace at Error
+// level, increments network_topology_panics_total{site} so the bug is never
+// hidden silently, and returns cleanly (does NOT re-panic) so the goroutine
+// dies gracefully. The hub already holds its own *metrics.Metrics handle
+// (h.m), so no injection seam is needed here — unlike the discovery modules,
+// the federation package legitimately depends on internal/metrics. h.m is
+// tolerated as nil (skips the counter) so tests can construct a bare Hub.
+//
+// Used as the first deferred call at the top of a goroutine body, e.g.
+// `defer h.recoverGoroutine("hub_rebuild")`. site must be one of the closed,
+// low-cardinality strings documented on metrics.PanicsRecoveredTotal.
+func (h *Hub) recoverGoroutine(site string) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	h.logger.Error("hub background goroutine panicked; recovered",
+		"site", site,
+		"panic", r,
+		"stack", string(debug.Stack()),
+	)
+	if h.m != nil {
+		h.m.PanicsRecoveredTotal.WithLabelValues(site).Inc()
+	}
 }
 
 // RestoreGraph populates hub metrics from a snapshot loaded at startup so the
@@ -890,7 +921,15 @@ func (h *Hub) runEviction(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			h.evictSilentSpokes()
+			// Per-tick recovery: evictSilentSpokes rebuilds and republishes
+			// the combined graph, so a panic there (site hub_rebuild) must not
+			// kill the eviction loop. Recover, count it, and let the next tick
+			// try again. Wrapped in a closure so the deferred recover scopes to
+			// one tick rather than the whole goroutine.
+			func() {
+				defer h.recoverGoroutine("hub_rebuild")
+				h.evictSilentSpokes()
+			}()
 		}
 	}
 }
@@ -1033,6 +1072,11 @@ func (h *Hub) writeSnapshot(g discovery.Graph) {
 // hub. It drains h.snapshotCh one graph at a time, so an NFS stall cannot
 // accumulate goroutines across spoke pushes.
 func (h *Hub) runSnapshotWriter(ctx context.Context) {
+	// Recover a panic in the snapshot writer so a bug in the write path
+	// cannot crash the aggregator. One-shot: on recovery the writer exits;
+	// subsequent writeSnapshotAsync calls then trip queue_full and count the
+	// dropped snapshots, so the failure stays observable.
+	defer h.recoverGoroutine("hub_snapshot_writer")
 	var writeDone chan struct{} // non-nil while a write goroutine is in flight
 	for {
 		select {
@@ -1053,8 +1097,13 @@ func (h *Hub) runSnapshotWriter(ctx context.Context) {
 			}
 			writeDone = make(chan struct{}, 1)
 			go func(g discovery.Graph, done chan struct{}) {
+				// Recover a panic in writeSnapshot so it cannot crash the
+				// process; close(done) still runs via defer so the parent's
+				// select unblocks on the success branch rather than timing
+				// out. Registered first so it runs after the close.
+				defer h.recoverGoroutine("hub_snapshot_writer")
+				defer close(done)
 				h.writeSnapshot(g)
-				close(done)
 			}(g, writeDone)
 			select {
 			case <-writeDone:

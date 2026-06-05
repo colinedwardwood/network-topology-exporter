@@ -209,6 +209,15 @@ type Metrics struct {
 	//     skipped (BGP still falls through to the observable RFC 4273 path).
 	// No device, IP, or sysObjectID is ever a label value here.
 	SystemWalkAnomalyTotal *prometheus.CounterVec
+
+	// PanicsRecoveredTotal counts panics recovered in long-lived background
+	// goroutines, partitioned by a low-cardinality `site` label (a closed set
+	// of short stable strings: discovery_loop, snapshot_writer, otlp_push,
+	// hub_serve, hub_rebuild, hub_eviction, hub_snapshot_writer, fdb_vlan_walk,
+	// stale_watchdog). Each recovered panic logs the stack at Error level and
+	// bumps this counter so the bug is never hidden silently. Any non-zero
+	// value indicates a bug — alert on increase.
+	PanicsRecoveredTotal *prometheus.CounterVec
 }
 
 // New builds and registers the exporter's metric set. emitBoundaryObs should
@@ -380,6 +389,10 @@ func New(emitBoundaryObs bool) *Metrics {
 			Name: "network_topology_system_walk_anomaly_total",
 			Help: "SNMP system-group walk outcomes that silently degrade downstream behaviour. reason ∈ {empty_sysname, unknown_vendor}.",
 		}, []string{"reason"}),
+		PanicsRecoveredTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "network_topology_panics_total",
+			Help: "Panics recovered in background goroutines, by site. Any non-zero value indicates a bug — alert on increase.",
+		}, []string{"site"}),
 		MetricsPayloadBytes: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name: "network_topology_metrics_payload_bytes",
 			Help: "Response body size of one /metrics scrape in bytes. Tracks growth as the topology scales.",
@@ -432,6 +445,7 @@ func New(emitBoundaryObs bool) *Metrics {
 		m.BGPWalkerOutcomeTotal,
 		m.WalkerOutcomeTotal,
 		m.SystemWalkAnomalyTotal,
+		m.PanicsRecoveredTotal,
 	)
 
 	return m

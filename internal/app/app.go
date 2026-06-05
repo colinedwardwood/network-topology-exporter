@@ -247,6 +247,12 @@ func Run(ctx context.Context, args []string) int {
 		workerDone.Add(1)
 		go func() {
 			defer workerDone.Done()
+			// Recover a panic in our hub serve/accept body so one bad push
+			// path cannot crash the whole aggregator and lose every spoke's
+			// graph. One-shot: on recovery the goroutine exits (the deferred
+			// workerDone.Done fires) and shutdown proceeds; the process keeps
+			// serving the last-published metrics.
+			defer recoverGoroutine("hub_serve", logger, m)
 			if err := hub.Serve(ctx); err != nil && ctx.Err() == nil {
 				logger.Error("hub federation server error", "error", err)
 				cancel()
@@ -313,6 +319,11 @@ func Run(ctx context.Context, args []string) int {
 			workerDone.Add(1)
 			go func() {
 				defer workerDone.Done()
+				// Recover a panic in the watchdog so a bug in the staleness
+				// gate cannot crash the process. One-shot: on recovery the
+				// watchdog exits, leaving the /healthz gate to fall back to
+				// the cycle-timestamp check the handler already performs.
+				defer recoverGoroutine("stale_watchdog", logger, m)
 				RunStaleWatchdog(ctx, &status, m, cfg.Discovery.Interval, livenessMaxStale, time.Now)
 			}()
 		}
@@ -320,6 +331,13 @@ func Run(ctx context.Context, args []string) int {
 		workerDone.Add(1)
 		go func() {
 			defer workerDone.Done()
+			// Recover a panic in the discovery scheduler so one wedged
+			// cycle cannot crash the process. Per-cycle work is already
+			// panic-isolated at two finer layers — the per-device probe
+			// recover in cycle.go and the per-cycle recover added inside
+			// RunDiscoveryLoop — so reaching here means the scheduler shell
+			// itself panicked; recover, exit, and let shutdown drain.
+			defer recoverGoroutine("discovery_loop", logger, m)
 			RunDiscoveryLoop(ctx, LoopConfig{
 				Cancel:        cancel,
 				Logger:        logger,

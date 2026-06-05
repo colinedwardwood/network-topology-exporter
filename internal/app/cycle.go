@@ -263,6 +263,14 @@ func RunCycle(
 			params.UseBGPV2MIB = !cfg.Modules.BGP.DisableV2MIB
 			params.WalkerMetrics = walkerMetrics
 			params.WarnLimiter = warnLimiter
+			// Nil-tolerant panic-reporter seam (ops hardening): the FDB module
+			// spawns one goroutine per VLAN and recovers a panic locally so one
+			// bad VLAN can't crash discovery; this closure lets it bump
+			// network_topology_panics_total{site} without the discovery package
+			// importing the prometheus client (mirrors the WalkerMetrics seam).
+			params.PanicReporter = func(site string) {
+				m.PanicsRecoveredTotal.WithLabelValues(site).Inc()
+			}
 			// Issue #83: opt-in per-target SNMP session pool. When pool is nil
 			// (the default), params.Pool stays nil and snmpwalk.Acquire uses the
 			// fresh open+close path — byte-identical to pre-#83 behaviour. When a
