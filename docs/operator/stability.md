@@ -29,19 +29,19 @@ The frozen artefact is `config/example.yaml`. Every key documented there is part
 
 | Key group | Representative keys |
 |---|---|
-| Discovery controls | `discovery.interval`, `discovery.timeout_per_device`, `discovery.parallelism`, `discovery.cycle_budget_fraction`, `discovery.scope.cidr_allow_list`, `discovery.unconfirmed_link_ttl_cycles` |
+| Discovery controls | `discovery.interval`, `discovery.timeout_per_device`, `discovery.timeout_per_module`, `discovery.parallelism`, `discovery.cycle_budget_fraction`, `discovery.scope.cidr_allow_list`, `discovery.unconfirmed_link_ttl_cycles`, `discovery.max_graph_devices`, `discovery.max_graph_edges`, `discovery.per_target_pdu_rate_per_second` (#72), `discovery.target_overrides` (#74), `discovery.snmp.session_pool.{enabled,max_idle}` (#83) |
 | Module toggles | `modules.{lldp,cdp,bgp,ospf,fdb,arp,isis,mpls_te}.enabled` |
 | BGP walker | `modules.bgp.disable_v2_mib` |
 | Credentials | `credentials.profiles[].{name,type,community_env,username_env,auth_protocol,auth_key_env,priv_protocol,priv_key_env}`, `credentials.assignments`, `credentials.fallback_order`, `credentials.trial_rate_per_second` |
 | Snapshot | `snapshot.path` |
 | Federation | `federation.role`, `federation.spoke_timeout`, `federation.known_inter_domain_links`, `federation.hub.*`, `federation.spoke.*` |
-| Output | `output.otlp.{enabled,endpoint,timeout,heartbeat_cycles}` |
-| Listen | `listen.web_config_file`, `listen.tls_cert_file` (deprecated, removed in v1.5.0) |
+| Output | `output.otlp.{enabled,endpoint,timeout,heartbeat_cycles,protocol}`, `output.otlp.traces.{enabled,sample_rate}` |
+| Listen | `listen.addr`, `listen.web_config_file`, `listen.debug_listen_addr` (#69) |
 | Targets | `targets[].{host,port,site,labels}` |
 
 **Breaking change** means: a key is renamed, removed, or its accepted value set changes in a way that requires operator action before upgrade. Additive changes (new optional keys with sensible defaults) are not breaking.
 
-**Deprecated keys** in flight: `modules.bgp.use_v2_mib` (→ `disable_v2_mib`), `federation.hub.strict_device_name_matching` (→ `loose_device_name_matching`), `listen.tls_cert_file`/`listen.tls_key_file` (→ `listen.web_config_file`). All three are accepted with a startup deprecation warning through v1.4.x and will be removed in v1.5.0.
+**Key naming history:** the BGP walker toggle is `modules.bgp.disable_v2_mib` and the hub name-matching toggle is `federation.hub.loose_device_name_matching`. TLS on the main listener is configured via `listen.web_config_file` (exporter-toolkit web-config); there is no `listen.tls_cert_file`/`listen.tls_key_file` key. Config is parsed with `KnownFields(true)`, so an unrecognised key is a hard startup failure rather than a silent no-op.
 
 ### 2. Metric names and label sets
 
@@ -61,6 +61,13 @@ Key metrics (summary — full details in `docs/metrics.md`):
 | `network_topology_discovery_cycle_duration_seconds` | histogram | (none) |
 | `network_topology_discovery_module_duration_seconds` | histogram | `module` |
 | `network_topology_bgp_walker_outcome_total` | counter | `walker`, `outcome` |
+| `network_topology_walker_outcome_total` | counter | `walker`, `outcome` (#98) |
+| `network_topology_system_walk_anomaly_total` | counter | `reason` (#101) |
+| `network_topology_snmp_rate_limit_wait_seconds` | histogram | (none) (#72) |
+| `network_topology_snmp_session_pool_size` | gauge | (none) (#83) |
+| `network_topology_snmp_session_pool_hits_total` | counter | (none) (#83) |
+| `network_topology_snmp_session_pool_misses_total` | counter | (none) (#83) |
+| `network_topology_snmp_session_pool_evictions_total` | counter | `reason` (#83) |
 | `network_topology_federation_spoke_up` | gauge | `spoke_id` |
 | `network_topology_federation_spoke_push_failures_total` | counter | (none) |
 | `network_topology_otlp_push_total` | counter | `status`, `reason` |

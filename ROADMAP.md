@@ -97,19 +97,22 @@ without reading source:
 
 ### `v1.7.0` — Self-observability
 
-The exporter's own observability story is currently metrics + structured
-logs. Two additions close the diagnostic gap operators hit during slow
-cycles, federation-debug sessions, and memory-pressure incidents:
+The exporter's own observability story is metrics + structured
+logs, plus the two additions below that close the diagnostic gap operators
+hit during slow cycles, federation-debug sessions, and memory-pressure
+incidents. Both have shipped into the codebase:
 
-- **OpenTelemetry tracing of the discovery cycle** — per-cycle root span,
-  per-target child spans, per-module child spans, credential-resolution
-  spans, federation-push spans linked across hub/spoke via W3C trace
-  context. Opt-in via `output.otlp.traces.enabled`; reuses the existing
-  OTLP endpoint and auth. Probabilistic sampling at low default. Note:
-  this traces the *exporter's own execution* — exporting traces of
-  monitored network state remains out of scope.
-- **pprof admin endpoint** — `net/http/pprof` on an operator-configured
-  separate listen port (off by default). Gives operators the standard
+- **OpenTelemetry tracing of the discovery cycle (#68 — done)** — per-cycle
+  root span, per-target child spans, per-module child spans,
+  credential-resolution spans, federation-push spans linked across hub/spoke
+  via W3C trace context. Opt-in via `output.otlp.traces.enabled`; reuses the
+  existing OTLP endpoint and auth. Probabilistic sampling via
+  `output.otlp.traces.sample_rate` (default 0.1). Note: this traces the
+  *exporter's own execution* — exporting traces of monitored network state
+  remains out of scope.
+- **pprof admin endpoint (#69 — done)** — `net/http/pprof` on an
+  operator-configured separate listen port (`listen.debug_listen_addr`, off
+  by default). Gives operators the standard
   `/debug/pprof/{profile,heap,goroutine,allocs,mutex,block}` endpoints for
   on-demand diagnosis without committing to continuous profiling.
 

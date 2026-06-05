@@ -6,7 +6,7 @@ The project has not yet reached a stable v1.0 GA (see the pre-release notice in 
 
 | Version series | Supported |
 |---|---|
-| Current minor (latest `-rc.N` tag) | Yes — patches are applied and a new RC is cut |
+| Current minor (latest release / RC tag, e.g. `v1.3.1-rc1`) | Yes — patches are applied and a new RC is cut |
 | Previous minor | Best-effort: critical-severity issues are backported if the fix is self-contained; lower severity is not |
 | Any version two or more minors behind | Not supported |
 

@@ -32,6 +32,8 @@ The path to a real v1.0 GA — what's left, the per-release plan, and what's int
 
 ## Quickstart
 
+New here? [`GETTING_STARTED.md`](GETTING_STARTED.md) is a copy-pasteable, step-by-step walkthrough for both standalone and hub-spoke modes.
+
 ```bash
 go build -o bin/topology-exporter ./cmd/topology-exporter
 ./bin/topology-exporter --config.file=config/example.yaml
@@ -99,7 +101,7 @@ The Kustomize overlays `standalone`, `hub`, and `spoke` map to the corresponding
 | `network_topology_graph_stale` | gauge (0/1) | (none) | 1 while serving the startup snapshot; 0 after first live cycle. |
 | `network_topology_snapshot_last_written_timestamp_seconds` | gauge | (none) | Wall-clock time of most recent snapshot write. |
 | `network_topology_snapshot_loaded_devices_total` | gauge | (none) | Device count loaded from snapshot at startup. |
-| `network_topology_discovery_devices_total` | gauge | `status` (success\|failed\|timeout) | Per-cycle device-discovery outcome. |
+| `network_topology_discovery_devices_total` | gauge | `status` (success\|failed), `reason` | Per-cycle device-discovery outcome. `status=success` rows carry `reason=n/a`; failures carry a `reason` sub-label (e.g. `reason=timeout`). |
 | `network_topology_discovery_cycle_duration_seconds` | histogram | (none) | End-to-end discovery cycle wall time. |
 | `network_topology_discovery_module_duration_seconds` | histogram | `module` | Per-module wall time within a cycle. |
 | `network_topology_snmp_walks_total` | counter | `status` (ok\|timeout\|error) | SNMP walk outcomes, aggregated across all devices. |

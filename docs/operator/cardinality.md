@@ -19,7 +19,7 @@ Labels: `src_device`, `src_port`, `dst_device`, `dst_port`, `discovery_proto`, `
 Cardinality = number of reconciled edges. Expected: 1–10 000 per instance.
 `src_port` and `dst_port` are truncated to 128 bytes. `discovery_proto` is
 one of: `lldp`, `cdp`, `fdb`, `bgp`, `ospf`, `isis`, `mpls_te`, `configured`.
-`link_kind` mirrors `discovery_proto`. `direction` is `bidirectional` or `unidirectional`.
+`link_kind` is an independent transport-semantics classifier — one of `ethernet` (L2 LLDP/CDP/FDB observations), `ip` (routing-protocol peer adjacencies: BGP, OSPF, IS-IS), `mpls-te` (MPLS TE tunnels), or `logical` (tunnel/VPN endpoints). It is derived from the link's physical/transport nature, not from how it was discovered, so it does not mirror `discovery_proto`. `direction` is `bidirectional` or `unidirectional`.
 
 ## network_topology_discovery_decode_issues_total
 Labels: `module`, `oid`, `reason`

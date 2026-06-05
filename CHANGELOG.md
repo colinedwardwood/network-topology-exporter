@@ -330,6 +330,20 @@ v1.3.1 lands under this milestone instead, renamed to
 
 ### Documentation
 
+- **New `GETTING_STARTED.md`** — a copy-pasteable step-by-step for first-time
+  users covering both standalone and hub-spoke modes, with all three run paths
+  (binary, Docker, Kubernetes/Kustomize), the minimal valid config for each,
+  mTLS setup for federation, and verification `curl`s. Example configs are
+  validated against `config.Load` under strict decoding.
+- **Documentation refresh against the current codebase.** A read-only audit of
+  every doc surfaced and fixed staleness: the `discovery_devices_total` label
+  set, the `graph_updates_rejected_total` reject-reason enum (5 values),
+  the size-budget reject status (HTTP 413, not 503), the OTLP schema URL
+  (semconv v1.26.0), the LibreNMS comparison's fabricated `discovery.Edge`
+  struct and nonexistent config keys, the default `discovery.interval` (60s)
+  and `parallelism` (32), a removed `listen.tls_cert_file` contract key, the
+  shipped #72 PDU-rate-limit (no longer a threat-model "gap"), and numerous
+  drifted `file:line` references.
 - **Per-walker failure-mode coverage audit (#67).** New
   `docs/operator/failure-modes.md` — a dependency × failure-mode ×
   operator-signal matrix for every discovery walker (LLDP, CDP, OSPF, IS-IS,
