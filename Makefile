@@ -39,6 +39,15 @@ lint: ## golangci-lint
 	@command -v golangci-lint >/dev/null || { echo "install: https://golangci-lint.run/usage/install/"; exit 1; }
 	golangci-lint run ./...
 
+.PHONY: bench
+bench: ## Run Go benchmarks (compare across commits with benchstat)
+	go test -run='^$$' -bench=. -benchmem -count=6 ./...
+
+.PHONY: licenses
+licenses: ## Check dependency licenses (forbidden/unknown fail)
+	@command -v go-licenses >/dev/null || go install github.com/google/go-licenses@latest
+	go-licenses check ./... --disallowed_types=forbidden,unknown --ignore github.com/colinedwardwood/network-topology-exporter
+
 .PHONY: fmt
 fmt: ## Format
 	gofmt -s -w .

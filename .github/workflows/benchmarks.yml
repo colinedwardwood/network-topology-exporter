@@ -1,0 +1,57 @@
+name: benchmarks
+
+# Report-only benchmark regression tracking. CI runners have variable
+# performance, so this does NOT hard-fail on a regression (that would be flaky);
+# it runs the Go benchmarks on the PR head and on the base, compares them with
+# benchstat, and posts the delta to the job summary so regressions are visible
+# in review. Run `make bench` locally and compare with benchstat for a
+# controlled measurement before trusting a number.
+on:
+  pull_request:
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/benchmarks.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  benchstat:
+    name: benchmark comparison (report-only)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.4"
+          cache: true
+
+      - name: install benchstat
+        run: go install golang.org/x/perf/cmd/benchstat@latest
+
+      - name: benchmark PR head
+        run: go test -run='^$' -bench=. -benchmem -count=6 ./... | tee /tmp/new.txt
+
+      - name: benchmark base
+        run: |
+          git checkout --quiet "${{ github.event.pull_request.base.sha }}"
+          go test -run='^$' -bench=. -benchmem -count=6 ./... | tee /tmp/old.txt
+          git checkout --quiet -
+
+      - name: compare (base → PR)
+        run: |
+          {
+            echo '## Benchmark comparison (base → PR head)'
+            echo '`benchstat` over 6 runs each. CI runner variance is high — treat'
+            echo 'small deltas as noise; investigate a consistent >20% geomean change.'
+            echo
+            echo '```'
+            benchstat /tmp/old.txt /tmp/new.txt || echo "benchstat could not compare (no common benchmarks or a run failed)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
