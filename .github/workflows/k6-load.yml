@@ -1,0 +1,52 @@
+name: k6-load
+
+# Best-effort k6 load smoke for /metrics. A fresh exporter has little
+# cardinality, so this only proves the scrape surface serves cleanly under
+# concurrency — it does NOT block PRs (continue-on-error). Real capacity testing
+# runs against a large-topology instance; see tests/load/k6/README.md.
+on:
+  pull_request:
+    paths:
+      - "tests/load/k6/**"
+      - ".github/workflows/k6-load.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  k6-smoke:
+    name: k6 /metrics load smoke (best-effort)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.4"
+          cache: true
+
+      - name: build and start the exporter
+        run: |
+          go build -o /tmp/topology-exporter ./cmd/topology-exporter
+          /tmp/topology-exporter \
+            --config.file=config/example.yaml \
+            --web.listen-address=:9100 &
+          echo "waiting for readiness..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:9100/readyz >/dev/null; then echo "ready"; break; fi
+            sleep 1
+          done
+
+      - name: install k6
+        uses: grafana/setup-k6-action@v1
+
+      - name: run /metrics scrape load
+        uses: grafana/run-k6-action@v1
+        env:
+          TARGET: http://localhost:9100
+          VUS: "20"
+          DURATION: "20s"
+        with:
+          path: tests/load/k6/scrape_metrics.js

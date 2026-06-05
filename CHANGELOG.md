@@ -212,6 +212,22 @@ v1.3.1 lands under this milestone instead, renamed to
   auto-discovers every `Fuzz*` target under `internal/discovery/` (16 today), so
   new harnesses are picked up with no edit. The upstream `google/oss-fuzz`
   application and PR are tracked as remaining steps on #84.
+- **Quality & supply-chain hardening.**
+  - **Goroutine/fd-leak detection** (`go.uber.org/goleak`) in `internal/app` and
+    `internal/discovery/snmp` — guards the session-pool eviction goroutine, the
+    pprof debug server, and the discovery-loop workers against leaks.
+  - **Total test coverage raised 80% → 85%** (`internal/app` 34%→60%,
+    `internal/tracing` 64%→91%) and a **CI coverage floor** (83%) so it can't
+    silently erode.
+  - **SBOM** (SPDX, via syft) generated for the released image, attested to the
+    registry and attached to the release + offline tarball — completing the
+    cosign + SLSA + SBOM supply-chain trio.
+  - **License-compliance CI gate** (`go-licenses`, forbidden/unknown disallowed)
+    so a future incompatible or unidentified transitive dependency fails CI.
+  - **Dependabot** (gomod / github-actions / docker), **CODEOWNERS**, and a **PR
+    template** modelled on Grafana OSS conventions.
+  - **Benchmark regression tracking** (report-only benchstat diff on PRs) and a
+    **k6 load test** for the `/metrics` scrape surface (`tests/load/k6/`).
 
 ### Discovery
 

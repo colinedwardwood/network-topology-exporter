@@ -1,0 +1,35 @@
+# Code ownership for review routing. Every path requires review from the
+# owner before merge (when branch protection enforces CODEOWNERS reviews).
+# Path-specific entries make ownership explicit as the project grows and more
+# contributors come on; today they all resolve to the maintainer.
+#
+# Order matters: the LAST matching pattern wins for a given file.
+
+# Default owner for everything.
+*                                   @colinedwardwood
+
+# Discovery walkers and the SNMP layer — the core protocol-correctness surface.
+/internal/discovery/                @colinedwardwood
+
+# Graph reconciliation and federation — cross-domain correctness and HA.
+/internal/graph/                    @colinedwardwood
+/internal/federation/              @colinedwardwood
+
+# Credential handling and config schema — security-sensitive.
+/internal/credentials/              @colinedwardwood
+/internal/config/                   @colinedwardwood
+
+# Metrics surface — the public contract operators alert on.
+/internal/metrics/                  @colinedwardwood
+/docs/metrics.md                    @colinedwardwood
+
+# CI, release pipeline, and supply-chain config.
+/.github/                           @colinedwardwood
+/Dockerfile                         @colinedwardwood
+/oss-fuzz/                          @colinedwardwood
+
+# Deployment manifests.
+/deploy/                            @colinedwardwood
+
+# Operator-facing documentation.
+/docs/                              @colinedwardwood
