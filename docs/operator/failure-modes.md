@@ -321,16 +321,17 @@ device/IP/OID label).
 ## ARP — sub-walk inside `RunCycle` (no module package)
 
 There is **no** `internal/discovery/arp/` package. ARP is enrichment only
-(MAC→IP for FDB synthesis), gated by `modules.arp.enabled` (`config.go:241-246`),
-run inline via `snmputil.WalkARPTable` (`snmp/pdu.go:197-234`). The
+(MAC→IP for FDB synthesis), gated by `modules.arp.enabled` (the `ARP ModuleToggle`
+field on `ModulesConfig` in `internal/config/config.go`),
+run inline via `snmputil.WalkARPTable` (`internal/discovery/snmp/pdu.go`). The
 `architecture.md` "Intentional non-features" section confirms ARP is not an
 edge source.
 
 | Dependency | Failure | Behaviour | Operator signal |
 |---|---|---|---|
-| ARP SNMP session (`Open`) | fail | non-fatal | `slog.Debug` only. **SILENT** — `cycle.go:336-339` |
-| `ipNetToMediaTable` walk | error | non-fatal, no enrichment | `slog.Debug` only. **SILENT** — `cycle.go:341-345` |
-| MAC seen with conflicting IPs across devices | first kept | `continue` | `slog.Debug` only. **SILENT** — `cycle.go:348-356` |
+| ARP SNMP session (`Acquire`) | fail | non-fatal | `slog.Debug` only. **SILENT** — `cycle.go` ARP block (`cfg.Modules.ARP.Enabled`) |
+| `ipNetToMediaTable` walk | error | non-fatal, no enrichment | `slog.Debug` only. **SILENT** — `cycle.go` ARP block |
+| MAC seen with conflicting IPs across devices | first kept | `continue` | `slog.Debug` only. **SILENT** — `cycle.go` ARP merge |
 
 **Coverage: NONE (silent by design).** ARP is best-effort enrichment; a total
 ARP failure degrades FDB→sysName resolution with no metric. Because it is not

@@ -76,7 +76,7 @@ aggregation).
 | CPU | Intel Core i7-5557U @ 3.10 GHz (Broadwell, 2× core, 4× HT) |
 | Memory | 16 GB DDR3 |
 | OS | Ubuntu 6.8.0-111-generic (kernel 6.8, x86_64) |
-| Go | go1.25.0 linux/amd64 (toolchain auto-promoted from go.mod's 1.24) |
+| Go | go1.26.4 linux/amd64 (toolchain pinned in go.mod) |
 | Governor | `performance` on all cores |
 | Pinning | `taskset -c 0` (single-core, isolates variance) |
 | Run shape | `go test -tags=bench -bench=BenchmarkMetricsRender -benchtime=10s -count=5`, report median |
@@ -152,7 +152,9 @@ infeasible, switch to OTLP push:
 ```yaml
 output:
   otlp:
+    enabled: true            # required — push is gated on output.otlp.enabled
     endpoint: http://otel-collector:4318
+    protocol: http           # http (default) | grpc
     timeout: 30s
     heartbeat_cycles: 10
 ```
@@ -257,6 +259,7 @@ federation:
     max_graph_edges: 50000
 ```
 
-Updates that exceed either limit are rejected with HTTP 503 (or via the
-Reconcile path, dropped) and accounted in
-`network_topology_graph_updates_rejected_total`.
+Spoke pushes that exceed either limit are rejected by the hub with HTTP 413
+(Payload Too Large), and the rejection is accounted in
+`network_topology_graph_updates_rejected_total{reason="size_budget_exceeded"}`.
+(HTTP 503 is reserved for transient internal failures, not size-budget rejects.)

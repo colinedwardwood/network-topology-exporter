@@ -1,7 +1,7 @@
 # OTLP Payload Schema
 
 Version: 1.0 (stable from v1.2.0)
-Schema URL: https://opentelemetry.io/schemas/1.21.0
+Semantic conventions: OpenTelemetry semconv v1.26.0 (the version the exporter is built against). Note: the exporter does not set a resource Schema URL on the wire, so emitted payloads carry no `schema_url` field.
 
 ## Resource attributes
 

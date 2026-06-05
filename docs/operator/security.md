@@ -19,10 +19,10 @@ The exporter stores SNMP credential fields as `[]byte` in `internal/discovery/sn
 
 `Zeroize()` runs at two points:
 
-1. **End of every per-device walk.** The per-device goroutine in `runCycle` (cmd/topology-exporter/main.go) wraps the resolved `Params` in a `defer params.Zeroize()` immediately after the SNMP system-group walk succeeds. When the goroutine returns — successful walk, failed walk, panic recovery, context cancellation — the credentials are overwritten before the goroutine exits.
-2. **Discovery-cycle failures.** `walkSystemWithCredentials` tries each candidate credential in turn and zeroizes the bytes of every candidate as soon as that candidate is either confirmed not the winner or the calling context is cancelled. The winning candidate's bytes survive only until the per-device defer runs.
+1. **End of every per-device walk.** The per-device goroutine in `RunCycle` (`internal/app/cycle.go`) wraps the resolved `Params` in a `defer params.Zeroize()` immediately after the SNMP system-group walk succeeds. When the goroutine returns — successful walk, failed walk, panic recovery, context cancellation — the credentials are overwritten before the goroutine exits.
+2. **Discovery-cycle failures.** `WalkSystemWithCredentials` (`internal/app/probe.go`) tries each candidate credential in turn and zeroizes the bytes of every candidate as soon as that candidate is either confirmed not the winner or the calling context is cancelled. The winning candidate's bytes survive only until the per-device defer runs.
 
-On `SIGTERM`/`SIGINT`, `signal.NotifyContext` cancels the discovery loop's context. The in-flight cycle's per-device goroutines see `cycleCtx.Done()`, unwind, and their `defer params.Zeroize()` fires before `runCycle` returns. The discovery loop logs `snmp credentials zeroized; shutting down discovery loop` so the zeroization is visible in shutdown logs.
+On `SIGTERM`/`SIGINT`, `signal.NotifyContext` cancels the discovery loop's context. The in-flight cycle's per-device goroutines see `cycleCtx.Done()`, unwind, and their `defer params.Zeroize()` fires before `RunCycle` returns. The discovery loop logs `snmp credentials zeroized; shutting down discovery loop` so the zeroization is visible in shutdown logs.
 
 The credential resolver (`internal/credentials.Resolver`) does not hold credential bytes between cycles. Its per-device cache stores only the *profile name* that previously authenticated for a given IP. Actual credential bytes are pulled fresh from `os.Getenv` at the start of every cycle, which means there is nothing to zeroize at the resolver level on shutdown.
 
@@ -146,7 +146,9 @@ If either verification fails the artefact is not authentic — do not deploy it.
 - Issue #3 — the GitHub issue that motivated the `/metrics` authentication work.
 - `internal/discovery/snmp/zeroize.go` — the `Zeroize()` implementation and `zeroBytes` helper.
 - `internal/discovery/snmp/snmp.go` — the `Params` struct that holds credentials.
-- `cmd/topology-exporter/main.go` — `walkSystemWithCredentials` (candidate-trial zeroization), `runCycle` (per-device defer), and the `web.ListenAndServe` integration.
+- `internal/app/probe.go` — `WalkSystemWithCredentials` (candidate-trial zeroization).
+- `internal/app/cycle.go` — `RunCycle` (per-device `defer params.Zeroize()`).
+- `internal/app/app.go` — the HTTP listener / `web.ListenAndServe` integration. (`cmd/topology-exporter/main.go` is now a ~20-line shim that calls into `internal/app`.)
 - [Prometheus exporter-toolkit web-configuration.md](https://github.com/prometheus/exporter-toolkit/blob/master/docs/web-configuration.md) — full schema reference for `web_config_file`.
 - [SLSA v1.0 provenance spec](https://slsa.dev/spec/v1.0/provenance) and [cosign documentation](https://docs.sigstore.dev/cosign/).
 - [`threat-model.md`](threat-model.md) — STRIDE matrix and asset-level analysis.

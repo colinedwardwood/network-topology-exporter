@@ -15,13 +15,13 @@ topology-discovery code path in each.
 
 | Axis | network-topology-exporter | LibreNMS topology |
 |---|---|---|
-| Tech stack | Go 1.25, `gosnmp`, Prometheus client, OTLP SDK | PHP 8 + Laravel 11, `gosnmp` via `net-snmp` CLI, Eloquent ORM, RRD |
+| Tech stack | Go 1.26, `gosnmp`, Prometheus client, OTLP SDK | PHP 8 + Laravel 11, `gosnmp` via `net-snmp` CLI, Eloquent ORM, RRD |
 | Runtime model | Single binary, persistent process, in-memory graph + on-disk snapshot | Cron-driven shell-out (`discovery.php` every 6 h), state lives in MySQL |
 | Topology data store | In-memory `map[Key]Edge` per cycle, JSON snapshot for cold start (`internal/snapshot/`) | `links` table in MySQL (`database/migrations/2018_07_03_091314_create_links_table.php`) |
 | Output | `/metrics` scrape + structured JSON logs + optional OTLP push | MySQL rows + RRD time-series → server-side Blade view + VisJS client |
 | Visualization | Decoupled (Grafana node-graph panel on the metrics) | Built-in `/maps/network` page, VisJS rendering |
-| Discovery cycle | Default 30 s, every cycle is a full walk | Default 6 hours, full walk |
-| Vendor dispatch | Canonical-vendor switch with shared MIB walker (`internal/discovery/bgp/bgp_vendor.go:137`); falls back to vendor-neutral RFC walker | `if/elseif ($device['os'])` chain per module (`includes/discovery/discovery-protocols.inc.php`) |
+| Discovery cycle | Default 60 s, every cycle is a full walk | Default 6 hours, full walk |
+| Vendor dispatch | Canonical-vendor switch with shared MIB walker (`vendorSpecFor` in `internal/discovery/bgp/bgp_vendor.go`); falls back to vendor-neutral RFC walker | `if/elseif ($device['os'])` chain per module (`includes/discovery/discovery-protocols.inc.php`) |
 | Reconciliation | Edge-diff + 2-source conflict detection + stale-edge aging (`internal/graph/graph.go`) | Hard-delete rows not seen in current run; no cross-protocol conflict surfacing |
 | Federation | mTLS spoke/hub with payload validation (`internal/federation/`) | Shared MySQL + Redis + per-device `poller_group`; no inter-instance sync |
 | License | AGPL-3.0 | GPL v3 |
@@ -61,16 +61,17 @@ LibreNMS:
 
 This exporter:
 
-- `discovery.interval: 30s` in `config/example.yaml`, hard guarded by a
-  cycle-deadline of the same value (`internal/app/cycle.go:99` —
-  `context.WithDeadline`).
-- Per-device parallelism bounded by `discovery.parallelism` (default 20)
-  via a semaphore (`cycle.go:107`).
-- Per-device panic recovery on the worker goroutine (`cycle.go:129`).
+- `discovery.interval` defaults to **60 s** (`config/example.yaml` ships the
+  default value), hard guarded by a per-cycle deadline of
+  `interval × discovery.cycle_budget_fraction` (default 0.8) via
+  `context.WithDeadline` in `internal/app/cycle.go`.
+- Per-device parallelism bounded by `discovery.parallelism` (default 32;
+  `config/example.yaml` overrides it to 20) via a semaphore.
+- Per-device panic recovery on the worker goroutine.
 - No module ordering machinery — the per-device walker just iterates the
   enabled modules.
 
-The 30 s vs 6 h gulf is the cleanest single-number contrast: LibreNMS
+The 60 s vs 6 h gulf is the cleanest single-number contrast: LibreNMS
 optimises for "100s of devices, slow change" while this exporter optimises
 for "metrics endpoint that reflects current state".
 
@@ -113,7 +114,7 @@ Linear `elseif` chain. Adding a vendor = adding a branch. Branches share
 little code. The author of each branch picks their own data shape, then
 maps to the common `discover_link()` writer.
 
-This exporter (`internal/discovery/bgp/bgp_vendor.go:137`):
+This exporter (`vendorSpecFor` in `internal/discovery/bgp/bgp_vendor.go`):
 
 ```go
 func vendorSpecFor(vendor string) *vendorTableSpec {
@@ -201,27 +202,35 @@ The same physical link appears twice (once per endpoint's local
 discovery). Reconciliation is implicit — both sides are visible to the UI,
 no cross-correlation.
 
-This exporter `discovery.Edge` (`internal/discovery/discovery.go:260`):
+This exporter's `discovery.Edge` (`internal/discovery/discovery.go`):
 
 ```go
 type Edge struct {
-    SrcDevice, SrcPort       string
-    DstDevice, DstPort       string
-    DiscoveryProto           string  // lldp | cdp | bgp | ospf | isis
-    LinkKind                 string  // ethernet | l3-adjacency
-    Direction                string  // bidirectional | one-way
-    FirstSeen, LastSeen      time.Time
-    UnconfirmedAge           time.Duration
-    Sources                  []EdgeSource  // per-protocol provenance
+    SrcDevice      string
+    SrcPort        string
+    DstDevice      string
+    DstPort        string
+    DiscoveryProto DiscoveryProtocol // lldp | cdp | bgp | ospf | fdb | isis | mpls_te | configured
+    Direction      Direction
+    Confidence     Confidence
+    Adjacency      Adjacency
+    PrecedenceRank int               // 0 = highest priority
+    LinkKind       LinkKind          // ethernet | ip | mpls-te | logical
+    ObservedAt     time.Time         // cycle this edge was emitted
+    Metadata       map[string]string // protocol-specific extras, nil when none
 }
 ```
 
+There is no `FirstSeen`/`LastSeen`/`UnconfirmedAge`/`Sources` field on the
+discovery `Edge`: the discovery layer emits a single `ObservedAt` timestamp
+per cycle, and the unconfirmed-link aging counter is graph-layer state, not a
+field on the struct.
+
 Two-source reconciliation: `internal/graph/graph.go` merges per-protocol
 observations and tags `direction = bidirectional` only when both
-endpoints' walks confirm the same edge in a single cycle. `Sources
-[]EdgeSource` tracks which protocols saw it. `Conflict` is emitted when
-two protocols give different neighbour names for the same local port
-(`internal/graph/graph.go:79`), which gets a Prometheus counter
+endpoints' walks confirm the same edge in a single cycle. A conflict is
+emitted when two protocols give different neighbour names for the same local
+port, which gets a Prometheus counter
 (`network_topology_conflict_total{conflict_type="neighbour_disagreement"}`).
 
 That conflict-detection layer is a real semantic gap from LibreNMS —
@@ -242,9 +251,10 @@ LibreNMS:
 
 This exporter:
 
-- Soft-aging via `unconfirmed_age_max` config — an edge sticks around for
-  N cycles after it disappears, marked `UnconfirmedAge > 0` so dashboards
-  can show it as "stale". Configurable per the long-running lab spec.
+- Soft-aging via `discovery.unconfirmed_link_ttl_cycles` (default 3) — a
+  unidirectional link is retained for that many discovery *cycles* (tracked
+  by the graph layer's internal `UnconfirmedCycles` counter, not a duration)
+  before removal. Aging is measured in cycles, not wall-clock time.
 - Change events: every transition emits a structured JSON log line with
   before/after edge records:
 
@@ -325,9 +335,10 @@ Decrypted at use-time in PHP memory. No automatic rotation. PHP's GC
 reclaims when the variable goes out of scope; no explicit zeroization.
 
 This exporter: profile-based credentials with per-IP cache and a
-token-bucket rate limiter (`internal/credentials/`), and explicit
-`Zeroize()` on the `snmpwalk.Params` after every walk
-(`internal/app/probe.go:188-114`). Every credential byte slice is
+token-bucket rate limiter (`internal/credentials/`), and an explicit
+`Zeroize()` on the `snmpwalk.Params` after every walk — the method is
+defined in `internal/discovery/snmp/zeroize.go` and invoked from the cycle
+runner in `internal/app/probe.go`. Every credential byte slice is
 overwritten with zeros before the goroutine exits. Snapshot persists only
 the profile *name* per IP, never plaintext. The "cold-start credentials"
 doc (`docs/operator/cold-start-credentials.md`) is dedicated to the

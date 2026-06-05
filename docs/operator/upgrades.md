@@ -59,11 +59,18 @@ There is **no version negotiation** in the federation protocol. The hub and spok
 
 ---
 
-## v1.5.0
+## v1.5.0 (planned — config-schema freeze)
+
+> **Not yet released.** This section describes the planned v1.5.0 config-schema
+> freeze. Several of these items already exist in the current codebase (the
+> `KnownFields` loader, the OTLP SDK migration, `output.otlp.protocol`); the
+> deprecated-key removals are the freeze gate that the v1.5.0 tag will draw the
+> line under. Treat this as the migration target you are working toward, not a
+> shipped release.
 
 ### Summary
 
-Config-schema cleanup release. Three deprecated keys (carried with startup warnings since v1.3.0) are now hard errors. The OTLP output path migrated from a hand-rolled JSON encoder to the official OpenTelemetry Go SDK, changing the wire format from JSON to protobuf. The config loader now rejects unknown keys (`KnownFields`).
+Config-schema cleanup release. The deprecated key aliases are removed (now hard errors). The OTLP output path migrated from a hand-rolled JSON encoder to the official OpenTelemetry Go SDK, changing the wire format from JSON to protobuf. The config loader rejects unknown keys (`KnownFields`).
 
 ### Breaking changes
 
@@ -150,7 +157,7 @@ No breaking config changes.
 - Use `walker="vendor_arista"` for Arista BGP coverage.
 - Use `outcome="no_peers"` for "BGP configured but sessions down" and `outcome="mib_unimplemented"` for "device does not implement BGP MIB at all".
 
-**`network_topology_graph_updates_rejected_total`** now carries a `reason` label (`size_budget_exceeded`, `invalid_label_key`, `invalid_label_value`). Pre-existing dashboards querying the unlabelled form will see no data after upgrade; migrate to `sum by (reason)(...)` or select a specific reason.
+**`network_topology_graph_updates_rejected_total`** now carries a `reason` label (`size_budget_exceeded`, `invalid_label_key`, `invalid_label_value`, `structural_invalid`, `stale_generation`). Pre-existing dashboards querying the unlabelled form will see no data after upgrade; migrate to `sum by (reason)(...)` or select a specific reason.
 
 **AGPL-3.0 relicensing.** If you are running a modified version of the exporter and offering it over a network, AGPL §13 requires you to make the modified source available to users of that network service.
 

@@ -264,7 +264,7 @@ Returns `200 OK` after the first discovery cycle completes; `503` during startup
 curl -s http://localhost:9100/healthz | jq .
 ```
 
-Returns a JSON object with `last_cycle_at` and per-device error counts.
+Returns a JSON object with `last_cycle_at` and a single aggregate `device_errors` count (int64) for the last cycle — not per-device breakdowns. Per-device detail lives in the log lines and per-module metrics.
 
 **Check graph_stale**
 
