@@ -116,13 +116,21 @@ func Run(ctx context.Context, args []string) int {
 	// Hub mode replaces this with hub.IsReady before registering the mux handler.
 	isReadyFn := ready.Load
 
+	// Liveness staleness gate (ops hardening): /healthz returns 503 once the
+	// most recent discovery cycle is older than interval × liveness_max_stale_cycles
+	// so Kubernetes restarts a process whose discovery loop has wedged. A maxStale
+	// of 0 disables the gate (handler always 200 — prior behaviour). The same
+	// value gates the watchdog goroutine below. See livenessMaxStale for the
+	// hub-exclusion rule.
+	livenessMaxStale := livenessMaxStale(cfg)
+
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", httpx.InstrumentMetricsHandler(
 		promhttp.HandlerFor(m.Registry(), promhttp.HandlerOpts{Registry: m.Registry()}),
 		m.MetricsRenderDuration,
 		m.MetricsPayloadBytes,
 	))
-	mux.HandleFunc("/healthz", httpx.NewHealthzHandler(&status))
+	mux.HandleFunc("/healthz", httpx.NewHealthzHandler(&status, livenessMaxStale, time.Now))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -296,6 +304,19 @@ func Run(ctx context.Context, args []string) int {
 		rediscoverer := NewRediscoverer(cfg, m, logger, adminResolver, allowedNets, &cycleMu, WebConfigHasClientAuth(cfg.Listen.WebConfigFile))
 		mux.HandleFunc("/admin/rediscover", httpx.NewRediscoverHandler(rediscoverer))
 
+		// Graph-stale watchdog (ops hardening): re-assert GraphStale=1 when this
+		// running loop wedges. Only started when a local discovery loop runs (the
+		// default branch already excludes hub) AND the liveness gate is enabled
+		// (livenessMaxStale > 0). Joined via workerDone so graceful shutdown waits
+		// for it; it returns on ctx cancellation (no goroutine leak — goleak).
+		if livenessMaxStale > 0 {
+			workerDone.Add(1)
+			go func() {
+				defer workerDone.Done()
+				RunStaleWatchdog(ctx, &status, m, cfg.Discovery.Interval, livenessMaxStale, time.Now)
+			}()
+		}
+
 		workerDone.Add(1)
 		go func() {
 			defer workerDone.Done()
@@ -396,6 +417,30 @@ func Run(ctx context.Context, args []string) int {
 	}
 	logger.Info("clean shutdown complete")
 	return 0
+}
+
+// livenessMaxStale returns the /healthz liveness staleness threshold for this
+// config: discovery.interval × discovery.liveness_max_stale_cycles. It returns
+// 0 (gate disabled) in two cases:
+//
+//   - liveness_max_stale_cycles == 0 — the operator disabled the gate; or
+//   - federation.role == "hub" — a pure hub runs NO local discovery loop, so it
+//     never updates the cycle timestamp and would otherwise falsely trip the
+//     gate. This is the single hub-exclusion point shared by the /healthz gate
+//     and the graph-stale watchdog: a 0 result means neither is engaged.
+//
+// A 0 return therefore preserves today's behaviour (/healthz always 200 once up
+// and no watchdog goroutine), which is exactly what hub mode and an explicit
+// opt-out both want.
+func livenessMaxStale(cfg *config.Config) time.Duration {
+	if cfg.Federation.Role == "hub" {
+		return 0
+	}
+	cycles := cfg.Discovery.LivenessMaxStaleCyclesValue()
+	if cycles <= 0 {
+		return 0
+	}
+	return cfg.Discovery.Interval * time.Duration(cycles)
 }
 
 // NewLogger returns a slog.Logger configured to emit JSON to stderr at the

@@ -120,19 +120,54 @@ func NewReadyzHandler(isReady func() bool) http.HandlerFunc {
 	}
 }
 
-// NewHealthzHandler returns an HTTP handler for /healthz. It reports the
-// timestamp of the most recent discovery cycle and that cycle's device
-// error count. Until the first cycle completes (status pointer is nil)
-// it reports `{"status":"ok","last_cycle_at":null,"device_errors":null}`
-// so a fresh process is healthy from the orchestrator's perspective
-// while readiness gating still keeps traffic away (see NewReadyzHandler).
-func NewHealthzHandler(status *atomic.Pointer[CycleStatus]) http.HandlerFunc {
+// IsStale reports whether a cycle that last completed at `last` is older than
+// `threshold` as of `now`. A non-positive threshold disables the check and
+// always reports false (not stale). This is the single staleness predicate
+// shared by the /healthz liveness gate (NewHealthzHandler) and the graph-stale
+// watchdog (app.runStaleWatchdog), kept as a tiny pure function so it can be
+// unit-tested in isolation.
+func IsStale(now, last time.Time, threshold time.Duration) bool {
+	if threshold <= 0 {
+		return false
+	}
+	return now.Sub(last) > threshold
+}
+
+// NewHealthzHandler returns an HTTP handler for /healthz, the Kubernetes
+// liveness target. It reports the timestamp of the most recent discovery
+// cycle and that cycle's device error count.
+//
+// Liveness gate: when maxStale > 0 and the most recent cycle is older than
+// maxStale (now - LastCycleAt > maxStale), the handler returns 503 so the
+// orchestrator restarts a process whose discovery loop has wedged. maxStale
+// is discovery.interval × liveness_max_stale_cycles; a value of 0 disables
+// the gate (the handler is then always 200 — today's behaviour). The gate is
+// also disabled for pure-hub mode, which runs no local discovery loop and so
+// never updates LastCycleAt (the call site passes maxStale == 0 there).
+//
+// Until the first cycle completes (status pointer is nil) the handler reports
+// `{"status":"ok","last_cycle_at":null,"device_errors":null}` with 200 so a
+// fresh process stays live while readiness gating keeps traffic away (see
+// NewReadyzHandler) — the gate never trips before the first cycle.
+//
+// now defaults to time.Now when nil; it is injectable so tests can drive the
+// staleness boundary deterministically.
+func NewHealthzHandler(status *atomic.Pointer[CycleStatus], maxStale time.Duration, now func() time.Time) http.HandlerFunc {
+	if now == nil {
+		now = time.Now
+	}
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		s := status.Load()
 		if s == nil {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"status":"ok","last_cycle_at":null,"device_errors":null}` + "\n"))
+			return
+		}
+		if IsStale(now(), s.LastCycleAt, maxStale) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = fmt.Fprintf(w, `{"status":"stale","last_cycle_at":%q,"device_errors":%d,"stale_threshold_seconds":%d}`+"\n",
+				s.LastCycleAt.UTC().Format(time.RFC3339), s.DeviceErrors, int64(maxStale.Seconds()))
 			return
 		}
 		w.WriteHeader(http.StatusOK)

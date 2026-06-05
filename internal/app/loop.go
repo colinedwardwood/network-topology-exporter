@@ -128,6 +128,45 @@ func (lc LoopConfig) OtlpPush(ctx context.Context, fn func(context.Context) erro
 	}()
 }
 
+// RunStaleWatchdog re-asserts the network_topology_graph_stale gauge when a
+// running discovery loop wedges. The wedged loop cannot set its own gauge (it
+// is stuck inside a cycle), so this independent goroutine ticks roughly every
+// `interval` and, once at least one cycle has completed (status != nil), sets
+// the gauge to 1 when the last cycle is older than maxStale and back to 0 when
+// a fresh cycle has landed inside the window. It deliberately does nothing
+// before the first cycle so it never fights the cold-start GraphStale=1 /
+// first-success GraphStale=0 logic in RunDiscoveryLoop.
+//
+// The watchdog is only started when a local discovery loop runs (hub mode is
+// excluded by the caller) and when the gate is enabled (maxStale > 0). It stops
+// the ticker and returns on context cancellation so graceful shutdown joins it
+// cleanly and goleak stays green. `now` defaults to time.Now when nil.
+func RunStaleWatchdog(ctx context.Context, status *atomic.Pointer[httpx.CycleStatus], m *metrics.Metrics, interval, maxStale time.Duration, now func() time.Time) {
+	if now == nil {
+		now = time.Now
+	}
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			s := status.Load()
+			if s == nil {
+				// No cycle has completed yet; leave the cold-start gauge state
+				// owned by RunDiscoveryLoop untouched.
+				continue
+			}
+			if httpx.IsStale(now(), s.LastCycleAt, maxStale) {
+				m.GraphStale.Set(1)
+			} else {
+				m.GraphStale.Set(0)
+			}
+		}
+	}
+}
+
 // RunDiscoveryLoop is the main discovery scheduler. It loads the LD-13
 // snapshot on startup, starts the credential resolver, and then runs
 // periodic cycles. Each cycle probes all configured targets concurrently

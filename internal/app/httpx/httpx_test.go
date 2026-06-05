@@ -15,7 +15,7 @@ import (
 func TestHealthzHandlerNilStatus(t *testing.T) {
 	var status atomic.Pointer[CycleStatus]
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", NewHealthzHandler(&status))
+	mux.HandleFunc("/healthz", NewHealthzHandler(&status, 0, nil))
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
@@ -38,7 +38,7 @@ func TestHealthzHandlerPopulatedStatus(t *testing.T) {
 	now := time.Now()
 	status.Store(&CycleStatus{LastCycleAt: now, DeviceErrors: 2})
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", NewHealthzHandler(&status))
+	mux.HandleFunc("/healthz", NewHealthzHandler(&status, 0, nil))
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	rec := httptest.NewRecorder()
@@ -53,6 +53,86 @@ func TestHealthzHandlerPopulatedStatus(t *testing.T) {
 	}
 	if m["device_errors"] != float64(2) {
 		t.Errorf("device_errors = %v, want 2", m["device_errors"])
+	}
+}
+
+// TestHealthzHandlerLivenessGate drives the liveness staleness gate across its
+// boundary cases with an injected clock: a fresh cycle stays 200, a cycle older
+// than maxStale returns 503 with a stale body, a disabled gate (maxStale == 0)
+// is always 200 even for an ancient cycle, and a nil status (no cycle yet)
+// stays 200 regardless of the gate. Every case asserts the body parses as JSON.
+func TestHealthzHandlerLivenessGate(t *testing.T) {
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	const maxStale = 3 * time.Minute
+
+	cases := []struct {
+		name     string
+		setLast  bool          // store a CycleStatus with LastCycleAt = base - age
+		age      time.Duration // how stale the stored cycle is, relative to base
+		maxStale time.Duration
+		wantCode int
+		wantStat string
+	}{
+		{name: "fresh cycle within window", setLast: true, age: 1 * time.Minute, maxStale: maxStale, wantCode: http.StatusOK, wantStat: "ok"},
+		{name: "cycle exactly at threshold is not stale", setLast: true, age: maxStale, maxStale: maxStale, wantCode: http.StatusOK, wantStat: "ok"},
+		{name: "cycle older than maxStale is stale", setLast: true, age: maxStale + time.Second, maxStale: maxStale, wantCode: http.StatusServiceUnavailable, wantStat: "stale"},
+		{name: "disabled gate always ok even when ancient", setLast: true, age: 24 * time.Hour, maxStale: 0, wantCode: http.StatusOK, wantStat: "ok"},
+		{name: "no cycle yet stays ok with gate enabled", setLast: false, maxStale: maxStale, wantCode: http.StatusOK, wantStat: "ok"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var status atomic.Pointer[CycleStatus]
+			if tc.setLast {
+				status.Store(&CycleStatus{LastCycleAt: base.Add(-tc.age), DeviceErrors: 1})
+			}
+			now := func() time.Time { return base }
+			h := NewHealthzHandler(&status, tc.maxStale, now)
+
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+			if rec.Code != tc.wantCode {
+				t.Fatalf("status = %d, want %d (body %q)", rec.Code, tc.wantCode, rec.Body.String())
+			}
+			var m map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+				t.Fatalf("response is not valid JSON: %v", err)
+			}
+			if m["status"] != tc.wantStat {
+				t.Errorf("status field = %q, want %q", m["status"], tc.wantStat)
+			}
+			if tc.wantCode == http.StatusServiceUnavailable {
+				if m["stale_threshold_seconds"] != float64(int64(tc.maxStale.Seconds())) {
+					t.Errorf("stale_threshold_seconds = %v, want %v", m["stale_threshold_seconds"], tc.maxStale.Seconds())
+				}
+			}
+		})
+	}
+}
+
+// TestIsStale covers the shared staleness predicate directly, including the
+// disabled (non-positive threshold) short-circuit and the strict ">" boundary.
+func TestIsStale(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name      string
+		last      time.Time
+		threshold time.Duration
+		want      bool
+	}{
+		{"disabled threshold zero", now.Add(-time.Hour), 0, false},
+		{"disabled threshold negative", now.Add(-time.Hour), -time.Minute, false},
+		{"within window", now.Add(-time.Minute), 2 * time.Minute, false},
+		{"exactly at threshold", now.Add(-2 * time.Minute), 2 * time.Minute, false},
+		{"past threshold", now.Add(-3 * time.Minute), 2 * time.Minute, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsStale(now, tc.last, tc.threshold); got != tc.want {
+				t.Errorf("IsStale = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

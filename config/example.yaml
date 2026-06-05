@@ -48,6 +48,18 @@ discovery:
   # network_topology_cycle_budget_skips_total.
   cycle_budget_fraction: 0.8
 
+  # Liveness staleness gate (default 3). /healthz is the Kubernetes liveness
+  # target. When the most recent discovery cycle is older than
+  # interval × liveness_max_stale_cycles, /healthz returns 503 so Kubernetes
+  # restarts a process whose discovery loop has wedged (deadlocked) — a wedged
+  # loop can no longer update its own last-cycle timestamp, so without this the
+  # pod would stay "live" forever and never recover. The same staleness signal
+  # also re-asserts network_topology_graph_stale=1 while the loop is stalled.
+  # 0 disables the gate (/healthz always 200 once up — prior behaviour). The
+  # gate is always inert in pure-hub mode (federation.role: hub), which runs no
+  # local discovery loop and so has no cycle timestamp to age out.
+  liveness_max_stale_cycles: 3
+
   # Per-module timeout within a device's total timeout_per_device budget.
   # Prevents one slow protocol walk from consuming the whole device budget.
   # 0 = no additional cap (default); must be < timeout_per_device when set.

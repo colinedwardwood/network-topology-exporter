@@ -66,6 +66,12 @@ resources:
   limits:
     memory: 256Mi
 
+# /healthz returns 503 once the discovery loop has gone stale (no completed
+# cycle within discovery.interval × discovery.liveness_max_stale_cycles), so a
+# wedged loop is restarted by Kubernetes. Set discovery.liveness_max_stale_cycles
+# in the exporter config (default 3) and size failureThreshold × periodSeconds so
+# a transiently slow cycle does not cause a needless restart. The gate is inert
+# for federation.role: hub (no local discovery loop).
 livenessProbe:
   httpGet:
     path: /healthz

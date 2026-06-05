@@ -27,6 +27,57 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	}
 }
 
+// LivenessMaxStaleCycles defaults to 3 when unset (the liveness staleness gate
+// is on by default), an explicit 0 is preserved as "disable the gate", and a
+// negative value is rejected.
+func TestLivenessMaxStaleCycles(t *testing.T) {
+	write := func(t *testing.T, body string) string {
+		t.Helper()
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.yaml")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		return path
+	}
+
+	t.Run("unset defaults to 3", func(t *testing.T) {
+		c, err := Load(write(t, "targets: []\n"))
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if got := c.Discovery.LivenessMaxStaleCyclesValue(); got != 3 {
+			t.Errorf("LivenessMaxStaleCycles default = %d, want 3", got)
+		}
+	})
+
+	t.Run("explicit zero disables", func(t *testing.T) {
+		c, err := Load(write(t, "discovery:\n  liveness_max_stale_cycles: 0\ntargets: []\n"))
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if got := c.Discovery.LivenessMaxStaleCyclesValue(); got != 0 {
+			t.Errorf("explicit 0 = %d, want 0 (gate disabled)", got)
+		}
+	})
+
+	t.Run("explicit positive round-trips", func(t *testing.T) {
+		c, err := Load(write(t, "discovery:\n  liveness_max_stale_cycles: 5\ntargets: []\n"))
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if got := c.Discovery.LivenessMaxStaleCyclesValue(); got != 5 {
+			t.Errorf("LivenessMaxStaleCycles = %d, want 5", got)
+		}
+	})
+
+	t.Run("negative rejected", func(t *testing.T) {
+		if _, err := Load(write(t, "discovery:\n  liveness_max_stale_cycles: -1\ntargets: []\n")); err == nil {
+			t.Fatal("expected validation error for liveness_max_stale_cycles: -1")
+		}
+	})
+}
+
 // Issue #69: debug_listen_addr defaults to empty (pprof endpoint OFF).
 func TestDebugListenAddrDefaultsOff(t *testing.T) {
 	dir := t.TempDir()
