@@ -388,7 +388,7 @@ jobs:
           done
 
       - name: attest container image build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.build_push.outputs.digest }}
@@ -397,7 +397,7 @@ jobs:
       # Same digest, mirrored to Docker Hub; only runs when the mirror is enabled.
       - name: attest container image build provenance (Docker Hub)
         if: ${{ env.DOCKERHUB_ENABLED == 'true' }}
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: docker.io/${{ github.repository }}
           subject-digest: ${{ steps.build_push.outputs.digest }}
@@ -425,7 +425,7 @@ jobs:
           done
 
       - name: attest binary build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             bin/topology-exporter-linux-amd64
