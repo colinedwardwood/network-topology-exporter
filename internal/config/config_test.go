@@ -27,6 +27,43 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	}
 }
 
+// Issue #69: debug_listen_addr defaults to empty (pprof endpoint OFF).
+func TestDebugListenAddrDefaultsOff(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("targets: []\n"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if c.Listen.DebugListenAddr != "" {
+		t.Errorf("DebugListenAddr default = %q, want \"\" (off)", c.Listen.DebugListenAddr)
+	}
+}
+
+// Issue #69: a set debug_listen_addr round-trips through Load.
+func TestDebugListenAddrRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+listen:
+  debug_listen_addr: 127.0.0.1:6060
+targets: []
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if c.Listen.DebugListenAddr != "127.0.0.1:6060" {
+		t.Errorf("DebugListenAddr = %q, want 127.0.0.1:6060", c.Listen.DebugListenAddr)
+	}
+}
+
 func TestValidateRejectsBadSNMPVersion(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

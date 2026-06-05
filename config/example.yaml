@@ -30,6 +30,12 @@
 #   # (same schema as snmp_exporter, node_exporter, blackbox_exporter).
 #   # Supports basic_auth, server TLS, and full mTLS.  Omit for plain HTTP.
 #   # web_config_file: /etc/topology-exporter/web-config.yml
+#   # debug_listen_addr enables net/http/pprof at /debug/pprof/* on a SEPARATE
+#   # listener for grabbing CPU/heap/goroutine/mutex profiles during incidents.
+#   # Empty (default) = OFF (no listener, no profiling overhead). It has NO auth
+#   # and NO TLS, so it MUST NOT be exposed to the internet — bind to localhost
+#   # or a management interface only. See docs/operator/troubleshooting.md.
+#   # debug_listen_addr: 127.0.0.1:6060
 
 # ─── Discovery cycle controls ───────────────────────────────────────────────
 discovery:

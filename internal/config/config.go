@@ -41,6 +41,15 @@ type Config struct {
 type ListenConfig struct {
 	Addr          string `yaml:"addr"`            // default ":9100"
 	WebConfigFile string `yaml:"web_config_file"` // exporter-toolkit web-config YAML
+
+	// DebugListenAddr, when non-empty, enables a SEPARATE listener serving
+	// net/http/pprof at /debug/pprof/* (issue #69). Empty (the default) means
+	// OFF: no debug listener is created and there is zero runtime overhead. The
+	// debug surface has NO auth and NO TLS — the same model as node_exporter's
+	// debug endpoints — so it MUST NOT be exposed to the internet. Bind it to
+	// localhost or a management interface only (e.g. "127.0.0.1:6060"). It is
+	// never served on the main metrics listener (listen.addr).
+	DebugListenAddr string `yaml:"debug_listen_addr"`
 }
 
 // OutputConfig holds optional push-mode output paths.
