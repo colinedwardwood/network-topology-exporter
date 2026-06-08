@@ -1,5 +1,92 @@
 # Lab — juniper-jnxbgp
 
+Validates the `vendor_juniper` BGP4-V2 walker (`jnxBgpM2PeerTable`,
+`1.3.6.1.4.1.2636.5.1.1.2.1.1`) against a real Junos SNMP stack — closing
+issue #56. Two ways to produce the capture:
+
+- **Option A — self-hosted vJunos-router lab (below).** Run a containerlab
+  topology with a free vJunos-router image on an x86-64 + KVM host. Fully
+  reproducible, no third party needed. **Preferred.**
+- **Option B — colleague capture from existing hardware (further down).** If
+  someone already has a Junos box, they paste an SNMP config and run a script.
+
+Either way the goal is one file: `captures/r1_juniper_jnxBgpM2PeerTable.txt`,
+an `snmpwalk` of the peer table with at least one established IPv4 **and** one
+IPv6 peer.
+
+---
+
+## Option A — self-hosted vJunos-router lab (containerlab)
+
+Files: `topology.clab.yml`, `configs/r1.conf` (vJunos), `configs/frr.conf` +
+`configs/daemons` (the FRR peer), `capture.sh`.
+
+Topology: one **vJunos-router** (`r1`, AS 65001 — the device under capture)
+eBGP-peered with one lightweight **FRR** speaker (`p1`, AS 65002) over a
+dual-stack link, giving `r1` an IPv4 *and* an IPv6 established peer (both
+address-family index cases). Only `r1` is real Junos; the peer is FRR so the
+whole thing fits on a modest host.
+
+### Prerequisites
+- **x86-64 host with KVM** (the long-running-test host works; **not** an arm
+  Mac). ~5 GB RAM free for one vJunos + FRR.
+- `containerlab`, `docker`, `snmpwalk` (net-snmp), and the free
+  **vJunos-router qcow2** from Juniper (no paid license needed).
+
+### 1. Build the vJunos-router container image (one-time)
+vJunos runs as a KVM VM wrapped by [vrnetlab](https://github.com/hellt/vrnetlab):
+```bash
+git clone https://github.com/hellt/vrnetlab && cd vrnetlab/juniper/vjunosrouter
+cp /path/to/vJunos-router-25.4R1.12.qcow2 .     # rename the .dms download to .qcow2
+make                                            # builds vrnetlab/juniper_vjunos-router:25.4R1.12
+```
+Match the image tag in `topology.clab.yml` (`kinds.juniper_vjunosrouter.image`)
+to whatever `make` produced (`docker images | grep vjunos`).
+
+### 2. Deploy
+```bash
+sudo containerlab deploy -t topology.clab.yml
+```
+vJunos boots slowly — give it **~5 minutes**. (`docker logs clab-juniper-jnxbgp-r1`
+shows boot progress.)
+
+### 3. Confirm both BGP sessions are Established
+```bash
+sudo containerlab exec --name juniper-jnxbgp --label clab-node-name=r1 \
+  --cmd "cli show bgp summary"        # expect 2 peers (10.0.0.2 and 2001:db8:1::2) Establ
+docker exec clab-juniper-jnxbgp-p1 vtysh -c "show bgp summary"
+```
+If a peer is stuck, give it another minute (vJunos is slow to settle). The
+capture only needs the sessions Established — no routes.
+
+### 4. Capture
+```bash
+./capture.sh
+```
+Writes `captures/r1_juniper_jnxBgpM2PeerTable.txt` (plus the system group, the
+RFC 4273 fallback table, and the route table for context). Private lab
+addresses, so no redaction needed.
+
+### 5. Hand it back
+Commit `captures/r1_juniper_jnxBgpM2PeerTable.txt` (and siblings) — that's the
+fixture. From there the walker's `colState` / `colRemoteAs` / index decoder get
+verified against the real columns and `verified: true` is set in
+`bgp_vendor.go`, closing #56 and unblocking #59.
+
+### Teardown
+```bash
+sudo containerlab destroy -t topology.clab.yml --cleanup
+```
+
+### Notes
+- `r1:eth1` (containerlab) maps to `ge-0/0/0` (Junos) — see `configs/r1.conf`.
+- The `juniper_vjunosrouter` kind sets up `fxp0` management + base credentials
+  automatically; `configs/r1.conf` only adds the lab config.
+
+---
+
+## Option B — colleague capture from a real device
+
 Thanks for running this. We can't validate our Juniper BGP MIB walker
 without a real Junos device, so your snmpwalk against a live router is
 what gets this code out of "experimental" status.
