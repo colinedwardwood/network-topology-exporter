@@ -69,6 +69,41 @@ parse_links() {
     awk -F'|' '{ a=$1; b=$2; if (a < b) print a"|"b; else print b"|"a }' | sort -u
 }
 
+# True if interface $2 exists inside base node $1 (e.g. node_iface_exists leaf1 eth1).
+node_iface_exists() {
+  docker exec "clab-$LAB_NAME-$1" ip link show "$2" >/dev/null 2>&1
+}
+
+# Ensure one veth link exists, creating it if absent. Idempotent and
+# self-healing: this is the core reliability guarantee. A veth create that
+# fails transiently, or a veth lost out-of-band, must never leave a desired
+# link permanently missing (a partial topology with no alertable signal).
+# Endpoints are "node:iface" strings. Returns 0 if present/created, 1 if not.
+ensure_link() {
+  local a="$1" z="$2"
+  local an="${a%%:*}" ai="${a#*:}" zn="${z%%:*}" zi="${z#*:}"
+  local a_ok=1 z_ok=1
+  node_iface_exists "$an" "$ai" || a_ok=0
+  node_iface_exists "$zn" "$zi" || z_ok=0
+  if [ "$a_ok" = 1 ] && [ "$z_ok" = 1 ]; then
+    return 0   # both ends present — link already up
+  fi
+  # Half-broken pair (one end survived a partial create/teardown): remove the
+  # dangling end so veth create can succeed cleanly.
+  [ "$a_ok" = 1 ] && docker exec "clab-$LAB_NAME-$an" ip link del "$ai" >/dev/null 2>&1
+  [ "$z_ok" = 1 ] && docker exec "clab-$LAB_NAME-$zn" ip link del "$zi" >/dev/null 2>&1
+  local attempt
+  for attempt in 1 2 3; do
+    if containerlab tools veth create \
+         --a-endpoint "clab-$LAB_NAME-$a" \
+         --b-endpoint "clab-$LAB_NAME-$z" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
 # Apply one mutation. $1 is the target topology filename (basename).
 apply_topology() {
   local topo="$1"
@@ -88,19 +123,17 @@ apply_topology() {
   local cur_file=""
   [ -n "$prev" ] && cur_file="$TOPODIR/$prev"
 
-  local cur des add del keep
+  local cur des del
   cur=$(parse_links "$cur_file")
   des=$(parse_links "$file")
-  add=$(comm -13 <(printf '%s\n' "$cur") <(printf '%s\n' "$des"))
+  # Links the previous topology had that the target does not want.
   del=$(comm -23 <(printf '%s\n' "$cur") <(printf '%s\n' "$des"))
-  keep=$(comm -12 <(printf '%s\n' "$cur") <(printf '%s\n' "$des"))
 
-  local n_add n_del n_keep
-  n_add=$(printf '%s' "$add" | grep -c .)
+  local n_del n_des
   n_del=$(printf '%s' "$del" | grep -c .)
-  n_keep=$(printf '%s' "$keep" | grep -c .)
+  n_des=$(printf '%s' "$des" | grep -c .)
 
-  # Delete first so freed eth slots are available for reuse on add.
+  # Delete unwanted links first so freed eth slots are available for reuse.
   while IFS= read -r link; do
     [ -z "$link" ] && continue
     local left right node iface
@@ -113,26 +146,39 @@ apply_topology() {
     fi
   done <<< "$del"
 
-  local add_failures=0
+  # Ensure EVERY desired link exists — not just the diff 'add' set. This is the
+  # self-healing fix: a link that previously failed to attach or was lost
+  # out-of-band used to sit in the 'keep' set and was never recreated, leaving a
+  # permanent partial topology (e.g. a star missing one spoke) with no alertable
+  # signal. We now verify each desired link and (re)create any that are missing,
+  # with retries, every pass — so a transient veth failure self-corrects on the
+  # next apply (and a same-topology re-apply is a valid recovery).
+  local ensure_failures=0 n_created=0
   while IFS= read -r link; do
     [ -z "$link" ] && continue
     local a z
     a="${link%%|*}"; z="${link#*|}"
-    if containerlab tools veth create --a-endpoint "clab-$LAB_NAME-$a" --b-endpoint "clab-$LAB_NAME-$z" >/dev/null 2>&1; then
+    if node_iface_exists "${a%%:*}" "${a#*:}" && node_iface_exists "${z%%:*}" "${z#*:}"; then
+      continue   # both ends already present
+    fi
+    if ensure_link "$a" "$z"; then
       emit link_added "a=$a" "z=$z"
+      n_created=$((n_created + 1))
     else
       emit link_add_failed "a=$a" "z=$z"
-      add_failures=$((add_failures + 1))
+      ensure_failures=$((ensure_failures + 1))
     fi
-  done <<< "$add"
+  done <<< "$des"
 
   local dt=$(( $(date +%s) - t0 ))
-  if [ "$add_failures" -eq 0 ]; then
-    # Record success in the state file so the next mutation diffs from here.
+  if [ "$ensure_failures" -eq 0 ]; then
+    # Record success so the next mutation diffs removals from here. Because we
+    # ensure all desired links every pass, re-applying the same topology now
+    # also self-corrects any missing link.
     printf '%s\n' "$topo" > "$STATE_FILE"
-    emit mutation_success "topo=$topo" "prev=$prev" "duration_s=!$dt" "links_added=!$n_add" "links_removed=!$n_del" "links_kept=!$n_keep"
+    emit mutation_success "topo=$topo" "prev=$prev" "duration_s=!$dt" "links_desired=!$n_des" "links_created=!$n_created" "links_removed=!$n_del"
   else
-    emit mutation_failed "topo=$topo" "phase=apply" "duration_s=!$dt" "add_failures=!$add_failures"
+    emit mutation_failed "topo=$topo" "phase=apply" "duration_s=!$dt" "ensure_failures=!$ensure_failures" "links_created=!$n_created"
     return 1
   fi
 }

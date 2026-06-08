@@ -31,6 +31,15 @@ Nodes that don't participate in the current topology (`spine2` in
 `topo-1/2/3`; `leaf4` in `topo-4`) stay running with no data-plane
 links — the exporter sees the device but reports zero edges.
 
+Each mutation is **idempotent and self-healing**: rather than trusting that
+the previously-applied topology's links still exist, the mutator verifies and
+(re)creates *every* desired link on each pass (with retries, repairing a
+half-broken veth pair). A `containerlab tools veth create` that fails
+transiently — or a veth lost out-of-band — is recreated on the next apply
+instead of leaving a permanent missing edge (e.g. a star missing one spoke).
+Re-applying the current topology (restart the `long-running-mutator`
+container) is therefore a valid recovery for a partial topology.
+
 The mutator emits JSON events on stdout that Alloy ships to Loki:
 `mutator_starting`, `mutation_start`, `link_added`, `link_removed`,
 `link_add_failed`, `link_remove_failed`, `mutation_success`,
