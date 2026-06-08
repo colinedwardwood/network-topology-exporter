@@ -65,6 +65,6 @@ done
 echo
 echo "Captures in ${OUTDIR}/"
 echo "Key file for #56: ${OUTDIR}/${NODE}_juniper_jnxBgpM2PeerTable.txt"
-echo "These are private/doc lab addresses (RFC 1918 10.0.0.x / RFC 3849 2001:db8::), so no"
+echo "These are documentation lab addresses (RFC 5737 192.0.2.x / RFC 3849 2001:db8::), so no"
 echo "redaction is required — but you can run scripts/redact-snmp-capture.py"
 echo "if you prefer. Hand the file back and the walker spec gets verified."

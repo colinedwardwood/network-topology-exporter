@@ -51,13 +51,21 @@ vJunos boots slowly — give it **~5 minutes**. (`docker logs clab-juniper-jnxbg
 shows boot progress.)
 
 ### 3. Confirm both BGP sessions are Established
+The FRR side is the easy check (no Junos login needed) — both peers should leave
+`Active` and show an uptime:
 ```bash
-sudo containerlab exec --name juniper-jnxbgp --label clab-node-name=r1 \
-  --cmd "cli show bgp summary"        # expect 2 peers (10.0.0.2 and 2001:db8:1::2) Establ
 docker exec clab-juniper-jnxbgp-p1 vtysh -c "show bgp summary"
+# expect 192.0.2.1 (v4) and 2001:db8:1::1 (v6) Established
 ```
-If a peer is stuck, give it another minute (vJunos is slow to settle). The
-capture only needs the sessions Established — no routes.
+To check from Junos, SSH into the VM (vrnetlab default `admin` / `admin@123`;
+containerlab `exec` runs in the *container*, not the Junos CLI, so use SSH):
+```bash
+ssh admin@172.20.20.21 "show bgp summary"
+```
+If a peer is stuck in `Active`, give it another minute (vJunos is slow to
+settle) and confirm the link subnet is `192.0.2.0/30` — **not** `10.0.0.0/24`,
+which collides with vJunos's internal `fxp0` management network. The capture
+only needs the sessions Established — no routes.
 
 ### 4. Capture
 ```bash

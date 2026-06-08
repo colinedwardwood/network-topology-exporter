@@ -41,8 +41,11 @@ topology:
         - configs/daemons:/etc/frr/daemons
       # Pin the data-link addresses in the kernel so the BGP sessions don't
       # depend on zebra timing; frr.conf only carries the BGP config.
+      # NB: the BGP link uses 192.0.2.0/30 (RFC 5737), NOT 10.0.0.0/24 — that
+      # subnet is vrnetlab's internal vJunos management network (fxp0=10.0.0.15)
+      # and overlapping it breaks the data-plane sessions.
       exec:
-        - ip addr add 10.0.0.2/30 dev eth1
+        - ip addr add 192.0.2.2/30 dev eth1
         - ip -6 addr add 2001:db8:1::2/64 dev eth1
         - ip link set eth1 up
 
