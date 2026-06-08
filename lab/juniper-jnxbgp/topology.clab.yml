@@ -1,0 +1,51 @@
+# vJunos-router BGP lab for BGP4-V2 (jnxBgpM2PeerTable) fixture capture — issue #56.
+#
+# Purpose: drive snmpwalk against jnxBgpM2PeerTable (1.3.6.1.4.1.2636.5.1.1.2.1.1)
+# on a real Junos SNMP stack so the column numbers + index decoder in the
+# vendor_juniper walker (internal/discovery/bgp/bgp_vendor.go, currently
+# verified:false) are validated against actual device output rather than
+# transcribed-from-docs guesses.
+#
+# Shape: one vJunos-router (the device under capture) eBGP-peered with one
+# lightweight FRR speaker over a dual-stack link. r1 ends up with TWO
+# established peers — one IPv4, one IPv6 — so the capture exercises both
+# address-family index cases the decoder must handle. Only r1 needs to be
+# real Junos; the peer can be anything that reaches Established, hence FRR
+# (tens of MB) instead of a second vJunos.
+#
+# Image: built from the vJunos-router qcow2 via hellt/vrnetlab
+# (network-topology-exporter-resources/vJunos-router-25.4R1.12.qcow2).
+# Match the tag below to whatever `make` produced (see README.md).
+#
+# x86-64 + KVM host only (the long-running-test host, not an arm Mac).
+name: juniper-jnxbgp
+
+topology:
+  kinds:
+    juniper_vjunosrouter:
+      image: vrnetlab/juniper_vjunos-router:25.4R1.12
+    linux:
+      image: quay.io/frrouting/frr:10.2.1
+
+  nodes:
+    r1:
+      kind: juniper_vjunosrouter
+      startup-config: configs/r1.conf
+      mgmt-ipv4: 172.20.20.21
+
+    p1:
+      kind: linux
+      mgmt-ipv4: 172.20.20.22
+      binds:
+        - configs/frr.conf:/etc/frr/frr.conf
+        - configs/daemons:/etc/frr/daemons
+      # Pin the data-link addresses in the kernel so the BGP sessions don't
+      # depend on zebra timing; frr.conf only carries the BGP config.
+      exec:
+        - ip addr add 10.0.0.2/30 dev eth1
+        - ip -6 addr add 2001:db8:1::2/64 dev eth1
+        - ip link set eth1 up
+
+  links:
+    # r1:eth1 maps to ge-0/0/0 inside vJunos (see configs/r1.conf).
+    - endpoints: ["r1:eth1", "p1:eth1"]
