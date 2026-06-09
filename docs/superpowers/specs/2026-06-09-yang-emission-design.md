@@ -47,7 +47,10 @@ reconciled graph on demand.
   topology before the first cycle.
 - `Content-Type: application/yang-data+json` (RFC 8040 media type). Documented as
   a RESTCONF-flavored convenience read, **not** a conformant RESTCONF datastore.
-- **Method:** only `GET`/`HEAD`; others → `405`.
+- **Method [AR2/I2]:** `GET` and `HEAD` only. `net/http` does not synthesize HEAD
+  for a `HandlerFunc`, so handle it explicitly: set `Content-Type` and
+  `Content-Length` (from the cached/rendered bytes) and write **no body** for HEAD.
+  Any other method → `405` with an `Allow: GET, HEAD` header (RFC 7231 §6.5.5).
 
 ## Architecture
 
@@ -69,8 +72,17 @@ New package `internal/output/yang`, split for testability:
   rendered bytes keyed on the snapshot pointer identity — re-render only when
   `CurrentGraph()` returns a different pointer — so repeated GETs of an unchanged
   graph are O(1). The published graph is immutable after the cycle swaps it in
-  (verified: each cycle allocates a fresh `Graph`), so pointer identity is a sound
-  cache key and `atomic.Pointer.Load()` is race-free.
+  (verified: each cycle allocates a fresh `Graph` via `Update(g)` storing `&g`), so
+  pointer identity is a sound cache key.
+  **[AR2/I1] Cache concurrency:** the handler's cache is itself shared mutable state
+  read/written by concurrent GETs, so it must NOT be plain struct fields (data race).
+  Hold it as a single `atomic.Pointer[renderCache]` where
+  `renderCache struct { key *discovery.Graph; bytes []byte }` is immutable once
+  built. On GET: `c := cache.Load()`; if `c == nil || c.key != CurrentGraph()`,
+  render and `cache.Store(&renderCache{key, bytes})`. Two concurrent GETs racing a
+  fresh pointer may both render — harmless, since `Render` is pure and deterministic
+  (identical bytes) and the store is last-writer-wins. A `go test -race` test with
+  concurrent GETs during a graph swap is required.
 - `internal/app/app.go` — construct the handler with the collector as
   `GraphSource` and the loop's `Ready` bool; `mux.HandleFunc("/topology/yang", …)`
   only when `cfg.Output.YANG.Enabled`.
@@ -90,11 +102,16 @@ arbitrary key strings. The renderer must therefore enforce, with unit tests:
    populated independently); synthesize a minimal `node` for any such referenced
    device so no link dangles.
 3. **Key uniqueness:** `node-id` unique across nodes; `tp-id` unique within a
-   node; `link-id` unique across links. `link-id` is derived from the full tuple
-   `<src-node>:<src-tp>-<dst-node>:<dst-tp>` plus a direction discriminator on the
-   reverse link of a bidirectional edge (per the mapping doc). A
+   node; `link-id` unique across links. `link-id` is computed from the link's
+   **own** endpoints — `<source-node>:<source-tp>-<dest-node>:<dest-tp>` — so the
+   forward and reverse links of a bidirectional edge differ naturally (forward
+   `leaf1:Gi0/1-spine1:Gi0/2`, reverse `spine1:Gi0/2-leaf1:Gi0/1`, matching the
+   committed doc's worked example — no separate discriminator needed). For the
+   residual collision cases (parallel edges between the same endpoint pair from
+   different protocols, or a self-loop with equal tps), append a stable
+   discriminator `#<discovery-proto>` and, if still colliding, `#<n>`. A
    `TestRenderLinkIDsUnique` asserts no collision on an adversarial graph
-   (parallel edges, multiple protocols between the same pair).
+   (parallel multi-protocol edges between the same pair; self-loop).
 4. **Empty/degenerate inputs:** `source-tp`/`dest-tp` are *optional* leafs in
    RFC 8345, so when `SrcPort`/`DstPort` is empty the link **omits** the
    `source-tp`/`dest-tp` (and no empty tp is created) — cleaner and valid, vs.
@@ -117,13 +134,44 @@ type YANGOutputConfig struct {
 ```
 `values.schema.json` (Helm) and `config/example.yaml` updated to match.
 
+## The `ntx-topology` augmentation module [AR2/C1]
+
+Concretely defined (the committed mapping doc left these `TBD`):
+
+- **namespace:** `https://github.com/colinedwardwood/network-topology-exporter/yang/ntx-topology`
+- **prefix:** `ntx` · **revision:** `2026-06-09`
+- **imports:** `ietf-network` (`nw`), `ietf-network-topology` (`nt`)
+- **augment targets** (absolute schema-tree paths, each step prefixed by the module
+  that *defines* it — `nt:link` is contributed to `nw:network` by an
+  `ietf-network-topology` augment, which is legal to further-augment):
+  - `/nw:networks/nw:network/nt:link` → leaves `discovery-protocol`, `link-kind`,
+    `confidence`, `adjacency`
+  - `/nw:networks/nw:network/nw:node` → leaves `vendor`, `model`, `os-version`, `site`
+- **enum leaves use plain `enumeration`** whose `enum` names are **byte-identical to
+  the Go wire constants** so the renderer can emit `string(e.DiscoveryProto)` directly:
+  - `discovery-protocol`: `lldp cdp bgp ospf fdb isis mpls_te configured` (note the
+    underscore in `mpls_te` — matches `discovery.DiscoveryProtocolMPLSTE`)
+  - `link-kind`: `ethernet mpls-te ip logical` (note the hyphen in `mpls-te`)
+  - `confidence`: `high medium low`
+  - `adjacency`: `direct indirect unknown`
+  - node leaves (`vendor`/`model`/`os-version`/`site`) are `type string`.
+- **Parity test (required):** a Go test asserts every constant returned valid by
+  `DiscoveryProtocol.Valid()` / `LinkKind.Valid()` / `Confidence.Valid()` /
+  `Adjacency.Valid()` (`internal/discovery/discovery.go:125-249`) has a matching
+  `enum` in the module, so the schema and the wire values can never drift (a new
+  protocol constant without a matching enum fails CI, not production).
+
 ## Validation (CI) [AR/C3]
 
-- Vendor the import closure under `yang/`: `ietf-network`, `ietf-network-topology`,
-  `ietf-inet-types`, `ietf-yang-types`, `ietf-l3-unicast-topology`, plus the new
-  `ntx-topology.yang` augmentation (enums mirroring `DiscoveryProtocol`/`LinkKind`/
-  `Confidence`/`Adjacency`; node leaves vendor/model/os-version/site). Offline,
-  reproducible — not fetched at build time.
+- Vendor the **complete** import closure under `yang/` **[AR2/Fatal]**:
+  `ietf-network`, `ietf-network-topology`, `ietf-inet-types`, `ietf-yang-types`,
+  `ietf-l3-unicast-topology`, **`ietf-routing-types` (RFC 8294 — imported by
+  `ietf-l3-unicast-topology`; without it `yanglint` cannot load the schema and the
+  whole job fails)**, plus the new `ntx-topology.yang` augmentation. `ietf-routing-types`'s
+  own closure (`ietf-yang-types`, `ietf-inet-types`) is already covered, so that one
+  module completes the set. Offline, reproducible — not fetched at build time.
+  The plan must `yanglint`-load all modules with no instance doc as a first step to
+  prove the closure resolves before any instance validation.
 - New workflow job `yang-validate`: install `yanglint`; run a small generator
   (`go test`-driven or `go run`) that calls `Render` on an **adversarial fixture
   graph** — empty port, edge whose endpoint device is absent from `Devices`, a
@@ -140,17 +188,25 @@ type YANGOutputConfig struct {
   (the leaf1↔spine1 bidirectional case → two links); structural tests for the four
   correctness guarantees above; determinism (render twice → identical bytes).
 - `handler_test.go` (`httptest`): `200` + valid JSON when ready; `503` before
-  `Ready`; `404`/not-registered when disabled; `405` on POST; cache hit returns
+  `Ready`; `404`/not-registered when disabled; `405` + `Allow: GET, HEAD` on POST;
+  `HEAD` returns headers (incl. `Content-Length`) and no body; cache hit returns
   identical bytes and does not re-render (assert via a counting `GraphSource`).
-- yanglint validation in CI as above.
+- `handler_test.go` `-race`: concurrent GETs while the `GraphSource` swaps the
+  graph pointer — must be clean under `-race` **[AR2/I1]**.
+- `ntx_parity_test.go`: every `Valid()` constant of `DiscoveryProtocol`/`LinkKind`/
+  `Confidence`/`Adjacency` has a matching `enum` in `ntx-topology.yang` **[AR2/C1]**.
+- yanglint: first load all vendored modules with no instance (proves the import
+  closure resolves, incl. `ietf-routing-types`), then validate the adversarial
+  instance doc.
 
 ## Files
 
-- `internal/output/yang/{types.go,render.go,handler.go,render_test.go,handler_test.go}` (new)
+- `internal/output/yang/{types.go,render.go,handler.go,render_test.go,handler_test.go,ntx_parity_test.go}` (new)
 - `internal/metrics/topology_collector.go` — add `CurrentGraph() *discovery.Graph`
 - `internal/app/app.go` — register the endpoint when enabled
 - `internal/config/config.go` + `deploy/helm/topology-exporter/values.schema.json` + `config/example.yaml` — the `yang` block
-- `yang/*.yang` (vendored modules + `ntx-topology.yang`)
+- `yang/` — vendored `ietf-network`, `ietf-network-topology`, `ietf-inet-types`,
+  `ietf-yang-types`, `ietf-l3-unicast-topology`, `ietf-routing-types`, + new `ntx-topology.yang`
 - `.github/workflows/` — `yang-validate` job (or a job in an existing workflow)
 - `docs/operator/yang-topology.md` — resolve the two `TBD`s (augmentation namespace URI; flip status planned→implemented; add the `GET /topology/yang` usage)
 - `CHANGELOG.md` — Features entry
