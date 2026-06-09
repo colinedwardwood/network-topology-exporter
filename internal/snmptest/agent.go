@@ -13,6 +13,7 @@ package snmptest
 
 import (
 	"log/slog"
+	"math"
 	"net"
 	"sort"
 	"strconv"
@@ -117,6 +118,12 @@ const maxUDPSize = 65535
 
 // defaultMaxRepetitions mirrors gosnmp's default when MaxRepetitions is 0.
 const defaultMaxRepetitions = 50
+
+// maxBulkRepetitions caps the per-repeater iteration count regardless of the
+// requested MaxRepetitions. A malicious or fuzzed GetBulk packet could request
+// an arbitrarily large MaxRepetitions, driving maxReps × len(repeaters) of
+// O(log n) sort.Search calls; clamping bounds the work the test agent performs.
+const maxBulkRepetitions = 1000
 
 func serveMulti(conn net.PacketConn, communities map[string][]gsnmp.SnmpPDU, decoder *gsnmp.GoSNMP) {
 	buf := make([]byte, maxUDPSize)
@@ -223,6 +230,12 @@ func handleBulk(pdus []gsnmp.SnmpPDU, vars []gsnmp.SnmpPDU, nonRepeaters, maxRep
 	if maxReps == 0 {
 		maxReps = defaultMaxRepetitions
 	}
+	// Clamp to an upper bound so an arbitrarily large requested MaxRepetitions
+	// (or a negative value decoded from a crafted packet) cannot drive an
+	// unbounded number of iterations.
+	if maxReps < 0 || maxReps > maxBulkRepetitions {
+		maxReps = maxBulkRepetitions
+	}
 	var resp []gsnmp.SnmpPDU
 
 	// Non-repeaters: treat like GetNext.
@@ -298,13 +311,40 @@ func oidLess(a, b string) bool {
 	return bi < len(b)
 }
 
+// componentOverflow is the sentinel value returned for an OID component whose
+// numeric value would overflow int. Real SNMP OID sub-identifiers are 32-bit,
+// so any input large enough to reach this is malformed; clamping keeps oidLess
+// deterministic instead of letting v*10 silently wrap negative.
+const componentOverflow = math.MaxInt
+
 // nextComponent parses the next integer component from s starting at pos.
 // Returns (value, next_pos_after_dot_or_end).
+//
+// Accumulation is overflow-safe: once the running value would exceed int range
+// it is clamped to componentOverflow and further digits in the component are
+// consumed without altering the value. Non-digit, non-dot bytes are skipped so
+// a malformed OID cannot corrupt ordering or panic.
 func nextComponent(s string, pos int) (int, int) {
 	v := 0
+	overflow := false
 	for pos < len(s) && s[pos] != '.' {
-		v = v*10 + int(s[pos]-'0')
+		c := s[pos]
 		pos++
+		if c < '0' || c > '9' {
+			// Skip any non-digit byte rather than computing a garbage value.
+			continue
+		}
+		if overflow {
+			continue
+		}
+		d := int(c - '0')
+		// Guard before multiplying/adding so v never wraps negative.
+		if v > (math.MaxInt-d)/10 {
+			v = componentOverflow
+			overflow = true
+			continue
+		}
+		v = v*10 + d
 	}
 	if pos < len(s) && s[pos] == '.' {
 		pos++
