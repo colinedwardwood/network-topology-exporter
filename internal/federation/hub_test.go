@@ -951,7 +951,7 @@ func TestHubOOSUnmatchedMetricIncrementsOnMiss(t *testing.T) {
 	h.mu.Unlock()
 
 	combined, unmatchedCount := h.buildCombinedGraph(spokes)
-	h.tryPublishMetrics(gen, combined, false, unmatchedCount)
+	h.publishIfWinner(gen, combined, unmatchedCount, nil)
 
 	if got := testutil.ToFloat64(m.HubOOSUnmatchedTotal); got == 0 {
 		t.Error("HubOOSUnmatchedTotal = 0, want > 0 for unmatched OOS hint")
@@ -1731,6 +1731,36 @@ func TestRunSnapshotWriterShutdownUnblocksOnTimeout(t *testing.T) {
 	}
 }
 
+// TestPublishIfWinnerOversizeDoesNotBurnGeneration pins the #147 defect #2 fix:
+// an oversize graph must be rejected WITHOUT advancing lastPublishedGen, so a
+// concurrent valid graph with a lower generation can still win.
+func TestPublishIfWinnerOversizeDoesNotBurnGeneration(t *testing.T) {
+	h := NewHub(config.FederationConfig{
+		Hub: config.FederationHubConfig{MaxGraphEdges: 1, MaxGraphDevices: 1},
+	}, metrics.New(false), nil, "")
+
+	oversize := discovery.Graph{
+		Devices: []discovery.Device{{ID: "a"}, {ID: "b"}},
+		Edges:   []discovery.Edge{{SrcDevice: "a", DstDevice: "b"}, {SrcDevice: "b", DstDevice: "a"}},
+	}
+	ok, reason := h.publishIfWinner(5, oversize, 0, nil)
+	if ok || reason != metrics.RejectReasonSizeBudgetExceeded {
+		t.Fatalf("oversize: got (%v, %q), want (false, size_budget_exceeded)", ok, reason)
+	}
+	h.mu.Lock()
+	gotGen := h.lastPublishedGen
+	h.mu.Unlock()
+	if gotGen != 0 {
+		t.Fatalf("oversize burned the generation: lastPublishedGen=%d, want 0", gotGen)
+	}
+
+	valid := discovery.Graph{Devices: []discovery.Device{{ID: "a"}}}
+	ok, reason = h.publishIfWinner(4, valid, 0, nil)
+	if !ok {
+		t.Fatalf("valid lower-gen graph rejected after oversize: reason=%q", reason)
+	}
+}
+
 // TestTryPublishMetricsRejectsOversizedGraphEdges verifies that tryPublishMetrics
 // increments GraphUpdatesRejectedTotal and does NOT update Topology when the
 // combined graph exceeds MaxGraphEdges.
@@ -1753,7 +1783,13 @@ func TestTryPublishMetricsRejectsOversizedGraphEdges(t *testing.T) {
 		},
 	}
 
-	h.tryPublishMetrics(1, g, false, 0)
+	h.publishIfWinner(1, g, 0, nil)
+
+	h.mu.Lock()
+	if h.lastPublishedGen != 0 {
+		t.Fatalf("oversize reject advanced lastPublishedGen to %d, want 0", h.lastPublishedGen)
+	}
+	h.mu.Unlock()
 
 	if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(string(rejectReasonSizeBudgetExceeded))); got != 1 {
 		t.Errorf("GraphUpdatesRejectedTotal{reason=size_budget_exceeded} = %v, want 1", got)
@@ -1793,7 +1829,13 @@ func TestTryPublishMetricsRejectsOversizedGraphDevices(t *testing.T) {
 		},
 	}
 
-	h.tryPublishMetrics(1, g, false, 0)
+	h.publishIfWinner(1, g, 0, nil)
+
+	h.mu.Lock()
+	if h.lastPublishedGen != 0 {
+		t.Fatalf("oversize reject advanced lastPublishedGen to %d, want 0", h.lastPublishedGen)
+	}
+	h.mu.Unlock()
 
 	if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(string(rejectReasonSizeBudgetExceeded))); got != 1 {
 		t.Errorf("GraphUpdatesRejectedTotal{reason=size_budget_exceeded} = %v, want 1", got)
