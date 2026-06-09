@@ -101,6 +101,14 @@ func JoinReasonCodes(reasons []string) string {
 }
 
 // Device is the inventory record for one network node.
+//
+// Output projections (issue #150) diverge intentionally, like Edge above:
+// Prometheus network_topology_device_info carries {device_id, vendor, model,
+// os_version, site} unconditionally (Uptime is a separate metric, Labels are not
+// emitted as series), guarded by TestDeviceInfoLabelSchemaStable; OTLP deviceAttrs
+// emits the same fields but OMITS empty ones and uses the key "device" (not
+// "device_id"); YANG maps to RFC 8345 node attributes. Do not unify the three —
+// decide per output when adding a field.
 type Device struct {
 	ID        string // sysName (normalised lowercase); fallback: management IP
 	Vendor    string
@@ -257,6 +265,29 @@ func (a Adjacency) Valid() bool {
 // Edge serves as both a raw protocol observation (with MAC/IP DstDevice values)
 // and a canonical graph edge (with resolved sysName DstDevice). The synthesis
 // step in runCycle converts observations to canonical form before reconciliation.
+//
+// Output projections (issue #150 — read before "unifying" them). An Edge is
+// projected to three outputs that DELIBERATELY carry different field subsets;
+// this divergence is intentional, not drift, and the three mappers are kept
+// separate on purpose:
+//   - Prometheus network_topology_edge_info (internal/metrics/topology_collector.go):
+//     a fixed, minimal label schema {src_device, src_port, dst_device, dst_port,
+//     discovery_proto, link_kind, direction}. It deliberately OMITS Confidence,
+//     Adjacency, PrecedenceRank, and Metadata to bound label cardinality — these
+//     vary per-edge and would multiply series. Adding a label here is a conscious
+//     cardinality decision (guarded by TestEdgeInfoLabelSchemaStable in metrics).
+//   - OTLP edgeAttrs (internal/output/otlp): the full attribute set including
+//     confidence/adjacency/precedence_rank and every Metadata key (attribute
+//     budgets, not label cardinality, govern there). Note the proto attribute key
+//     is "proto", not "discovery_proto".
+//   - YANG (internal/output/yang): RFC 8345 nested structure — a bidirectional
+//     Edge becomes two directed links, fields map to specific YANG leaves.
+//
+// A single shared projection was assessed and rejected (#150): the outputs differ
+// in selection, attribute-key names, conditional emission, sanitization semantics,
+// and structure, so a common abstraction would need more knobs than the three
+// direct mappers and would risk silently changing a wire contract. When adding a
+// field to Edge, decide PER OUTPUT whether it belongs.
 type Edge struct {
 	SrcDevice string
 	SrcPort   string
