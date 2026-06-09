@@ -164,11 +164,16 @@ New / changed tests in `internal/federation/hub_test.go`:
 2. **Defect #2, at the HTTP handler.** Drive `handlePush` such that a push whose generation would have been collaterally burned returns **204, not 409** (orchestrated via a seam/barrier or sequenced oversize-then-valid pushes). Asserts the customer-visible manifestation.
 3. **Defect #1, deterministic.** A push whose publish is forced to lose (lower generation) or is oversize-rejected leaves `h.spokes` unchanged and `FederationSpokeUp{id}` unset — proving `h.spokes` is never speculatively written. (Extends the existing `TestHubHandlePushRejectedGraphDoesNotMarkSpokeUp` / `...RollsBackPreviousEntry` to the new no-write model.)
 4. **Defect #1, real-path concurrency (`-race`).** Fire concurrent real `handlePush` requests (via `httptest`) for different spokes — replacing/augmenting `TestHubConcurrentPushAndEviction`, which currently bypasses `handlePush` by poking `h.spokes` directly. Run with `-race`.
-5. **Eviction-race regression (`-race`).** Concurrent `handlePush` accept + `evictSilentSpokes` for the same spoke must never leave `FederationSpokeUp{id}=1` while the spoke is absent from `h.spokes` and the published graph (proves the F1 fold-into-lock fix).
+5. **Eviction-race invariant probe (`-race`, iterated).** Note: a freshly accepted push sets `lastSeen=now`, so the *same* spoke is never simultaneously accept-fresh **and** evict-eligible — there is no single deterministic post-state to assert here. Instead, run many iterations under `-race` of: artificially age spoke X (`lastSeen` older than `SpokeTimeout`) and fire `evictSilentSpokes` concurrently with a real `handlePush` accept for X. Assert (a) the race detector stays clean, and (b) after each iteration quiesces, the invariant `FederationSpokeUp{X}=1 ⇔ X ∈ h.spokes` holds. This proves the F1 fold-into-lock fix (a gauge can never be resurrected after an evict-delete, because the `SpokeUp.Set(1)` now happens under the same lock as the `h.spokes` write). Optionally force the commit/evict interleave via a test seam for determinism.
 6. **Preservation.** Accepted push still sets both liveness gauges + `firstLive` + returns 204 + writes snapshot; a stale-generation push commits nothing and returns 409.
 7. **Migrate the three existing direct call sites** of `tryPublishMetrics` (`hub_test.go` TestHubOOSUnmatchedMetricIncrementsOnMiss, TestTryPublishMetricsRejectsOversizedGraphEdges, TestTryPublishMetricsRejectsOversizedGraphDevices) to `publishIfWinner(..., nil)`. **Keep** the two oversize tests — they pin the reject-increments-counter + generation-untouched semantics — and add the `lastPublishedGen == 0` assertion to them.
 
 All existing federation tests must stay green; `go test ./... -race`, `gofmt`, and `golangci-lint run` clean per the project gate. No Co-Authored-By / AI-attribution trailers.
+
+Implementer callouts (from third-party spec review):
+- `publishMetrics` is **retained unchanged** (used by `RestoreGraph`), so `TestHubPublishMetricsClearStale` and `TestHubPublishMetricsPreservesStaleWhenFalse` stay green without migration — do not delete `publishMetrics`.
+- `HubOOSUnmatchedTotal.Set` continues to run on the eviction publish path (now under `mu` via `publishIfWinner(..., nil)`); this is intended and benign (the gauge has its own lock).
+- Test #1 should acquire `h.mu` when reading `lastPublishedGen` (or be explicitly documented single-goroutine) so it stays clean under `-race`.
 
 ---
 
