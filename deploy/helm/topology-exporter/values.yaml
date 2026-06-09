@@ -59,6 +59,11 @@ prometheusRule:
   # Discovery cycle slower than this threshold triggers the p99 alert.
   cycleThresholdSeconds: 60
 
+# A CPU limit is intentionally omitted. Discovery is bursty (periodic cycles),
+# and a CPU limit would invite CFS throttling that stretches cycle latency for
+# no real benefit on a small workload. The request sets the scheduler floor;
+# memory keeps a hard limit to bound blast radius. Add a cpu limit here only if
+# a namespace ResourceQuota / LimitRange forces one. (#122)
 resources:
   requests:
     cpu: 50m
@@ -166,6 +171,32 @@ networkPolicy:
   # Labels that spoke pods must carry to be allowed ingress on the hub port.
   # Example: topology-exporter/role: spoke
   spokeSelector: {}
+  # Opt-in egress restriction. Default (disabled) keeps the policy Ingress-only.
+  # When enabled, policyTypes gains Egress and ONLY the rules below are allowed —
+  # all other outbound traffic is denied. A credential-bearing whole-network SNMP
+  # scanner has no business reaching arbitrary destinations, so locking egress
+  # limits the blast radius if the pod is compromised. You MUST enumerate every
+  # destination the exporter legitimately needs, or it will break.
+  egress:
+    enabled: false
+    # DNS resolution (kube-dns / CoreDNS). Almost always required. Allows
+    # UDP+TCP 53 egress (to any destination, since the DNS service IP varies).
+    allowDNS: true
+    # SNMP polling targets — typically your discovery scope
+    # (config.discovery.scope.cidr_allow_list).
+    snmp:
+      cidrs: [] # e.g. ["10.0.0.0/8"]
+      ports: [161]
+    # OTLP traces/metrics collector endpoint.
+    otlp:
+      cidrs: [] # e.g. ["10.96.0.10/32"]
+      ports: [4317]
+    # Hub federation peers (spoke → hub push). Hub-side acceptance is ingress.
+    hub:
+      cidrs: [] # e.g. ["10.0.0.0/8"]
+      ports: [9101]
+    # Escape hatch: extra raw NetworkPolicy egress entries, rendered verbatim.
+    extraRules: []
 
 nodeSelector: {}
 tolerations: []

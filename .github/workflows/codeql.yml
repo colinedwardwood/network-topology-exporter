@@ -1,0 +1,48 @@
+# CodeQL semantic static analysis for Go (#120). Complements the existing
+# supply-chain controls (gosec via golangci-lint, govulncheck, gosec/OSS-Fuzz)
+# by adding dataflow-based analysis with results uploaded to the repository's
+# Security → Code scanning tab. Runs on PRs, on push to main, and weekly so a
+# newly published query surfaces issues even without a code change.
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '24 5 * * 1' # Mondays 05:24 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze (go)
+    runs-on: ubuntu-latest
+    permissions:
+      # Required for codeql-action to upload SARIF to the Security tab.
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: go
+          queries: security-extended
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:go"

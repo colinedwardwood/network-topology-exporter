@@ -1,0 +1,38 @@
+# Adds Egress to the base NetworkPolicy. EDIT the example CIDRs/ports below to
+# your environment — with Egress enabled, anything not listed here is DENIED.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: topology-exporter
+spec:
+  policyTypes:
+    - Ingress
+    - Egress
+  egress:
+    # DNS resolution (kube-dns / CoreDNS). Required.
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # SNMP polling targets — EDIT to your discovery scope (cidr_allow_list).
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+      ports:
+        - port: 161
+          protocol: UDP
+    # OTLP traces/metrics collector — EDIT to your collector address.
+    - to:
+        - ipBlock:
+            cidr: 10.96.0.0/16
+      ports:
+        - port: 4317
+          protocol: TCP
+    # Hub federation peers (spoke → hub push) — EDIT, or remove if standalone.
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+      ports:
+        - port: 9101
+          protocol: TCP

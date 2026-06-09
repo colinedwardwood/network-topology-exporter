@@ -23,7 +23,27 @@ deploy/kustomize/
     standalone/               # config.federation.role: standalone
     hub/                      # config.federation.role: hub
     spoke/                    # config.federation.role: spoke
+  components/
+    egress-networkpolicy/     # opt-in: lock down egress (DNS/SNMP/OTLP/hub)
 ```
+
+## Hardening: opt-in egress NetworkPolicy
+
+The base NetworkPolicy is **Ingress-only** — a compromised credential-bearing
+SNMP scanner would have unrestricted outbound (lateral) reach. The
+`components/egress-networkpolicy` component adds `Egress` to `policyTypes` with
+allow-rules for DNS, SNMP polling, the OTLP collector, and hub federation.
+Enable it from an overlay:
+
+```yaml
+# in overlays/<mode>/kustomization.yaml
+components:
+  - ../../components/egress-networkpolicy
+```
+
+With Egress enabled, **only the listed destinations are reachable** — edit the
+example CIDRs/ports in the component's patch to your environment first, or the
+exporter will lose connectivity. (Helm users set `networkPolicy.egress.*`.)
 
 ## Federation modes
 
