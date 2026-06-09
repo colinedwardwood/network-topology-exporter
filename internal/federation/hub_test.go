@@ -931,7 +931,7 @@ func TestHubRestoreGraphPublishesMetrics(t *testing.T) {
 }
 
 // TestHubOOSUnmatchedMetricIncrementsOnMiss verifies that unmatched OOS hints
-// are reflected in HubOOSUnmatchedTotal after the build wins the publish CAS.
+// are reflected in HubOOSUnmatchedTotal after the build wins publishIfWinner.
 func TestHubOOSUnmatchedMetricIncrementsOnMiss(t *testing.T) {
 	m := metrics.New(false)
 	h := NewHub(config.FederationConfig{SpokeTimeout: 5 * time.Minute}, m, nil, "")
@@ -951,7 +951,7 @@ func TestHubOOSUnmatchedMetricIncrementsOnMiss(t *testing.T) {
 	h.mu.Unlock()
 
 	combined, unmatchedCount := h.buildCombinedGraph(spokes)
-	h.tryPublishMetrics(gen, combined, false, unmatchedCount)
+	h.publishIfWinner(gen, combined, unmatchedCount, nil)
 
 	if got := testutil.ToFloat64(m.HubOOSUnmatchedTotal); got == 0 {
 		t.Error("HubOOSUnmatchedTotal = 0, want > 0 for unmatched OOS hint")
@@ -1731,10 +1731,40 @@ func TestRunSnapshotWriterShutdownUnblocksOnTimeout(t *testing.T) {
 	}
 }
 
-// TestTryPublishMetricsRejectsOversizedGraphEdges verifies that tryPublishMetrics
+// TestPublishIfWinnerOversizeDoesNotBurnGeneration pins the #147 defect #2 fix:
+// an oversize graph must be rejected WITHOUT advancing lastPublishedGen, so a
+// concurrent valid graph with a lower generation can still win.
+func TestPublishIfWinnerOversizeDoesNotBurnGeneration(t *testing.T) {
+	h := NewHub(config.FederationConfig{
+		Hub: config.FederationHubConfig{MaxGraphEdges: 1, MaxGraphDevices: 1},
+	}, metrics.New(false), nil, "")
+
+	oversize := discovery.Graph{
+		Devices: []discovery.Device{{ID: "a"}, {ID: "b"}},
+		Edges:   []discovery.Edge{{SrcDevice: "a", DstDevice: "b"}, {SrcDevice: "b", DstDevice: "a"}},
+	}
+	ok, reason := h.publishIfWinner(5, oversize, 0, nil)
+	if ok || reason != metrics.RejectReasonSizeBudgetExceeded {
+		t.Fatalf("oversize: got (%v, %q), want (false, size_budget_exceeded)", ok, reason)
+	}
+	h.mu.Lock()
+	gotGen := h.lastPublishedGen
+	h.mu.Unlock()
+	if gotGen != 0 {
+		t.Fatalf("oversize burned the generation: lastPublishedGen=%d, want 0", gotGen)
+	}
+
+	valid := discovery.Graph{Devices: []discovery.Device{{ID: "a"}}}
+	ok, reason = h.publishIfWinner(4, valid, 0, nil)
+	if !ok {
+		t.Fatalf("valid lower-gen graph rejected after oversize: reason=%q", reason)
+	}
+}
+
+// TestPublishIfWinnerRejectsOversizedGraphEdges verifies that publishIfWinner
 // increments GraphUpdatesRejectedTotal and does NOT update Topology when the
 // combined graph exceeds MaxGraphEdges.
-func TestTryPublishMetricsRejectsOversizedGraphEdges(t *testing.T) {
+func TestPublishIfWinnerRejectsOversizedGraphEdges(t *testing.T) {
 	m := metrics.New(false)
 	h := NewHub(
 		config.FederationConfig{
@@ -1753,7 +1783,13 @@ func TestTryPublishMetricsRejectsOversizedGraphEdges(t *testing.T) {
 		},
 	}
 
-	h.tryPublishMetrics(1, g, false, 0)
+	h.publishIfWinner(1, g, 0, nil)
+
+	h.mu.Lock()
+	if h.lastPublishedGen != 0 {
+		t.Fatalf("oversize reject advanced lastPublishedGen to %d, want 0", h.lastPublishedGen)
+	}
+	h.mu.Unlock()
 
 	if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(string(rejectReasonSizeBudgetExceeded))); got != 1 {
 		t.Errorf("GraphUpdatesRejectedTotal{reason=size_budget_exceeded} = %v, want 1", got)
@@ -1773,10 +1809,10 @@ func TestTryPublishMetricsRejectsOversizedGraphEdges(t *testing.T) {
 	}
 }
 
-// TestTryPublishMetricsRejectsOversizedGraphDevices verifies that
-// tryPublishMetrics increments GraphUpdatesRejectedTotal and does NOT update
+// TestPublishIfWinnerRejectsOversizedGraphDevices verifies that
+// publishIfWinner increments GraphUpdatesRejectedTotal and does NOT update
 // Topology when the combined graph exceeds MaxGraphDevices.
-func TestTryPublishMetricsRejectsOversizedGraphDevices(t *testing.T) {
+func TestPublishIfWinnerRejectsOversizedGraphDevices(t *testing.T) {
 	m := metrics.New(false)
 	h := NewHub(
 		config.FederationConfig{
@@ -1793,7 +1829,13 @@ func TestTryPublishMetricsRejectsOversizedGraphDevices(t *testing.T) {
 		},
 	}
 
-	h.tryPublishMetrics(1, g, false, 0)
+	h.publishIfWinner(1, g, 0, nil)
+
+	h.mu.Lock()
+	if h.lastPublishedGen != 0 {
+		t.Fatalf("oversize reject advanced lastPublishedGen to %d, want 0", h.lastPublishedGen)
+	}
+	h.mu.Unlock()
 
 	if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(string(rejectReasonSizeBudgetExceeded))); got != 1 {
 		t.Errorf("GraphUpdatesRejectedTotal{reason=size_budget_exceeded} = %v, want 1", got)
@@ -1814,7 +1856,7 @@ func TestTryPublishMetricsRejectsOversizedGraphDevices(t *testing.T) {
 }
 
 // TestHubHandlePushRejectedGraphDoesNotMarkSpokeUp verifies that when
-// tryPublishMetrics rejects the combined graph (size budget exceeded), the spoke
+// publishIfWinner rejects the combined graph (size budget exceeded), the spoke
 // is NOT registered in h.spokes and FederationSpokeUp is NOT set to 1.
 // This guards against the inconsistency where a spoke appears "up" in Prometheus
 // but contributes zero edges to the topology because its graph was rejected.
@@ -1904,10 +1946,11 @@ func TestHubHandlePushRejectedGraphDoesNotMarkSpokeUp(t *testing.T) {
 	}
 }
 
-// TestHubHandlePushRejectedGraphRollsBackPreviousEntry verifies that when a
+// TestHubHandlePushRejectedGraphLeavesPreviousEntryIntact verifies that when a
 // spoke's push is rejected due to graph size limits, the spoke's PREVIOUS entry
-// in h.spokes is restored rather than overwritten with the new payload.
-func TestHubHandlePushRejectedGraphRollsBackPreviousEntry(t *testing.T) {
+// in h.spokes is left intact (never speculatively overwritten with the new
+// payload).
+func TestHubHandlePushRejectedGraphLeavesPreviousEntryIntact(t *testing.T) {
 	m := metrics.New(false)
 	h := NewHub(
 		config.FederationConfig{
@@ -1977,6 +2020,131 @@ func TestHubHandlePushRejectedGraphRollsBackPreviousEntry(t *testing.T) {
 	if len(entry.payload.Devices) != 1 || entry.payload.Devices[0].ID != "sw-prior" {
 		t.Errorf("h.spokes[dc-rollback].payload.Devices = %v, want prior entry [{sw-prior}]",
 			entry.payload.Devices)
+	}
+}
+
+// TestHandlePushRejectedLeavesSpokesUntouched pins #147 defect #1: a push whose
+// combined graph is rejected (size budget) must leave h.spokes unchanged and
+// FederationSpokeUp unset — i.e. the entry is never speculatively written.
+func TestHandlePushRejectedLeavesSpokesUntouched(t *testing.T) {
+	h := NewHub(config.FederationConfig{
+		SpokeTimeout: time.Hour,
+		Hub:          config.FederationHubConfig{MaxGraphDevices: 1},
+	}, metrics.New(false), nil, "")
+
+	body, _ := json.Marshal(SpokePayload{
+		SpokeID: "dc-x",
+		CycleAt: time.Now(),
+		Devices: []discovery.Device{{ID: "d1"}, {ID: "d2"}}, // 2 > MaxGraphDevices=1
+	})
+	req := httptest.NewRequest(http.MethodPost, "/federation/push", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.handlePush(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status: got %d, want 413", rec.Code)
+	}
+	h.mu.Lock()
+	_, present := h.spokes["dc-x"]
+	h.mu.Unlock()
+	if present {
+		t.Fatal("rejected push left a spoke entry in h.spokes (speculative write not eliminated)")
+	}
+	if got := testutil.ToFloat64(h.m.FederationSpokeUp.WithLabelValues("dc-x")); got != 0 {
+		t.Fatalf("FederationSpokeUp{dc-x}=%v after reject, want 0", got)
+	}
+}
+
+// TestHandlePushConcurrentDifferentSpokes drives many concurrent real handlePush
+// requests for distinct spokes through the actual handler. Run with -race.
+func TestHandlePushConcurrentDifferentSpokes(t *testing.T) {
+	h := NewHub(config.FederationConfig{SpokeTimeout: time.Hour}, metrics.New(false), nil, "")
+	const n = 32
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			id := fmt.Sprintf("dc-%02d", i)
+			body, _ := json.Marshal(SpokePayload{
+				SpokeID: id, CycleAt: time.Now(),
+				Devices: []discovery.Device{{ID: id + "-r1"}},
+			})
+			req := httptest.NewRequest(http.MethodPost, "/federation/push", bytes.NewReader(body))
+			h.handlePush(httptest.NewRecorder(), req)
+		}(i)
+	}
+	wg.Wait()
+	// Concurrent pushes are arbitrated by generation: a push that loses the race
+	// is cleanly dropped (no commit, 409) and re-pushed next cycle, so not all n
+	// register in a single burst. The invariant the #147 fix guarantees is
+	// consistency — a spoke is in h.spokes iff its liveness gauge is set.
+	registered := 0
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("dc-%02d", i)
+		h.mu.Lock()
+		_, present := h.spokes[id]
+		h.mu.Unlock()
+		gaugeUp := testutil.ToFloat64(h.m.FederationSpokeUp.WithLabelValues(id)) == 1
+		if present != gaugeUp {
+			t.Fatalf("%s: h.spokes present=%v but gauge up=%v (atomic-commit invariant violated)", id, present, gaugeUp)
+		}
+		if present {
+			registered++
+		}
+	}
+	if registered == 0 {
+		t.Fatal("no spokes registered from concurrent pushes — expected at least one winner")
+	}
+}
+
+// TestHandlePushEvictionRaceInvariant probes the #147 F1 fold-into-lock fix: the
+// FederationSpokeUp gauge and h.spokes membership must stay consistent
+// (present iff gauge==1) across concurrent accept/evict. Even iterations race a
+// fresh push against eviction (push wins -> present); odd iterations evict an
+// aged entry alone (-> absent). Both terminal states must occur, so the
+// invariant is asserted in BOTH directions. Run under -race.
+func TestHandlePushEvictionRaceInvariant(t *testing.T) {
+	h := NewHub(config.FederationConfig{SpokeTimeout: time.Hour}, metrics.New(false), nil, "")
+	const id = "dc-race"
+	sawPresent, sawAbsent := false, false
+	for iter := 0; iter < 200; iter++ {
+		// Seed an aged entry + gauge so eviction is eligible to delete it.
+		h.mu.Lock()
+		h.spokes[id] = spokeEntry{payload: SpokePayload{SpokeID: id}, lastSeen: time.Now().Add(-2 * time.Hour)}
+		h.mu.Unlock()
+		h.m.FederationSpokeUp.WithLabelValues(id).Set(1)
+
+		race := iter%2 == 0
+		var wg sync.WaitGroup
+		if race {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				body, _ := json.Marshal(SpokePayload{SpokeID: id, CycleAt: time.Now(),
+					Devices: []discovery.Device{{ID: "r1"}}})
+				h.handlePush(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/p", bytes.NewReader(body)))
+			}()
+		}
+		wg.Add(1)
+		go func() { defer wg.Done(); h.evictSilentSpokes() }()
+		wg.Wait()
+
+		h.mu.Lock()
+		_, present := h.spokes[id]
+		h.mu.Unlock()
+		gauge := testutil.ToFloat64(h.m.FederationSpokeUp.WithLabelValues(id))
+		if present != (gauge == 1) {
+			t.Fatalf("iter %d (race=%v): invariant violated: present=%v gauge=%v", iter, race, present, gauge)
+		}
+		if present {
+			sawPresent = true
+		} else {
+			sawAbsent = true
+		}
+	}
+	if !sawPresent || !sawAbsent {
+		t.Fatalf("test did not exercise both terminal states: sawPresent=%v sawAbsent=%v", sawPresent, sawAbsent)
 	}
 }
 

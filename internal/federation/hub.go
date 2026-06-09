@@ -49,6 +49,15 @@ type spokeEntry struct {
 	lastSeen time.Time
 }
 
+// acceptedPush carries the spoke state to commit atomically with a winning
+// publication. entry.lastSeen is the accept time used for the liveness gauge.
+// A nil *acceptedPush (e.g. from eviction) publishes the graph without
+// registering any spoke or touching liveness metrics.
+type acceptedPush struct {
+	id    string
+	entry spokeEntry
+}
+
 // Hub aggregates SpokePayload pushes from spoke instances, reconciles the
 // combined edge set across all spoke domains, and updates the shared
 // Prometheus metrics with the unified topology. Per LD-16, spokes push;
@@ -61,11 +70,14 @@ type Hub struct {
 	logger               *slog.Logger
 	snapshotPath         string
 	snapshotCh           chan discovery.Graph
-	firstLive            atomic.Bool // set to true on the first live publishMetrics call
+	firstLive            atomic.Bool // set to true on the first live publishIfWinner call
 	snapshotWriteFn      func(string, snapshot.File) error
 	snapshotWriteTimeout time.Duration
 	publishGen           atomic.Uint64
-	lastPublishedGen     atomic.Uint64
+	// lastPublishedGen is the generation of the last graph actually published.
+	// Guarded by mu (read+written only inside publishIfWinner). Plain uint64,
+	// not atomic: the CAS loop is gone now that gen comparison happens under mu.
+	lastPublishedGen uint64
 }
 
 // NewHub constructs a Hub ready to accept spoke pushes. snapshotPath enables
@@ -562,18 +574,16 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build the combined graph with the new spoke included, but defer writing
-	// h.spokes and updating the spoke-up metrics until after tryPublishMetrics
-	// confirms the graph was accepted. This prevents a spoke from appearing "up"
-	// in Prometheus when the combined graph exceeds the size budget and is never
-	// published — which would otherwise make the spoke look healthy while
-	// contributing zero edges to the topology.
+	// Build the combined graph with the new spoke folded into a COPY of the
+	// registry; h.spokes itself is not written until publishIfWinner confirms
+	// this graph wins publication. This makes the spoke commit atomic with the
+	// publish: a concurrent push's spokesSnapshot() can never observe an entry
+	// that has not yet been validated and published.
 	h.mu.Lock()
 	prevEntry, hadPrev := h.spokes[payload.SpokeID]
 	// Defense-in-depth rate limit: reject pushes that arrive sooner than
 	// min_push_interval after the previous accepted push from the same
-	// spoke_id. The check runs inside h.mu so two concurrent racing pushes
-	// cannot both pass.
+	// spoke_id. Runs inside h.mu so two racing pushes cannot both pass.
 	if hadPrev && h.cfg.Hub.MinPushInterval > 0 {
 		sinceLast := now.Sub(prevEntry.lastSeen)
 		if sinceLast < h.cfg.Hub.MinPushInterval {
@@ -593,26 +603,19 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	h.spokes[payload.SpokeID] = spokeEntry{payload: payload, lastSeen: now}
-	spokes := h.spokesSnapshot()
+	entry := spokeEntry{payload: payload, lastSeen: now}
+	candidate := h.spokesSnapshot() // copy of h.spokes WITHOUT the new entry
+	candidate[payload.SpokeID] = entry
 	gen := h.publishGen.Add(1)
 	h.mu.Unlock()
-	combined, unmatchedCount := h.buildCombinedGraph(spokes)
 
-	// LD-13: clear GraphStale atomically inside publishMu on the first live push
-	// so a concurrent scrape never sees fresh edges alongside GraphStale=1.
-	// Only advance firstLive after tryPublishMetrics confirms the graph was
-	// actually published; the size-budget guard can reject the graph and return
-	// false, which would otherwise leave firstLive=true with no Topology update.
-	wasFirst := !h.firstLive.Load()
-	published, rejectReason := h.tryPublishMetrics(gen, combined, wasFirst, unmatchedCount)
+	combined, unmatchedCount := h.buildCombinedGraph(candidate)
+
+	// publishIfWinner commits the spoke entry + liveness gauges + Topology.Update
+	// atomically under h.mu iff this generation wins and the graph fits the size
+	// budget. On reject nothing was written, so there is nothing to roll back.
+	published, rejectReason := h.publishIfWinner(gen, combined, unmatchedCount, &acceptedPush{id: payload.SpokeID, entry: entry})
 	if published {
-		// Graph was accepted: commit the spoke registration and update liveness metrics.
-		h.m.FederationSpokeUp.WithLabelValues(payload.SpokeID).Set(1)
-		h.m.FederationSpokeLastPushUnix.WithLabelValues(payload.SpokeID).Set(float64(now.Unix()))
-		if wasFirst {
-			h.firstLive.Store(true)
-		}
 		h.writeSnapshotAsync(combined)
 		h.logger.Info("hub: spoke push accepted",
 			"spoke_id", payload.SpokeID,
@@ -624,19 +627,6 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Graph was rejected: roll back the spoke entry so h.spokes reflects only
-	// previously-accepted state, then return a 4xx that distinguishes the
-	// reason. A 204 here would silently mislead the spoke into believing the
-	// push succeeded. Both codes are 4xx-fatal in the spoke's retry policy so
-	// the spoke does not burn retries on the same payload; the next discovery
-	// cycle will produce fresh data.
-	h.mu.Lock()
-	if hadPrev {
-		h.spokes[payload.SpokeID] = prevEntry
-	} else {
-		delete(h.spokes, payload.SpokeID)
-	}
-	h.mu.Unlock()
 	h.logger.Warn("hub: spoke push rejected — combined graph not applied",
 		"spoke_id", payload.SpokeID,
 		"reject_reason", rejectReason,
@@ -723,7 +713,7 @@ func (h *Hub) combinedGraphLocked() discovery.Graph {
 // lock first, then release h.mu before calling this function.
 // The second return value is the count of unmatched OOS observations; callers
 // should only publish this via HubOOSUnmatchedTotal after confirming the build
-// wins the CAS in tryPublishMetrics.
+// wins in publishIfWinner.
 func (h *Hub) buildCombinedGraph(spokes map[string]spokeEntry) (discovery.Graph, int) {
 	var allDevices []discovery.Device
 	seenDevices := make(map[string]bool)
@@ -966,7 +956,7 @@ func (h *Hub) evictSilentSpokes() {
 		gen := h.publishGen.Add(1)
 		h.mu.Unlock()
 		combined, unmatchedCount := h.buildCombinedGraph(spokes)
-		if published, _ := h.tryPublishMetrics(gen, combined, false, unmatchedCount); published {
+		if published, _ := h.publishIfWinner(gen, combined, unmatchedCount, nil); published {
 			h.writeSnapshotAsync(combined)
 		}
 	}
@@ -1006,40 +996,57 @@ const (
 	rejectReasonStructuralInvalid  = metrics.RejectReasonStructuralInvalid
 )
 
-// tryPublishMetrics publishes g only when gen is strictly greater than the last
+// publishIfWinner publishes g only when gen is strictly greater than the last
 // published generation, preventing a slow concurrent goroutine from overwriting
-// a newer combined graph with an older snapshot. It uses a CAS loop so that two
-// concurrent callers with equal gen do not both publish.
-// unmatchedCount is only written to HubOOSUnmatchedTotal when the CAS succeeds,
-// so the metric always reflects the winning build rather than a discarded one.
-// Returns (true, "") when Topology.Update is actually called. Returns
-// (false, reason) when the CAS lost the race or the size-budget guard rejected
-// the graph; the reason is a stable string suitable for response bodies and
-// logs.
-func (h *Hub) tryPublishMetrics(gen uint64, g discovery.Graph, clearStale bool, unmatchedCount int) (bool, metrics.RejectReason) {
-	for {
-		last := h.lastPublishedGen.Load()
-		if gen <= last {
-			return false, rejectReasonStaleGeneration
-		}
-		if h.lastPublishedGen.CompareAndSwap(last, gen) {
-			maxEdges := h.cfg.Hub.MaxGraphEdges
-			maxDevices := h.cfg.Hub.MaxGraphDevices
-			if (maxEdges > 0 && len(g.Edges) > maxEdges) || (maxDevices > 0 && len(g.Devices) > maxDevices) {
-				h.logger.Warn("graph update rejected: exceeds size budget",
-					"edges", len(g.Edges), "max_edges", maxEdges,
-					"devices", len(g.Devices), "max_devices", maxDevices)
-				h.m.GraphUpdatesRejectedTotal.WithLabelValues(string(rejectReasonSizeBudgetExceeded)).Inc()
-				return false, rejectReasonSizeBudgetExceeded
-			}
-			h.m.HubOOSUnmatchedTotal.Set(float64(unmatchedCount))
-			if clearStale {
-				h.m.GraphStale.Set(0)
-			}
-			h.m.Topology.Update(g)
-			return true, ""
+// a newer combined graph with an older snapshot. It runs ENTIRELY under h.mu;
+// the order is load-bearing:
+//
+//  1. stale-generation check  → reject; generation untouched
+//  2. size-budget check       → reject; generation UNTOUCHED  (issue #147 fix)
+//  3. win: advance generation, and if accepted != nil commit the spoke entry,
+//     its liveness gauges, and first-live/GraphStale — atomically with
+//     Topology.Update (issue #147 fix, incl. the eviction-race reverse).
+//
+// Removing the old CAS loop is safe: publishGen.Add(1) is performed under h.mu
+// at the single call site, so two callers can never hold equal generations.
+func (h *Hub) publishIfWinner(gen uint64, g discovery.Graph, unmatched int, accepted *acceptedPush) (bool, metrics.RejectReason) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if gen <= h.lastPublishedGen {
+		return false, rejectReasonStaleGeneration
+	}
+
+	maxEdges := h.cfg.Hub.MaxGraphEdges
+	maxDevices := h.cfg.Hub.MaxGraphDevices
+	if (maxEdges > 0 && len(g.Edges) > maxEdges) || (maxDevices > 0 && len(g.Devices) > maxDevices) {
+		h.logger.Warn("graph update rejected: exceeds size budget",
+			"edges", len(g.Edges), "max_edges", maxEdges,
+			"devices", len(g.Devices), "max_devices", maxDevices)
+		h.m.GraphUpdatesRejectedTotal.WithLabelValues(string(rejectReasonSizeBudgetExceeded)).Inc()
+		return false, rejectReasonSizeBudgetExceeded // generation NOT advanced
+	}
+
+	h.lastPublishedGen = gen
+
+	if accepted != nil {
+		// Commit the spoke registration AND its liveness signals under the same
+		// lock as the graph publish. If these gauges were set after the lock
+		// released, a concurrent evictSilentSpokes could delete the entry+gauge
+		// in between and we would resurrect a gauge for a spoke absent from both
+		// h.spokes and the published graph (the #147 inconsistency, reversed).
+		h.spokes[accepted.id] = accepted.entry
+		h.m.FederationSpokeUp.WithLabelValues(accepted.id).Set(1)
+		h.m.FederationSpokeLastPushUnix.WithLabelValues(accepted.id).Set(float64(accepted.entry.lastSeen.Unix()))
+		if !h.firstLive.Load() {
+			h.m.GraphStale.Set(0)
+			h.firstLive.Store(true)
 		}
 	}
+
+	h.m.HubOOSUnmatchedTotal.Set(float64(unmatched))
+	h.m.Topology.Update(g)
+	return true, ""
 }
 
 // IsReady reports whether the hub has received at least one live spoke push.
