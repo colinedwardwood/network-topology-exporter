@@ -306,6 +306,15 @@ func RunDiscoveryLoop(ctx context.Context, lc LoopConfig) {
 		}()
 	}
 
+	// #6: decouple the spoke→hub push from the discovery cycle. The pusher
+	// keeps a latest-only mailbox and pushes on its own goroutine so a slow hub
+	// can never stall a cycle or evict the spoke.
+	var pusher *spokePusher
+	if lc.Spoke != nil {
+		pusher = newSpokePusher(lc.Spoke.Push, lc.M, lc.Logger)
+		go pusher.run(ctx)
+	}
+
 	var cycleNum int
 	// State for the large-topology warning (issue #9): track whether the
 	// previous cycle was above the threshold so we only emit on upward
@@ -444,22 +453,18 @@ func RunDiscoveryLoop(ctx context.Context, lc LoopConfig) {
 			}
 		}
 
-		// LD-16/LD-17: spoke mode — push pre-reconciled graph to hub.
-		if lc.Spoke != nil {
-			payload := federation.SpokePayload{
+		// LD-16/LD-17: spoke mode — hand the pre-reconciled graph to the async
+		// pusher (#6). Enqueue never blocks; cycleCtx is captured so the eventual
+		// push still propagates the cycle's W3C traceparent to the hub (#68).
+		if pusher != nil {
+			pusher.Enqueue(cycleCtx, federation.SpokePayload{
 				SpokeID:    lc.Cfg.Federation.Spoke.SpokeID,
 				CycleAt:    time.Now(),
 				Devices:    newGraph.Devices,
 				Edges:      newGraph.Edges,
 				OutOfScope: newGraph.OutOfScope,
 				Ages:       ageMap,
-			}
-			// Pass cycleCtx so the spoke.push span nests under discovery.cycle
-			// and carries the cycle's trace context into the outbound HTTP push
-			// (issue #68: spoke→hub W3C traceparent propagation).
-			if err := lc.Spoke.Push(cycleCtx, payload); err != nil && ctx.Err() == nil {
-				lc.Logger.Warn("spoke push failed", "error", err)
-			}
+			})
 		}
 	}
 
@@ -479,6 +484,9 @@ func RunDiscoveryLoop(ctx context.Context, lc LoopConfig) {
 			// a concrete signal in the shutdown sequence. See
 			// docs/operator/security.md for the threat model and limits.
 			lc.Logger.Info("snmp credentials zeroized; shutting down discovery loop")
+			if pusher != nil {
+				pusher.Shutdown()
+			}
 			return
 		case <-tick.C:
 			cycle()
