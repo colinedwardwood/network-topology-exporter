@@ -47,23 +47,21 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	if err != nil {
 		return nil, nil, fmt.Errorf("mpls_te tunnel table %s: %w", p.IP, err)
 	}
-	if _, hardFailReason := snmputil.EvaluateRequiredTablePolicy(operStats, snmputil.RequiredTablePolicy{
+	operVerdict := snmputil.EvaluateRequiredTablePolicy(operStats, snmputil.RequiredTablePolicy{
 		MinValidRows:    requiredMinValidRows,
 		MaxInvalidRatio: requiredMaxInvalidRatio,
-	}); hardFailReason != "" {
+	})
+	if operVerdict.IsHardFail() {
 		return nil, nil, &discovery.PolicyError{
 			Module: "mpls_te",
-			Reason: hardFailReason,
+			Reason: operVerdict.Reason,
 			Err:    fmt.Errorf("operStatus stats: valid=%d total=%d invalid=%d ratio=%.3f", operStats.ValidRows, operStats.TotalRows, operStats.InvalidRows, operStats.InvalidRatio),
 		}
 	}
 
 	adminStatuses, adminStats, adminErr := snmputil.WalkToIntMapStrict(ctx, client, "mpls_te", oidMplsTunnelAdminStatus)
 	degradedReasons := make([]string, 0, 2)
-	if degraded, _ := snmputil.EvaluateRequiredTablePolicy(operStats, snmputil.RequiredTablePolicy{
-		MinValidRows:    requiredMinValidRows,
-		MaxInvalidRatio: requiredMaxInvalidRatio,
-	}); degraded {
+	if operVerdict.IsDegraded() {
 		degradedReasons = append(degradedReasons, discovery.DegradedReasonRequiredTablePartialDecode)
 	}
 	if adminErr != nil {

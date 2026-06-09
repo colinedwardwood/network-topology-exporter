@@ -102,18 +102,18 @@ func walkAdjStates(ctx context.Context, client *gsnmp.GoSNMP) (map[string]int, b
 	if err != nil {
 		return nil, false, err
 	}
-	degraded, hardFailReason := snmputil.EvaluateRequiredTablePolicy(stats, snmputil.RequiredTablePolicy{
+	verdict := snmputil.EvaluateRequiredTablePolicy(stats, snmputil.RequiredTablePolicy{
 		MinValidRows:    requiredMinValidRows,
 		MaxInvalidRatio: requiredMaxInvalidRatio,
 	})
-	if hardFailReason != "" {
+	if verdict.IsHardFail() {
 		return nil, false, &discovery.PolicyError{
 			Module: "isis",
-			Reason: hardFailReason,
+			Reason: verdict.Reason,
 			Err:    fmt.Errorf("adjState stats: valid=%d total=%d invalid=%d ratio=%.3f", stats.ValidRows, stats.TotalRows, stats.InvalidRows, stats.InvalidRatio),
 		}
 	}
-	return states, degraded, nil
+	return states, verdict.IsDegraded(), nil
 }
 
 // walkCircuitIfNames returns a map from "{sysInst}.{circIdx}" to the interface

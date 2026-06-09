@@ -163,18 +163,41 @@ func WalkToIntMap(ctx context.Context, client *g.GoSNMP, oid string) (map[string
 	return m, nil
 }
 
+// TableOutcome is the three-state result of EvaluateRequiredTablePolicy.
+type TableOutcome int
+
+// TableOK, TableDegraded, and TableHardFail are the possible TableOutcome values.
+const (
+	TableOK       TableOutcome = iota // usable, no invalid rows
+	TableDegraded                     // usable, but some rows failed to decode
+	TableHardFail                     // failed a required-table floor; see Reason
+)
+
+// TableVerdict is the result of EvaluateRequiredTablePolicy. Reason is set only
+// when Outcome == TableHardFail.
+type TableVerdict struct {
+	Outcome TableOutcome
+	Reason  string
+}
+
+// IsHardFail reports whether the table failed a required-table floor.
+func (v TableVerdict) IsHardFail() bool { return v.Outcome == TableHardFail }
+
+// IsDegraded reports whether the table is usable but had decode anomalies.
+func (v TableVerdict) IsDegraded() bool { return v.Outcome == TableDegraded }
+
 // EvaluateRequiredTablePolicy checks decode stats against the required table policy.
-func EvaluateRequiredTablePolicy(stats IntMapDecodeStats, policy RequiredTablePolicy) (degraded bool, hardFailReason string) {
+func EvaluateRequiredTablePolicy(stats IntMapDecodeStats, policy RequiredTablePolicy) TableVerdict {
 	if stats.ValidRows < policy.MinValidRows {
-		return false, "required_table_no_valid_rows"
+		return TableVerdict{Outcome: TableHardFail, Reason: "required_table_no_valid_rows"}
 	}
 	if policy.MaxInvalidRatio >= 0 && stats.InvalidRatio > policy.MaxInvalidRatio {
-		return false, "required_table_invalid_ratio_exceeded"
+		return TableVerdict{Outcome: TableHardFail, Reason: "required_table_invalid_ratio_exceeded"}
 	}
 	if stats.InvalidRows > 0 {
-		return true, ""
+		return TableVerdict{Outcome: TableDegraded}
 	}
-	return false, ""
+	return TableVerdict{Outcome: TableOK}
 }
 
 // WalkIfNames walks the IF-MIB ifXTable.ifName column (RFC 2863 §3.1.4) and
