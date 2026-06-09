@@ -26,7 +26,7 @@ jobs:
     name: render overlays (required)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # kubectl ships with kustomize built in (kubectl kustomize).
       - name: validate overlays render
@@ -46,7 +46,7 @@ jobs:
     # not block the PR. Keep the `render` job as the required status check.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: create kind cluster
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
