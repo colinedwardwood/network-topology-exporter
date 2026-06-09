@@ -45,7 +45,7 @@ func PDUIntStrict(pdu g.SnmpPDU) (int, bool) {
 }
 ```
 
-**Tests** (extend `TestPDUIntStrict`, snmp_test.go:89): add cases — `uint64(math.MaxInt64)+1` → `(0,false)`; `uint64(math.MaxUint64)` → `(0,false)`; `int64(math.MaxInt64)` → `(MaxInt64, true)` on 64-bit; a normal `uint64(64512)` → `(64512,true)`. Confirm `WalkToIntMapStrict` counts an overflow row as a `DecodeFailure` (excluded from the map) via a small walk test with an out-of-range Counter64 PDU.
+**Tests** (extend `TestPDUIntStrict`, snmp_test.go:89): add cases — `uint64(math.MaxInt64)+1` → `(0,false)`; `uint64(math.MaxUint64)` → `(0,false)`; `int64(math.MaxInt64)` → `(MaxInt64, true)` on 64-bit; a normal `uint64(64512)` → `(64512,true)`. The unit cases above are the gate for Fix 1. A `WalkToIntMapStrict` end-to-end test that an out-of-range Counter64 PDU counts as a `DecodeFailure` (excluded from the map) is **best-effort** — only add it if the in-process `snmptest` agent round-trips a `Counter64` value > MaxInt64 through gosnmp's BER codec back as a `uint64`; if that proves fiddly, skip it (the unit cases fully prove the fix).
 
 ---
 
@@ -129,7 +129,9 @@ Add to `pool_test.go`:
 // checkout drives the real acquire() state machine for tests, returning the
 // session and its release func. Replaces the deleted Checkout method so tests
 // exercise exactly one acquisition path.
-func checkout(t *testing.T, pl *SessionPool, p Params) (*g.GoSNMP, func()) {
+// NOTE: pool_test.go imports gosnmp as `gsnmp` (not `g`), so the return type is
+// *gsnmp.GoSNMP, not *g.GoSNMP.
+func checkout(t *testing.T, pl *SessionPool, p Params) (*gsnmp.GoSNMP, func()) {
 	t.Helper()
 	s, release, err := pl.acquire(p)
 	if err != nil {
