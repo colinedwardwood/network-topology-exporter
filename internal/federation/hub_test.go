@@ -1946,10 +1946,11 @@ func TestHubHandlePushRejectedGraphDoesNotMarkSpokeUp(t *testing.T) {
 	}
 }
 
-// TestHubHandlePushRejectedGraphRollsBackPreviousEntry verifies that when a
+// TestHubHandlePushRejectedGraphLeavesPreviousEntryIntact verifies that when a
 // spoke's push is rejected due to graph size limits, the spoke's PREVIOUS entry
-// in h.spokes is restored rather than overwritten with the new payload.
-func TestHubHandlePushRejectedGraphRollsBackPreviousEntry(t *testing.T) {
+// in h.spokes is left intact (never speculatively overwritten with the new
+// payload).
+func TestHubHandlePushRejectedGraphLeavesPreviousEntryIntact(t *testing.T) {
 	m := metrics.New(false)
 	h := NewHub(
 		config.FederationConfig{
@@ -2097,26 +2098,35 @@ func TestHandlePushConcurrentDifferentSpokes(t *testing.T) {
 	}
 }
 
-// TestHandlePushEvictionRaceInvariant probes the F1 fold-into-lock fix: a push
-// accept must never race with eviction such that FederationSpokeUp{id}=1 while
-// the spoke is absent from h.spokes. Run under -race.
+// TestHandlePushEvictionRaceInvariant probes the #147 F1 fold-into-lock fix: the
+// FederationSpokeUp gauge and h.spokes membership must stay consistent
+// (present iff gauge==1) across concurrent accept/evict. Even iterations race a
+// fresh push against eviction (push wins -> present); odd iterations evict an
+// aged entry alone (-> absent). Both terminal states must occur, so the
+// invariant is asserted in BOTH directions. Run under -race.
 func TestHandlePushEvictionRaceInvariant(t *testing.T) {
 	h := NewHub(config.FederationConfig{SpokeTimeout: time.Hour}, metrics.New(false), nil, "")
 	const id = "dc-race"
+	sawPresent, sawAbsent := false, false
 	for iter := 0; iter < 200; iter++ {
+		// Seed an aged entry + gauge so eviction is eligible to delete it.
 		h.mu.Lock()
 		h.spokes[id] = spokeEntry{payload: SpokePayload{SpokeID: id}, lastSeen: time.Now().Add(-2 * time.Hour)}
 		h.mu.Unlock()
 		h.m.FederationSpokeUp.WithLabelValues(id).Set(1)
 
+		race := iter%2 == 0
 		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			body, _ := json.Marshal(SpokePayload{SpokeID: id, CycleAt: time.Now(),
-				Devices: []discovery.Device{{ID: "r1"}}})
-			h.handlePush(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/p", bytes.NewReader(body)))
-		}()
+		if race {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				body, _ := json.Marshal(SpokePayload{SpokeID: id, CycleAt: time.Now(),
+					Devices: []discovery.Device{{ID: "r1"}}})
+				h.handlePush(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/p", bytes.NewReader(body)))
+			}()
+		}
+		wg.Add(1)
 		go func() { defer wg.Done(); h.evictSilentSpokes() }()
 		wg.Wait()
 
@@ -2125,8 +2135,16 @@ func TestHandlePushEvictionRaceInvariant(t *testing.T) {
 		h.mu.Unlock()
 		gauge := testutil.ToFloat64(h.m.FederationSpokeUp.WithLabelValues(id))
 		if present != (gauge == 1) {
-			t.Fatalf("iter %d: invariant violated: present=%v gauge=%v", iter, present, gauge)
+			t.Fatalf("iter %d (race=%v): invariant violated: present=%v gauge=%v", iter, race, present, gauge)
 		}
+		if present {
+			sawPresent = true
+		} else {
+			sawAbsent = true
+		}
+	}
+	if !sawPresent || !sawAbsent {
+		t.Fatalf("test did not exercise both terminal states: sawPresent=%v sawAbsent=%v", sawPresent, sawAbsent)
 	}
 }
 
