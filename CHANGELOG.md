@@ -289,6 +289,20 @@ v1.3.1 lands under this milestone instead, renamed to
   expected. The classic SR-OS family is unaffected. `troubleshooting.md`
   § 2 gains a Nokia-fleet note describing the limitation. Closes #46.
 
+- **Juniper BGP4-V2 walker validated against a real device (#56).** Captured
+  `jnxBgpM2PeerTable` from a vJunos-router (JUNOS 25.4R1.12) running eBGP with
+  one IPv4 and one IPv6 established peer, via a new self-hosted containerlab lab
+  (`lab/juniper-jnxbgp/`, vJunos-router + FRR). `colState` (2) and `colRemoteAs`
+  (13) matched the transcribed-from-docs values, but the **index decoder was
+  wrong**: Juniper's index carries both the local and remote `InetAddress`,
+  each *implicit-length* (no length sub-identifier), with the peer being the
+  remote one — not the Arista-style single explicit-length address the
+  best-guess decoder assumed. Added `decodeJuniperJnxBgpM2Index` (+ a
+  `readInetAddrImplicitAt` helper) and flipped `juniperJnxBgpM2PeerSpec.verified`
+  to true. The capture is committed at
+  `lab/juniper-jnxbgp/captures/r1_juniper_jnxBgpM2PeerTable.txt`. On Junos fleets
+  `modules.bgp.disable_v2_mib` is no longer needed. Closes #56; unblocks #59.
+
 - **Cisco IOS-XE cross-confirmation of `ciscoCbgpPeer2Spec` walker.** The
   walker was already byte-level validated against Cisco IOL 17.12.1 on
   2026-05-16 (see `TestWalkVendorCisco` in `bgp_v2_test.go`); this entry

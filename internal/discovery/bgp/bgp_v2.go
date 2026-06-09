@@ -89,6 +89,46 @@ func readInetAddrAt(parts []int, pos int) (net.IP, int, bool) {
 	return ip, pos + want, true
 }
 
+// readInetAddrImplicitAt reads one (addrType, addrBytes...) pair from parts
+// starting at pos, where the address length is IMPLICIT in the type — there is
+// NO explicit length sub-identifier (4 bytes for ipv4, 16 for ipv6). Returns
+// the parsed IP, the position after the address, and ok=true on success.
+//
+// This is the encoding Juniper's jnxBgpM2PeerTable uses for the InetAddress
+// elements of its row index (verified against a real vJunos-router capture,
+// issue #56) — distinct from the Cisco/Arista tables, which carry an explicit
+// length byte and are read by readInetAddrAt above.
+func readInetAddrImplicitAt(parts []int, pos int) (net.IP, int, bool) {
+	if pos < 0 || pos >= len(parts) {
+		return nil, 0, false
+	}
+	addrType := parts[pos]
+	pos++
+
+	var want int
+	switch addrType {
+	case inetAddrTypeIPv4:
+		want = 4
+	case inetAddrTypeIPv6:
+		want = 16
+	default:
+		return nil, 0, false
+	}
+	if pos+want > len(parts) {
+		return nil, 0, false
+	}
+
+	ip := make(net.IP, want)
+	for i := 0; i < want; i++ {
+		b := parts[pos+i]
+		if b < 0 || b > 255 {
+			return nil, 0, false
+		}
+		ip[i] = byte(b)
+	}
+	return ip, pos + want, true
+}
+
 // splitOIDParts parses a dot-separated OID suffix into integer parts.
 // Empty input returns an empty slice with no error.
 func splitOIDParts(s string) ([]int, error) {
