@@ -17,6 +17,7 @@ v1.3.1 lands under this milestone instead, renamed to
 
 ### Fixed
 
+- **Federation hub (#147):** spoke registrations now commit atomically with winning publication — the hub no longer speculatively writes its spoke registry before validating the combined graph. Oversize graphs are rejected without consuming a publish generation, eliminating a spurious `409 stale_generation` that could be returned to an unrelated valid push (now correctly `204`). Liveness gauges (`federation_spoke_up`, `federation_spoke_last_push_unix`) are committed under the same lock as the graph publish, closing an eviction race.
 - Nokia SR-OS BGP walker now targets the next-gen `tBgpPeerNgTable`
   (`1.3.6.1.4.1.6527.3.1.2.14.4.7`), validated against a real SR-OS 25.7.R2
   (7750 SR) capture (#57). The previous spec targeted the legacy `tBgpPeerTable`
