@@ -107,7 +107,7 @@ func TestOutcomeEdges(t *testing.T) {
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d", len(edges))
 	}
-	if got := fake.count(walkerFDB, outcomeEdges); got != 1 {
+	if got := fake.count(walkerFDB, snmputil.OutcomeEdges); got != 1 {
 		t.Errorf("fdb edges = %d, want 1", got)
 	}
 }
@@ -129,10 +129,10 @@ func TestOutcomeMIBUnimplemented(t *testing.T) {
 	if len(edges) != 0 {
 		t.Fatalf("expected 0 edges, got %d", len(edges))
 	}
-	if got := fake.count(walkerFDB, outcomeMIBUnimplemented); got != 1 {
+	if got := fake.count(walkerFDB, snmputil.OutcomeMIBUnimplemented); got != 1 {
 		t.Errorf("fdb mib_unimplemented = %d, want 1", got)
 	}
-	if got := fake.count(walkerFDB, outcomeWalkerDrift); got != 0 {
+	if got := fake.count(walkerFDB, snmputil.OutcomeWalkerDrift); got != 0 {
 		t.Errorf("fdb walker_drift = %d, want 0 (zero PDUs is not drift)", got)
 	}
 }
@@ -160,10 +160,10 @@ func TestOutcomeWalkerDrift(t *testing.T) {
 	if len(edges) != 0 {
 		t.Fatalf("expected 0 edges, got %d", len(edges))
 	}
-	if got := fake.count(walkerFDB, outcomeWalkerDrift); got != 1 {
+	if got := fake.count(walkerFDB, snmputil.OutcomeWalkerDrift); got != 1 {
 		t.Errorf("fdb walker_drift = %d, want 1", got)
 	}
-	if got := fake.count(walkerFDB, outcomeNoNeighbours); got != 0 {
+	if got := fake.count(walkerFDB, snmputil.OutcomeNoNeighbours); got != 0 {
 		t.Errorf("fdb no_neighbours = %d, want 0 (no entry decoded cleanly)", got)
 	}
 }
@@ -195,10 +195,10 @@ func TestOutcomeNoNeighbours(t *testing.T) {
 	if len(edges) != 0 {
 		t.Fatalf("expected 0 edges, got %d", len(edges))
 	}
-	if got := fake.count(walkerFDB, outcomeNoNeighbours); got != 1 {
+	if got := fake.count(walkerFDB, snmputil.OutcomeNoNeighbours); got != 1 {
 		t.Errorf("fdb no_neighbours = %d, want 1", got)
 	}
-	if got := fake.count(walkerFDB, outcomeWalkerDrift); got != 0 {
+	if got := fake.count(walkerFDB, snmputil.OutcomeWalkerDrift); got != 0 {
 		t.Errorf("fdb walker_drift = %d, want 0 (entry decoded cleanly)", got)
 	}
 }
@@ -216,10 +216,10 @@ func TestOutcomeError(t *testing.T) {
 	}
 
 	_, _, _ = Walk(context.Background(), p, "sw-01", nil)
-	if got := fake.count(walkerFDB, outcomeError); got != 1 {
+	if got := fake.count(walkerFDB, snmputil.OutcomeError); got != 1 {
 		t.Errorf("fdb error = %d, want 1", got)
 	}
-	if got := fake.count(walkerFDB, outcomeEdges); got != 0 {
+	if got := fake.count(walkerFDB, snmputil.OutcomeEdges); got != 0 {
 		t.Errorf("fdb edges = %d, want 0 on error path", got)
 	}
 }

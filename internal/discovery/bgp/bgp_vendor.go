@@ -317,7 +317,7 @@ func walkVendorPeerTable(ctx context.Context, p *snmputil.Params, client *gsnmp.
 		if peer == nil {
 			peerIP, ok := spec.decodeIndex(rest)
 			if !ok {
-				recordWalkerOutcome(p, vendorWalkerLabel(spec.name), outcomeMalformedIndex)
+				snmputil.RecordBGPWalkerOutcome(p, vendorWalkerLabel(spec.name), outcomeMalformedIndex)
 				failedIndexes[rest] = struct{}{}
 				slog.Debug("bgp vendor: malformed index, dropping row",
 					"walker", vendorWalkerLabel(spec.name),
@@ -384,25 +384,25 @@ func walkAndBuildVendorEdges(
 	walker := vendorWalkerLabel(spec.name)
 	peers, hadPDUs, allRowsMalformed, ok, err := walkVendorPeerTable(ctx, p, client, spec)
 	if err != nil {
-		recordWalkerOutcome(p, walker, outcomeError)
+		snmputil.RecordBGPWalkerOutcome(p, walker, outcomeError)
 		return nil, nil, false, err
 	}
 	if !ok {
 		switch {
 		case !hadPDUs:
-			recordWalkerOutcome(p, walker, outcomeMIBUnimplemented)
+			snmputil.RecordBGPWalkerOutcome(p, walker, outcomeMIBUnimplemented)
 		case allRowsMalformed:
-			recordWalkerOutcome(p, walker, outcomeWalkerDrift)
+			snmputil.RecordBGPWalkerOutcome(p, walker, outcomeWalkerDrift)
 		default:
-			recordWalkerOutcome(p, walker, outcomeNoPeers)
+			snmputil.RecordBGPWalkerOutcome(p, walker, outcomeNoPeers)
 		}
 		return nil, nil, false, nil
 	}
 	edges, oos := buildVendorEdges(localDevice, peers, allowedNets)
 	if len(edges) > 0 {
-		recordWalkerOutcome(p, walker, outcomeEdges)
+		snmputil.RecordBGPWalkerOutcome(p, walker, outcomeEdges)
 	} else {
-		recordWalkerOutcome(p, walker, outcomeNoPeers)
+		snmputil.RecordBGPWalkerOutcome(p, walker, outcomeNoPeers)
 	}
 	return edges, oos, true, nil
 }

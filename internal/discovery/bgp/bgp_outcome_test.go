@@ -514,7 +514,7 @@ func TestVendorWalkerLabel(t *testing.T) {
 	}
 }
 
-// TestRecordWalkerOutcomeNilSafe verifies that recordWalkerOutcome
+// TestRecordWalkerOutcomeNilSafe verifies that snmputil.RecordBGPWalkerOutcome
 // tolerates both a nil *Params and a Params with nil WalkerMetrics. The
 // original issue #23 concern was that an increment to a nil counter must
 // be DROPPED, not redirected to a stale pointer. With the DI rewrite
@@ -529,17 +529,17 @@ func TestRecordWalkerOutcomeNilSafe(t *testing.T) {
 	t.Parallel()
 
 	// (1) nil Params pointer.
-	recordWalkerOutcome(nil, walkerVendorCisco, outcomeEdges) // must not panic
+	snmputil.RecordBGPWalkerOutcome(nil, walkerVendorCisco, outcomeEdges) // must not panic
 
 	// (2) Params with nil WalkerMetrics — the increment must drop, not
 	// hit any sink.
 	pNoSink := &snmputil.Params{}
-	recordWalkerOutcome(pNoSink, walkerVendorCisco, outcomeEdges) // must not panic
+	snmputil.RecordBGPWalkerOutcome(pNoSink, walkerVendorCisco, outcomeEdges) // must not panic
 
 	// (3) Params with a real sink — the increment lands as expected.
 	fake := &fakeWalkerMetrics{}
 	pWithSink := &snmputil.Params{WalkerMetrics: fake}
-	recordWalkerOutcome(pWithSink, walkerVendorCisco, outcomeEdges)
+	snmputil.RecordBGPWalkerOutcome(pWithSink, walkerVendorCisco, outcomeEdges)
 	if got := fake.count(walkerVendorCisco, outcomeEdges); got != 1 {
 		t.Errorf("real sink: count = %d, want 1", got)
 	}
@@ -548,7 +548,7 @@ func TestRecordWalkerOutcomeNilSafe(t *testing.T) {
 	// stand-ins for the old "SetWalkerOutcomeCounter(nil) must drop"
 	// behaviour from the package-global era.
 	pWithSink.WalkerMetrics = nil
-	recordWalkerOutcome(pWithSink, walkerVendorCisco, outcomeEdges)
+	snmputil.RecordBGPWalkerOutcome(pWithSink, walkerVendorCisco, outcomeEdges)
 	if got := fake.count(walkerVendorCisco, outcomeEdges); got != 1 {
 		t.Errorf("after nil-out: fake count = %d, want 1 (drop must not land on stale sink)", got)
 	}

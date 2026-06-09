@@ -89,7 +89,7 @@ func TestOutcomeEdges(t *testing.T) {
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d", len(edges))
 	}
-	if got := fake.count(walkerLLDP, outcomeEdges); got != 1 {
+	if got := fake.count(walkerLLDP, snmputil.OutcomeEdges); got != 1 {
 		t.Errorf("lldp edges = %d, want 1", got)
 	}
 }
@@ -111,10 +111,10 @@ func TestOutcomeMIBUnimplemented(t *testing.T) {
 	if len(edges) != 0 {
 		t.Fatalf("expected 0 edges, got %d", len(edges))
 	}
-	if got := fake.count(walkerLLDP, outcomeMIBUnimplemented); got != 1 {
+	if got := fake.count(walkerLLDP, snmputil.OutcomeMIBUnimplemented); got != 1 {
 		t.Errorf("lldp mib_unimplemented = %d, want 1", got)
 	}
-	if got := fake.count(walkerLLDP, outcomeWalkerDrift); got != 0 {
+	if got := fake.count(walkerLLDP, snmputil.OutcomeWalkerDrift); got != 0 {
 		t.Errorf("lldp walker_drift = %d, want 0 (zero PDUs is not drift)", got)
 	}
 }
@@ -142,10 +142,10 @@ func TestOutcomeWalkerDrift(t *testing.T) {
 	if len(edges) != 0 {
 		t.Fatalf("expected 0 edges, got %d", len(edges))
 	}
-	if got := fake.count(walkerLLDP, outcomeWalkerDrift); got != 1 {
+	if got := fake.count(walkerLLDP, snmputil.OutcomeWalkerDrift); got != 1 {
 		t.Errorf("lldp walker_drift = %d, want 1", got)
 	}
-	if got := fake.count(walkerLLDP, outcomeNoNeighbours); got != 0 {
+	if got := fake.count(walkerLLDP, snmputil.OutcomeNoNeighbours); got != 0 {
 		t.Errorf("lldp no_neighbours = %d, want 0 (every row rejected)", got)
 	}
 }
@@ -181,10 +181,10 @@ func TestOutcomeNoNeighbours(t *testing.T) {
 	if len(oos) != 1 {
 		t.Fatalf("expected 1 out-of-scope neighbour, got %d", len(oos))
 	}
-	if got := fake.count(walkerLLDP, outcomeNoNeighbours); got != 1 {
+	if got := fake.count(walkerLLDP, snmputil.OutcomeNoNeighbours); got != 1 {
 		t.Errorf("lldp no_neighbours = %d, want 1", got)
 	}
-	if got := fake.count(walkerLLDP, outcomeWalkerDrift); got != 0 {
+	if got := fake.count(walkerLLDP, snmputil.OutcomeWalkerDrift); got != 0 {
 		t.Errorf("lldp walker_drift = %d, want 0 (row decoded cleanly)", got)
 	}
 }
@@ -205,10 +205,10 @@ func TestOutcomeError(t *testing.T) {
 	}
 
 	_, _, _ = Walk(context.Background(), p, "leaf-01", nil)
-	if got := fake.count(walkerLLDP, outcomeError); got != 1 {
+	if got := fake.count(walkerLLDP, snmputil.OutcomeError); got != 1 {
 		t.Errorf("lldp error = %d, want 1", got)
 	}
-	if got := fake.count(walkerLLDP, outcomeEdges); got != 0 {
+	if got := fake.count(walkerLLDP, snmputil.OutcomeEdges); got != 0 {
 		t.Errorf("lldp edges = %d, want 0 on error path", got)
 	}
 }
