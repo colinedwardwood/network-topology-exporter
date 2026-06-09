@@ -105,6 +105,14 @@ func (c *TopologyCollector) Update(g discovery.Graph) {
 	c.snap.Store(&g)
 }
 
+// CurrentGraph returns the current immutable graph snapshot (the same one
+// Collect reads). Never nil: the constructor stores an empty graph at init.
+// The returned pointer is safe to read concurrently — the graph is replaced,
+// never mutated in place.
+func (c *TopologyCollector) CurrentGraph() *discovery.Graph {
+	return c.snap.Load()
+}
+
 // Describe sends all metric descriptors to ch.
 func (c *TopologyCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.deviceInfoDesc
