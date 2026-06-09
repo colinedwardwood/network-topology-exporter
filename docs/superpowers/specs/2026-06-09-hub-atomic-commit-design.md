@@ -153,6 +153,7 @@ Minor, acknowledged deltas:
 
 - **Publish locking profile (F5).** `Topology.Update` now runs under `h.mu` rather than lock-free. Verified safe: `Topology.Update` is a single `atomic.Pointer.Store`, gauge `Set`s use client_golang's own mutex, and the Prometheus scrape path reads only `snap.Load()` — none re-enter `h.mu`, so there is **no deadlock**, only bounded contention on a cheap critical section.
 - **Rate-limit edge (F7).** Two near-simultaneous same-spoke pushes no longer see each other's *in-flight* `lastSeen` (because there is no speculative write), so a second push that today might `429` may now proceed to generation arbitration. Guarded by mTLS-CN binding and unique-generation arbitration; impact negligible. Acknowledged, not a regression worth preserving.
+- **Concurrent distinct-spoke pushes.** A push that loses the generation race is cleanly dropped (nothing committed; returns `409`) and re-pushed on the spoke's next cycle, so a single concurrent burst may not register every spoke at once. This matches pre-#147 behavior — the old rollback-on-stale dropped a new spoke's entry identically — and self-heals. The invariant the fix guarantees is *consistency*: a spoke is in `h.spokes` **iff** its liveness gauge is set, never one without the other. The real-path concurrency test (test #4) asserts this invariant, not a registration count.
 
 ---
 
