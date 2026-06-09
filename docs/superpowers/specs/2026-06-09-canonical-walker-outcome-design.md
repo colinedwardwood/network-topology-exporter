@@ -89,14 +89,17 @@ func ClassifyNeighbourOutcome(edgeCount int, hadPDUs, decoded bool) string {
 **isis:** delete local `recordDegraded`; replace calls with `snmputil.RecordDegraded(&p, module, reason)`.
 
 **bgp:**
-- Delete the local `recordWalkerOutcome` func; replace its calls with `snmputil.RecordBGPWalkerOutcome(&p, walker, outcome)` (routes to the SAME `RecordWalkerOutcome` BGP counter — verify by reading bgp.go's call sites).
-- BGP's own outcome constants (`outcomeEdges`, `outcomeMIBUnimplemented`, `outcomeNoPeers`, `outcomeMalformedIndex`, `outcomeWalkerDrift`, `outcomeError`) — **leave these local to bgp.** BGP's vocabulary differs (`no_peers`/`malformed_index`) and its classification is bespoke; merging only the shared subset would split bgp's constants across two homes for little gain and more risk on a recently-touched, hardware-validated walker. (Decision recorded for the adversarial check: scope the constant-dedup to the four neighbour walkers; bgp shares only the forwarder.)
+- Delete the local `recordWalkerOutcome` func; replace ALL its calls with `snmputil.RecordBGPWalkerOutcome(...)` (routes to the SAME `RecordWalkerOutcome` BGP counter). **Call sites are in BOTH `bgp.go` AND `bgp_vendor.go`** (the adversarial check found seven in `bgp_vendor.go` at ~:320,387,393,395,397,403,405). Mind the receiver: bgp.go passes `&p`, but `bgp_vendor.go` already has a `*snmputil.Params` (`p`) at its call sites — match each existing argument exactly (don't add/drop an `&`).
+- BGP's own outcome constants (`outcomeEdges`, `outcomeMIBUnimplemented`, `outcomeNoPeers`, `outcomeMalformedIndex`, `outcomeWalkerDrift`, `outcomeError`) — **leave these local to bgp** (used by `bgp_vendor.go`'s bespoke classification). BGP's vocabulary differs (`no_peers`/`malformed_index`) and merging only the shared subset would split bgp's constants across two homes for little gain and more risk on a recently-touched, hardware-validated walker. (Verified by the adversarial check: the shared string values are coincidental, not a maintained invariant — leaving them is the lower-risk call.)
 
 ## Tests
 
-- New `internal/discovery/snmp/outcome_test.go`: a table test for `ClassifyNeighbourOutcome` covering all four buckets (edges>0; !hadPDUs; decoded-no-edge; drift), and a nil-safety test that `RecordProtocolWalkerOutcome`/`RecordBGPWalkerOutcome`/`RecordDegraded` no-op on nil `Params` and nil `WalkerMetrics` (and forward correctly with a fake sink that records calls).
-- Existing per-walker outcome tests (fdb/lldp/cdp/ospf/bgp/isis `*_outcome_test.go` and friends) must pass UNCHANGED — they assert the emitted label values, which are byte-identical. This is the regression gate proving zero behavior change.
+- New `internal/discovery/snmp/outcome_test.go`: a table test for `ClassifyNeighbourOutcome` covering all four buckets (edges>0; !hadPDUs; decoded-no-edge; drift), and a nil-safety test that `RecordProtocolWalkerOutcome`/`RecordBGPWalkerOutcome`/`RecordDegraded` no-op on nil `Params` and nil `WalkerMetrics` (and forward to the correct sink method with a fake `WalkerMetrics` that records calls — assert the protocol vs BGP routing).
+- **Regression gate — the emitted label VALUES are unchanged** (byte-identical), so the per-walker outcome tests' *assertions* stay the same. But two mechanical, non-semantic edits are required because the tests reference soon-to-be-deleted unexported identifiers (caught by the adversarial check):
+  - The four non-bgp outcome tests (`fdb_outcome_test.go`, `lldp_outcome_test.go`, `cdp_outcome_test.go`, `ospf_outcome_test.go`) reference the local `outcomeEdges`/`outcomeMIBUnimplemented`/`outcomeNoNeighbours`/`outcomeWalkerDrift`/`outcomeError` consts → repoint to `snmputil.OutcomeEdges` etc. (the `walkerFDB`/`walkerLLDP`/… label consts are kept locally, so those references are fine).
+  - `bgp_outcome_test.go`'s `TestRecordWalkerOutcomeNilSafe` calls the unexported `recordWalkerOutcome` → either retarget it to `snmputil.RecordBGPWalkerOutcome` or delete it (nil-safety is now covered canonically in `outcome_test.go`). Prefer retarget to keep bgp-specific coverage.
 - `go test ./... -race`, `gofmt`, `golangci-lint run` clean.
+- **fdb note:** the fdb terminal switch feeds from `hadFdbPDUs` (locally renamed), not `hadPDUs` — write `snmputil.ClassifyNeighbourOutcome(len(edges), hadFdbPDUs, decoded)` for fdb.
 
 ## Cross-cutting
 - One branch (`refactor/149-canonical-walker-outcome`), one PR closing #149. No Co-Authored-By / AI-attribution trailers; author colinedwardwood.
@@ -105,7 +108,7 @@ func ClassifyNeighbourOutcome(edgeCount int, hadPDUs, decoded bool) string {
 
 ## Files touched
 - `internal/discovery/snmp/outcome.go` (new), `internal/discovery/snmp/outcome_test.go` (new)
-- `internal/discovery/{fdb,lldp,cdp,ospf}/*.go` — delete locals, call snmputil
+- `internal/discovery/{fdb,lldp,cdp,ospf}/*.go` — delete local funcs/consts, call snmputil; repoint the four `*_outcome_test.go` const references to `snmputil.Outcome*`
 - `internal/discovery/isis/isis.go` — RecordDegraded
-- `internal/discovery/bgp/bgp.go` — RecordBGPWalkerOutcome (forwarder only)
+- `internal/discovery/bgp/bgp.go` **and `internal/discovery/bgp/bgp_vendor.go`** — RecordBGPWalkerOutcome (forwarder only; keep bgp's local consts); retarget `bgp_outcome_test.go`'s nil-safe test
 - `CHANGELOG.md`
