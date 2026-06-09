@@ -35,7 +35,7 @@ func collectMetrics(t *testing.T, reader metricdataReader) map[string][]map[stri
 			for _, dp := range g.DataPoints {
 				attrs := make(map[string]string)
 				for _, kv := range dp.Attributes.ToSlice() {
-					attrs[string(kv.Key)] = kv.Value.Emit()
+					attrs[string(kv.Key)] = kv.Value.String()
 				}
 				points = append(points, attrs)
 			}
@@ -55,7 +55,7 @@ func resourceAttrs(t *testing.T, reader metricdataReader) map[string]string {
 	out := make(map[string]string)
 	if rm.Resource != nil {
 		for _, kv := range rm.Resource.Attributes() {
-			out[string(kv.Key)] = kv.Value.Emit()
+			out[string(kv.Key)] = kv.Value.String()
 		}
 	}
 	return out
