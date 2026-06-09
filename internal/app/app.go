@@ -27,6 +27,7 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/loglimit"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
 	"github.com/colinedwardwood/network-topology-exporter/internal/output/otlp"
+	yangout "github.com/colinedwardwood/network-topology-exporter/internal/output/yang"
 	"github.com/colinedwardwood/network-topology-exporter/internal/snapshot"
 	"github.com/colinedwardwood/network-topology-exporter/internal/tracing"
 	"github.com/colinedwardwood/network-topology-exporter/internal/version"
@@ -367,6 +368,12 @@ func Run(ctx context.Context, args []string) int {
 
 	mux.HandleFunc("/readyz", httpx.NewReadyzHandler(isReadyFn))
 
+	// Issue #75: opt-in RFC 8345 YANG-JSON pull endpoint. Off by default; when
+	// enabled, GET /topology/yang renders the current reconciled topology. The
+	// handler shares the same readiness flag as /readyz, so it returns 503 until
+	// the first live cycle/push has populated the graph.
+	registerYANG(mux, m.Topology, &ready, cfg.Output.YANG)
+
 	go func() {
 		var serveErr error
 		switch {
@@ -477,6 +484,18 @@ func livenessMaxStale(cfg *config.Config) time.Duration {
 		return 0
 	}
 	return cfg.Discovery.Interval * time.Duration(cycles)
+}
+
+// registerYANG wires the issue-#75 GET /topology/yang endpoint onto mux when
+// output.yang.enabled is true; when disabled it registers nothing, so the route
+// 404s. src is the live graph source (the *metrics.TopologyCollector), ready is
+// the same readiness flag feeding /readyz. Extracted so the wiring contract is
+// unit-testable without standing up the full Run server.
+func registerYANG(mux *http.ServeMux, src yangout.GraphSource, ready *atomic.Bool, cfg config.YANGOutputConfig) {
+	if !cfg.Enabled {
+		return
+	}
+	mux.HandleFunc("/topology/yang", yangout.Handler(src, ready, yangout.Config{NetworkID: cfg.NetworkID}))
 }
 
 // NewLogger returns a slog.Logger configured to emit JSON to stderr at the
