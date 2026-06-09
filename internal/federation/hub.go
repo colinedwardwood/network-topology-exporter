@@ -70,7 +70,7 @@ type Hub struct {
 	logger               *slog.Logger
 	snapshotPath         string
 	snapshotCh           chan discovery.Graph
-	firstLive            atomic.Bool // set to true on the first live publishMetrics call
+	firstLive            atomic.Bool // set to true on the first live publishIfWinner call
 	snapshotWriteFn      func(string, snapshot.File) error
 	snapshotWriteTimeout time.Duration
 	publishGen           atomic.Uint64
@@ -574,18 +574,16 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build the combined graph with the new spoke included, but defer writing
-	// h.spokes and updating the spoke-up metrics until after tryPublishMetrics
-	// confirms the graph was accepted. This prevents a spoke from appearing "up"
-	// in Prometheus when the combined graph exceeds the size budget and is never
-	// published — which would otherwise make the spoke look healthy while
-	// contributing zero edges to the topology.
+	// Build the combined graph with the new spoke folded into a COPY of the
+	// registry; h.spokes itself is not written until publishIfWinner confirms
+	// this graph wins publication. This makes the spoke commit atomic with the
+	// publish: a concurrent push's spokesSnapshot() can never observe an entry
+	// that has not yet been validated and published.
 	h.mu.Lock()
 	prevEntry, hadPrev := h.spokes[payload.SpokeID]
 	// Defense-in-depth rate limit: reject pushes that arrive sooner than
 	// min_push_interval after the previous accepted push from the same
-	// spoke_id. The check runs inside h.mu so two concurrent racing pushes
-	// cannot both pass.
+	// spoke_id. Runs inside h.mu so two racing pushes cannot both pass.
 	if hadPrev && h.cfg.Hub.MinPushInterval > 0 {
 		sinceLast := now.Sub(prevEntry.lastSeen)
 		if sinceLast < h.cfg.Hub.MinPushInterval {
@@ -605,17 +603,17 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	h.spokes[payload.SpokeID] = spokeEntry{payload: payload, lastSeen: now}
-	spokes := h.spokesSnapshot()
+	entry := spokeEntry{payload: payload, lastSeen: now}
+	candidate := h.spokesSnapshot() // copy of h.spokes WITHOUT the new entry
+	candidate[payload.SpokeID] = entry
 	gen := h.publishGen.Add(1)
 	h.mu.Unlock()
-	combined, unmatchedCount := h.buildCombinedGraph(spokes)
 
-	// LD-13: publishIfWinner clears GraphStale and commits the spoke liveness
-	// gauges atomically under h.mu when the graph wins, so a concurrent scrape
-	// never sees fresh edges alongside GraphStale=1 and a concurrent eviction
-	// can never resurrect a deleted gauge.
-	entry := spokeEntry{payload: payload, lastSeen: now}
+	combined, unmatchedCount := h.buildCombinedGraph(candidate)
+
+	// publishIfWinner commits the spoke entry + liveness gauges + Topology.Update
+	// atomically under h.mu iff this generation wins and the graph fits the size
+	// budget. On reject nothing was written, so there is nothing to roll back.
 	published, rejectReason := h.publishIfWinner(gen, combined, unmatchedCount, &acceptedPush{id: payload.SpokeID, entry: entry})
 	if published {
 		h.writeSnapshotAsync(combined)
@@ -629,19 +627,6 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Graph was rejected: roll back the spoke entry so h.spokes reflects only
-	// previously-accepted state, then return a 4xx that distinguishes the
-	// reason. A 204 here would silently mislead the spoke into believing the
-	// push succeeded. Both codes are 4xx-fatal in the spoke's retry policy so
-	// the spoke does not burn retries on the same payload; the next discovery
-	// cycle will produce fresh data.
-	h.mu.Lock()
-	if hadPrev {
-		h.spokes[payload.SpokeID] = prevEntry
-	} else {
-		delete(h.spokes, payload.SpokeID)
-	}
-	h.mu.Unlock()
 	h.logger.Warn("hub: spoke push rejected — combined graph not applied",
 		"spoke_id", payload.SpokeID,
 		"reject_reason", rejectReason,
@@ -728,7 +713,7 @@ func (h *Hub) combinedGraphLocked() discovery.Graph {
 // lock first, then release h.mu before calling this function.
 // The second return value is the count of unmatched OOS observations; callers
 // should only publish this via HubOOSUnmatchedTotal after confirming the build
-// wins the CAS in tryPublishMetrics.
+// wins in publishIfWinner.
 func (h *Hub) buildCombinedGraph(spokes map[string]spokeEntry) (discovery.Graph, int) {
 	var allDevices []discovery.Device
 	seenDevices := make(map[string]bool)
