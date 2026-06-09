@@ -372,7 +372,7 @@ func Run(ctx context.Context, args []string) int {
 	// enabled, GET /topology/yang renders the current reconciled topology. The
 	// handler shares the same readiness flag as /readyz, so it returns 503 until
 	// the first live cycle/push has populated the graph.
-	registerYANG(mux, m.Topology, &ready, cfg.Output.YANG)
+	registerYANG(mux, m.Topology, isReadyFn, cfg.Output.YANG)
 
 	go func() {
 		var serveErr error
@@ -489,9 +489,10 @@ func livenessMaxStale(cfg *config.Config) time.Duration {
 // registerYANG wires the issue-#75 GET /topology/yang endpoint onto mux when
 // output.yang.enabled is true; when disabled it registers nothing, so the route
 // 404s. src is the live graph source (the *metrics.TopologyCollector), ready is
-// the same readiness flag feeding /readyz. Extracted so the wiring contract is
+// the same readiness func feeding /readyz (isReadyFn), so the YANG endpoint
+// reports ready in hub mode too. Extracted so the wiring contract is
 // unit-testable without standing up the full Run server.
-func registerYANG(mux *http.ServeMux, src yangout.GraphSource, ready *atomic.Bool, cfg config.YANGOutputConfig) {
+func registerYANG(mux *http.ServeMux, src yangout.GraphSource, ready func() bool, cfg config.YANGOutputConfig) {
 	if !cfg.Enabled {
 		return
 	}

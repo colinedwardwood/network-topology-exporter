@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
-	"sync/atomic"
 	"testing"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
@@ -22,7 +21,7 @@ func (f *fakeSource) CurrentGraph() *discovery.Graph {
 }
 func (f *fakeSource) set(g *discovery.Graph) { f.mu.Lock(); f.g = g; f.mu.Unlock() }
 
-func newReady(v bool) *atomic.Bool { b := &atomic.Bool{}; b.Store(v); return b }
+func newReady(v bool) func() bool { return func() bool { return v } }
 
 func TestHandler200WhenReady(t *testing.T) {
 	src := &fakeSource{g: &discovery.Graph{Devices: []discovery.Device{{ID: "a"}}}}

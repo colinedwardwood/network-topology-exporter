@@ -442,6 +442,19 @@
           "type": "array",
           "description": "Static device targets to always include in discovery.",
           "items": { "type": "object", "additionalProperties": true }
+        },
+        "output": {
+          "type": "object",
+          "properties": {
+            "otlp": { "type": "object" },
+            "yang": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "network_id": { "type": "string" }
+              }
+            }
+          }
         }
       }
     },

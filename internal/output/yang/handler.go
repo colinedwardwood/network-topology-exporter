@@ -26,7 +26,7 @@ const contentType = "application/yang-data+json"
 // body. Renders are cached by graph pointer identity, so repeated GETs of an
 // unchanged graph are O(1). Cache state is an atomic.Pointer over an immutable
 // struct, so concurrent GETs are race-free.
-func Handler(src GraphSource, ready *atomic.Bool, cfg Config) http.HandlerFunc {
+func Handler(src GraphSource, ready func() bool, cfg Config) http.HandlerFunc {
 	var cache atomic.Pointer[renderCache]
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -34,7 +34,7 @@ func Handler(src GraphSource, ready *atomic.Bool, cfg Config) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if ready == nil || !ready.Load() {
+		if ready == nil || !ready() {
 			http.Error(w, "topology not ready", http.StatusServiceUnavailable)
 			return
 		}
