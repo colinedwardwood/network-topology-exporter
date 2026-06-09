@@ -23,7 +23,7 @@ func TestLivenessMaxStale(t *testing.T) {
 
 	cases := []struct {
 		name     string
-		role     string
+		role     config.Role
 		interval time.Duration
 		cycles   *int
 		want     time.Duration

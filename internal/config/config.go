@@ -78,7 +78,7 @@ type OTLPOutputConfig struct {
 	// is always protobuf — the OpenTelemetry Go SDK exporters do not implement
 	// OTLP/JSON. This is a wire-format change from the pre-v1.5.0 hand-rolled
 	// JSON path; OTLP receivers must accept protobuf (the OTLP default).
-	Protocol string `yaml:"protocol"`
+	Protocol OTLPProtocol `yaml:"protocol"`
 
 	// Traces configures opt-in OpenTelemetry tracing of the exporter's own
 	// discovery cycle (issue #68). It reuses Endpoint, Protocol, and auth from
@@ -112,7 +112,7 @@ type FederationConfig struct {
 	// single-instance behaviour. "uncoordinated" adds boundary-observation
 	// metrics for Mimir recording-rule stitching (LD-15). "spoke" and "hub"
 	// configure the H-PCE-style push hierarchy (LD-16).
-	Role string `yaml:"role"` // standalone | uncoordinated | spoke | hub
+	Role Role `yaml:"role"` // standalone | uncoordinated | spoke | hub
 
 	// SpokeTimeout governs spoke eviction on the hub per LD-18: a spoke that
 	// has not pushed within this duration has its edges removed from the
@@ -366,9 +366,9 @@ type ModuleToggle struct {
 // for the dev-time single-profile path; production deployments should use
 // credentials.profiles.
 type ModuleSNMP struct {
-	Enabled      bool   `yaml:"enabled"`
-	Version      string `yaml:"version"` // v2c | v3
-	CommunityEnv string `yaml:"community_env"`
+	Enabled      bool        `yaml:"enabled"`
+	Version      SNMPVersion `yaml:"version"` // v2c | v3
+	CommunityEnv string      `yaml:"community_env"`
 }
 
 // CredentialsConfig encodes LD-12: named profiles, per-device assignments,
@@ -383,23 +383,20 @@ type CredentialsConfig struct {
 	TrialRatePerSecond int                    `yaml:"trial_rate_per_second"`
 }
 
-// Profile type constants for CredentialProfile.Type.
-const (
-	ProfileTypeSNMPv2c = "snmp_v2c"
-	ProfileTypeSNMPv3  = "snmp_v3"
-)
+// Profile type constants for CredentialProfile.Type are defined as the named
+// ProfileType enum in enums.go.
 
 // CredentialProfile is one named credential the exporter can try against
 // a device. Type selects which *Env fields are consulted.
 type CredentialProfile struct {
-	Name         string `yaml:"name"`
-	Type         string `yaml:"type"` // snmp_v2c | snmp_v3
-	CommunityEnv string `yaml:"community_env,omitempty"`
-	UsernameEnv  string `yaml:"username_env,omitempty"`
-	AuthProtocol string `yaml:"auth_protocol,omitempty"` // SHA (recommended) | SHA-256 | SHA-384 | SHA-512 | MD5 (deprecated, broken)
-	AuthKeyEnv   string `yaml:"auth_key_env,omitempty"`
-	PrivProtocol string `yaml:"priv_protocol,omitempty"` // AES (recommended) | AES-192 | AES-256 | DES (deprecated, broken)
-	PrivKeyEnv   string `yaml:"priv_key_env,omitempty"`
+	Name         string      `yaml:"name"`
+	Type         ProfileType `yaml:"type"` // snmp_v2c | snmp_v3
+	CommunityEnv string      `yaml:"community_env,omitempty"`
+	UsernameEnv  string      `yaml:"username_env,omitempty"`
+	AuthProtocol string      `yaml:"auth_protocol,omitempty"` // SHA (recommended) | SHA-256 | SHA-384 | SHA-512 | MD5 (deprecated, broken)
+	AuthKeyEnv   string      `yaml:"auth_key_env,omitempty"`
+	PrivProtocol string      `yaml:"priv_protocol,omitempty"` // AES (recommended) | AES-192 | AES-256 | DES (deprecated, broken)
+	PrivKeyEnv   string      `yaml:"priv_key_env,omitempty"`
 	// Retries is the number of SNMP retries per request. Defaults to 1.
 	Retries int `yaml:"retries"`
 	// ContextName is the SNMPv3 context name. Empty string means no context (default).
@@ -492,7 +489,7 @@ func (c *Config) applyDefaults() {
 		c.Discovery.SNMP.SessionPool.MaxIdle = 5 * c.Discovery.Interval
 	}
 	if c.Modules.SNMP.Version == "" {
-		c.Modules.SNMP.Version = "v2c"
+		c.Modules.SNMP.Version = SNMPVersionV2c
 	}
 	if c.Credentials.TrialRatePerSecond == 0 {
 		c.Credentials.TrialRatePerSecond = 5
@@ -514,7 +511,7 @@ func (c *Config) applyDefaults() {
 		}
 	}
 	if c.Federation.Role == "" {
-		c.Federation.Role = "standalone"
+		c.Federation.Role = RoleStandalone
 	}
 	if c.Federation.SpokeTimeout == 0 {
 		c.Federation.SpokeTimeout = 3 * c.Discovery.Interval
@@ -529,7 +526,7 @@ func (c *Config) applyDefaults() {
 		c.Output.OTLP.Timeout = 10 * time.Second
 	}
 	if c.Output.OTLP.Protocol == "" {
-		c.Output.OTLP.Protocol = "http"
+		c.Output.OTLP.Protocol = OTLPProtocolHTTP
 	}
 	if c.Output.OTLP.Traces.SampleRate == nil {
 		def := 0.1
@@ -597,7 +594,7 @@ func (c *Config) validate() error {
 	}
 	if c.Modules.SNMP.Enabled {
 		switch c.Modules.SNMP.Version {
-		case "v2c", "v3":
+		case SNMPVersionV2c, SNMPVersionV3:
 		default:
 			return fmt.Errorf("modules.snmp.version must be v2c or v3, got %q", c.Modules.SNMP.Version)
 		}
@@ -621,7 +618,7 @@ func (c *Config) validate() error {
 		return errors.New("output.otlp.heartbeat_cycles must be >= 1")
 	}
 	switch c.Output.OTLP.Protocol {
-	case "", "http", "grpc":
+	case "", OTLPProtocolHTTP, OTLPProtocolGRPC:
 	default:
 		return fmt.Errorf("output.otlp.protocol must be http or grpc, got %q", c.Output.OTLP.Protocol)
 	}
@@ -631,7 +628,7 @@ func (c *Config) validate() error {
 	if c.Output.OTLP.Enabled {
 		// gRPC endpoints are bare host:port authorities (or a URL); HTTP
 		// endpoints must be a full http/https URL as before.
-		if c.Output.OTLP.Protocol == "grpc" {
+		if c.Output.OTLP.Protocol == OTLPProtocolGRPC {
 			if c.Output.OTLP.Endpoint == "" {
 				return errors.New("output.otlp.endpoint: endpoint is required")
 			}
@@ -849,9 +846,9 @@ func (c *Config) validateFederation() error {
 		return fmt.Errorf("federation.spoke_timeout must be >= 0 (0 uses the default of 3× discovery.interval)")
 	}
 	switch c.Federation.Role {
-	case "standalone", "uncoordinated":
+	case RoleStandalone, RoleUncoordinated:
 		// no extra required fields
-	case "spoke":
+	case RoleSpoke:
 		if c.Federation.Spoke.SpokeID == "" {
 			return errors.New("federation.spoke.spoke_id is required for spoke role")
 		}
@@ -870,7 +867,7 @@ func (c *Config) validateFederation() error {
 				return fmt.Errorf("%s: %w", pair.field, err)
 			}
 		}
-	case "hub":
+	case RoleHub:
 		if c.Federation.Hub.TLSCACert == "" || c.Federation.Hub.TLSCert == "" || c.Federation.Hub.TLSKey == "" {
 			return errors.New("federation.hub.tls_ca_cert, tls_cert, and tls_key are all required for hub role (LD-20)")
 		}
