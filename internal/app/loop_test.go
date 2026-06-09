@@ -14,6 +14,7 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/loglimit"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/colinedwardwood/network-topology-exporter/internal/output/otlp"
 	"github.com/colinedwardwood/network-topology-exporter/internal/snmptest"
 )
 
@@ -41,15 +42,29 @@ func TestWarnSnapshotFallback(t *testing.T) {
 	lc.WarnSnapshot(context.Background(), "site-a", "limiter path")
 }
 
+// enabledPublisher constructs an otlpPublisher in its enabled form (exp + sem +
+// wg allocated together as a unit) for tests exercising the cap/drain behavior.
+// The exp is a bare non-nil sentinel: push runs the supplied fn directly and
+// never calls exp's methods, so a zero-value Exporter is sufficient to pass the
+// disabled-guard.
+func enabledPublisher(m *metrics.Metrics, semCap int) *otlpPublisher {
+	return &otlpPublisher{
+		exp:    &otlp.Exporter{},
+		sem:    make(chan struct{}, semCap),
+		wg:     &sync.WaitGroup{},
+		logger: slogDiscard(),
+		m:      m,
+	}
+}
+
 // TestOtlpPushDropsWhenSemFull drops the push (and increments the dropped
 // counter) when the concurrency semaphore is already saturated.
 func TestOtlpPushDropsWhenSemFull(t *testing.T) {
 	m := metrics.New(false)
-	sem := make(chan struct{}, 1)
-	sem <- struct{}{} // saturate
+	p := enabledPublisher(m, 1)
+	p.sem <- struct{}{} // saturate
 	var ran atomic.Bool
-	lc := LoopConfig{Logger: slogDiscard(), M: m, OtlpSem: sem}
-	lc.OtlpPush(context.Background(), func(context.Context) error {
+	p.Push(func(context.Context) error {
 		ran.Store(true)
 		return nil
 	}, "should not run")
@@ -62,22 +77,20 @@ func TestOtlpPushDropsWhenSemFull(t *testing.T) {
 // the WaitGroup, asserting the goroutine completed and the semaphore drained.
 func TestOtlpPushRunsAndCountsOK(t *testing.T) {
 	m := metrics.New(false)
-	sem := make(chan struct{}, 1)
-	var wg sync.WaitGroup
+	p := enabledPublisher(m, 1)
 	var ran atomic.Bool
-	lc := LoopConfig{Logger: slogDiscard(), M: m, OtlpSem: sem, OtlpWg: &wg}
-	lc.OtlpPush(context.Background(), func(context.Context) error {
+	p.Push(func(context.Context) error {
 		ran.Store(true)
 		return nil
 	}, "push ok")
-	wg.Wait()
+	p.Drain()
 	if !ran.Load() {
 		t.Error("push fn did not run")
 	}
 	// Semaphore must have drained so a follow-up push can proceed.
 	select {
-	case sem <- struct{}{}:
-		<-sem
+	case p.sem <- struct{}{}:
+		<-p.sem
 	default:
 		t.Error("semaphore not released after push completed")
 	}
@@ -86,12 +99,27 @@ func TestOtlpPushRunsAndCountsOK(t *testing.T) {
 // TestOtlpPushCountsError runs a failing push and waits for completion.
 func TestOtlpPushCountsError(t *testing.T) {
 	m := metrics.New(false)
-	var wg sync.WaitGroup
-	lc := LoopConfig{Logger: slogDiscard(), M: m, OtlpWg: &wg}
-	lc.OtlpPush(context.Background(), func(context.Context) error {
+	p := enabledPublisher(m, 1)
+	p.Push(func(context.Context) error {
 		return errors.New("boom")
 	}, "push failed")
-	wg.Wait()
+	p.Drain()
+}
+
+// TestOtlpPushNoOpWhenDisabled asserts a disabled publisher (exp == nil, all
+// fields nil) never runs the fn, spawns no goroutine, and drains cleanly — the
+// invariant that lets callers drop the nil-checks.
+func TestOtlpPushNoOpWhenDisabled(t *testing.T) {
+	var p otlpPublisher // zero value: exp/sem/wg all nil
+	var ran atomic.Bool
+	p.Push(func(context.Context) error {
+		ran.Store(true)
+		return nil
+	}, "should not run")
+	if ran.Load() {
+		t.Error("push fn ran on a disabled publisher")
+	}
+	p.Drain() // must not panic on a nil wg
 }
 
 // TestRunDiscoveryLoopShutsDownCleanly drives the full loop against an
@@ -123,6 +151,9 @@ func TestRunDiscoveryLoopShutsDownCleanly(t *testing.T) {
 		M:      m,
 		Status: &status,
 		Ready:  &ready,
+		// Otlp is always non-nil in production wiring; a disabled (no-op)
+		// publisher makes Push a no-op so the loop never nil-derefs.
+		Otlp: &otlpPublisher{},
 	}
 
 	done := make(chan struct{})

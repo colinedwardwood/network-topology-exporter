@@ -22,7 +22,6 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
 	"github.com/colinedwardwood/network-topology-exporter/internal/loglimit"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
-	"github.com/colinedwardwood/network-topology-exporter/internal/output/otlp"
 	"github.com/colinedwardwood/network-topology-exporter/internal/snapshot"
 	"github.com/colinedwardwood/network-topology-exporter/internal/tracing"
 )
@@ -60,9 +59,10 @@ type LoopConfig struct {
 	Status        *atomic.Pointer[httpx.CycleStatus]
 	Ready         *atomic.Bool
 	Spoke         *federation.Spoke
-	OtlpExp       *otlp.Exporter
-	OtlpSem       chan struct{}   // semaphore bounding concurrent OTLP pushes; nil when OTLP disabled
-	OtlpWg        *sync.WaitGroup // tracks in-flight OTLP push goroutines for clean shutdown
+	// Otlp owns the OTLP exporter plus the concurrency cap and in-flight
+	// tracking for async pushes. Always non-nil; a disabled publisher (OTLP
+	// off) makes push a no-op, so the loop never nil-checks.
+	Otlp *otlpPublisher
 	// CycleMu serialises each regular discovery cycle against forced
 	// out-of-cycle walks triggered via POST /admin/rediscover (issue #73).
 	// Held only for the duration of RunCycle's SNMP work; the Rediscoverer
@@ -88,50 +88,6 @@ func (lc LoopConfig) WarnSnapshot(ctx context.Context, site, msg string, attrs .
 		return
 	}
 	lc.Logger.WarnContext(ctx, msg, attrs...)
-}
-
-// OtlpPush enqueues an OTLP push function under the configured concurrency cap.
-// Drops the push (and increments the dropped counter) if the OtlpSem is full.
-func (lc LoopConfig) OtlpPush(ctx context.Context, fn func(context.Context) error, warnMsg string) {
-	if lc.OtlpSem != nil {
-		select {
-		case lc.OtlpSem <- struct{}{}:
-		default:
-			lc.Logger.Warn("otlp push dropped: concurrent limit reached")
-			// status="dropped" never carries a failure reason — use the
-			// shared n/a sentinel. Issue #20.
-			lc.M.OTLPPushTotal.WithLabelValues("dropped", metrics.ReasonNA).Inc()
-			return
-		}
-	}
-	if lc.OtlpWg != nil {
-		lc.OtlpWg.Add(1)
-	}
-	go func() { //nolint:gosec // G118: OTLP push must survive the originating cycle's context — the push is a side-effect of a completed cycle and should reach the collector even if the cycle's deadline already expired
-		// Recover a panic in the push body so a bug in the OTLP exporter
-		// cannot crash the process. Registered first so it runs LAST in the
-		// defer chain — after the semaphore release and OtlpWg.Done below —
-		// keeping the concurrency cap and shutdown drain correct on panic.
-		// One-shot: the push goroutine exits on recovery.
-		defer recoverGoroutine("otlp_push", lc.Logger, lc.M)
-		if lc.OtlpWg != nil {
-			defer lc.OtlpWg.Done()
-		}
-		if lc.OtlpSem != nil {
-			defer func() { <-lc.OtlpSem }()
-		}
-		pushCtx, cancel := context.WithTimeout(context.Background(), OTLPPushTimeout)
-		defer cancel()
-		if err := fn(pushCtx); err != nil {
-			lc.Logger.Warn(warnMsg, "error", err)
-			// Issue #20: partition status="error" by the OTLP sub-reason
-			// derived from the error (timeout / tls_error / http_4xx /
-			// http_5xx / network).
-			lc.M.OTLPPushTotal.WithLabelValues("error", string(otlp.ClassifyPushError(err))).Inc()
-		} else {
-			lc.M.OTLPPushTotal.WithLabelValues("ok", metrics.ReasonNA).Inc()
-		}
-	}()
 }
 
 // RunStaleWatchdog re-asserts the network_topology_graph_stale gauge when a
@@ -395,12 +351,10 @@ func RunDiscoveryLoop(ctx context.Context, lc LoopConfig) {
 				}
 				lc.M.TopologyChangeTotal.WithLabelValues(string(c.Kind), string(proto)).Inc()
 			}
-			if lc.OtlpExp != nil {
-				ch := changes
-				lc.OtlpPush(ctx, func(ctx context.Context) error {
-					return lc.OtlpExp.PushChanges(ctx, ch)
-				}, "otlp push changes failed")
-			}
+			ch := changes
+			lc.Otlp.Push(func(ctx context.Context) error {
+				return lc.Otlp.exp.PushChanges(ctx, ch)
+			}, "otlp push changes failed")
 		}
 		if len(conflicts) > 0 {
 			evLogger.EmitConflicts(ctx, conflicts)
@@ -410,10 +364,10 @@ func RunDiscoveryLoop(ctx context.Context, lc LoopConfig) {
 		}
 		prevGraph = newGraph
 		ages = newAges
-		if lc.OtlpExp != nil && (len(changes) > 0 || cycleNum%lc.Cfg.Output.OTLP.HeartbeatCycles == 0) {
+		if lc.Otlp.Enabled() && (len(changes) > 0 || cycleNum%lc.Cfg.Output.OTLP.HeartbeatCycles == 0) {
 			g := newGraph
-			lc.OtlpPush(ctx, func(ctx context.Context) error {
-				return lc.OtlpExp.PushGraph(ctx, g)
+			lc.Otlp.Push(func(ctx context.Context) error {
+				return lc.Otlp.exp.PushGraph(ctx, g)
 			}, "otlp push failed")
 		}
 		lc.M.GraphStale.Set(0)
