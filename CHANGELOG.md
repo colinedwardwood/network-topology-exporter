@@ -36,6 +36,16 @@ v1.3.1 lands under this milestone instead, renamed to
 
 ### Internal
 
+- Config & boundary type cleanliness (#152). The four stringly-typed config
+  enums — `federation.role`, `output.otlp.protocol`, `modules.snmp.version`, and
+  the credential-profile `type` — are now named string types (`Role`,
+  `OTLPProtocol`, `SNMPVersion`, `ProfileType`) with constants and a `Valid()`
+  helper. `LoopConfig`'s three nilable OTLP fields (`OtlpExp`, `OtlpSem`,
+  `OtlpWg`) collapse into one nil-tolerant `*otlpPublisher` whose `Push` no-ops
+  when OTLP is disabled, removing the scattered nil-guards. No behavior change:
+  every YAML wire value, validation error string, metric label, and the OTLP
+  concurrency-cap / shutdown-drain semantics are byte-identical.
+
 - Walker outcome-accounting deduplicated into `internal/discovery/snmp`
   (`snmputil`) (#149). The per-package `recordWalkerOutcome`/`recordDegraded`
   forwarders, the five-value `outcome*` constant set, and the four-way terminal

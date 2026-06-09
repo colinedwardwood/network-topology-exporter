@@ -79,7 +79,7 @@ func Run(ctx context.Context, args []string) int {
 		logger.Warn("FDB is enabled but ARP enrichment is off; DstPort backfill on FDB-only edges will be unavailable. Set modules.arp.enabled: true to re-enable.")
 	}
 
-	m := metrics.New(cfg.Federation.Role == "uncoordinated")
+	m := metrics.New(cfg.Federation.Role == config.RoleUncoordinated)
 	m.SnapshotLastWrittenUnix.SetToCurrentTime()
 
 	// walkerMetrics adapts m.BGPWalkerOutcomeTotal to the snmputil.WalkerMetrics
@@ -185,7 +185,6 @@ func Run(ctx context.Context, args []string) int {
 	defer cancel()
 
 	var workerDone sync.WaitGroup
-	var otlpWg sync.WaitGroup
 
 	// Issue #68: opt-in OpenTelemetry tracing of the discovery cycle. Built
 	// before the role switch so both hub mode (which records hub.handlePush on
@@ -215,8 +214,14 @@ func Run(ctx context.Context, args []string) int {
 		logger.Info("tracing enabled", "sample_rate", sampleRate, "protocol", cfg.Output.OTLP.Protocol)
 	}
 
+	// OTLP publisher: a no-op by default (hub mode never enables OTLP), so the
+	// shared shutdown drain below never nil-panics. The default branch replaces
+	// this with an enabled publisher (exp + sem + wg allocated together) when
+	// output.otlp.enabled is true.
+	pub := NoopOTLPPublisher()
+
 	switch cfg.Federation.Role {
-	case "hub":
+	case config.RoleHub:
 		// Hub mode: pure aggregator — no local SNMP discovery. The hub server
 		// exposes /spoke/push on a separate mTLS listener (LD-20).
 		hub := federation.NewHub(cfg.Federation, m, logger, cfg.Snapshot.Path)
@@ -271,7 +276,7 @@ func Run(ctx context.Context, args []string) int {
 		// Build the spoke client now so TLS errors surface at startup, not
 		// mid-cycle.
 		var spoke *federation.Spoke
-		if cfg.Federation.Role == "spoke" {
+		if cfg.Federation.Role == config.RoleSpoke {
 			var err error
 			spoke, err = federation.NewSpoke(cfg.Federation, logger, warnLimiter, m)
 			if err != nil {
@@ -280,10 +285,8 @@ func Run(ctx context.Context, args []string) int {
 			}
 		}
 
-		var otlpExp *otlp.Exporter
 		if cfg.Output.OTLP.Enabled {
-			var err error
-			otlpExp, err = otlp.New(ctx, otlp.Config{
+			otlpExp, err := otlp.New(ctx, otlp.Config{
 				Endpoint:   cfg.Output.OTLP.Endpoint,
 				Timeout:    cfg.Output.OTLP.Timeout,
 				InstanceID: cfg.Federation.Spoke.SpokeID, // empty in non-spoke roles → falls back to hostname
@@ -293,11 +296,7 @@ func Run(ctx context.Context, args []string) int {
 				logger.Error("building OTLP exporter", "error", err)
 				return 1
 			}
-		}
-
-		var otlpSem chan struct{}
-		if cfg.Output.OTLP.Enabled {
-			otlpSem = make(chan struct{}, MaxOTLPPushConcurrency)
+			pub = NewOTLPPublisher(otlpExp, MaxOTLPPushConcurrency, logger, m)
 		}
 
 		// Issue #73: admin out-of-cycle re-discovery. cycleMu serialises forced
@@ -357,9 +356,7 @@ func Run(ctx context.Context, args []string) int {
 				Status:        &status,
 				Ready:         &ready,
 				Spoke:         spoke,
-				OtlpExp:       otlpExp,
-				OtlpSem:       otlpSem,
-				OtlpWg:        &otlpWg,
+				Otlp:          pub,
 				CycleMu:       &cycleMu,
 				Pool:          sessionPool,
 			})
@@ -437,7 +434,7 @@ func Run(ctx context.Context, args []string) int {
 	// stuck OTLP push cannot hang shutdown indefinitely (the discovery drain is
 	// bounded but this Wait previously was not).
 	otlpDone := make(chan struct{})
-	go func() { otlpWg.Wait(); close(otlpDone) }()
+	go func() { pub.Drain(); close(otlpDone) }()
 	select {
 	case <-otlpDone:
 		logger.Info("otlp push goroutines drained")
@@ -476,7 +473,7 @@ func Run(ctx context.Context, args []string) int {
 // and no watchdog goroutine), which is exactly what hub mode and an explicit
 // opt-out both want.
 func livenessMaxStale(cfg *config.Config) time.Duration {
-	if cfg.Federation.Role == "hub" {
+	if cfg.Federation.Role == config.RoleHub {
 		return 0
 	}
 	cycles := cfg.Discovery.LivenessMaxStaleCyclesValue()

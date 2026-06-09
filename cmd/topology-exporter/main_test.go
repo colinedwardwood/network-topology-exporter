@@ -17,7 +17,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -34,6 +33,7 @@ import (
 	snmpwalk "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
 	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/colinedwardwood/network-topology-exporter/internal/output/otlp"
 	"github.com/colinedwardwood/network-topology-exporter/internal/snmptest"
 )
 
@@ -638,6 +638,7 @@ func TestRunDiscoveryLoopClearsGraphStale(t *testing.T) {
 			M:      m,
 			Status: &status,
 			Ready:  &ready,
+			Otlp:   app.NoopOTLPPublisher(),
 		})
 	}()
 
@@ -1016,6 +1017,7 @@ func TestRunDiscoveryLoopVersionMismatchSnapshot(t *testing.T) {
 			M:      m,
 			Status: &status,
 			Ready:  &ready,
+			Otlp:   app.NoopOTLPPublisher(),
 		})
 	}()
 
@@ -1084,6 +1086,7 @@ func TestRunDiscoveryLoopWithSnapshot(t *testing.T) {
 			M:      m1,
 			Status: &s1,
 			Ready:  &r1,
+			Otlp:   app.NoopOTLPPublisher(),
 		})
 	}()
 	// Wait for the snapshot write to complete (SnapshotLastWrittenUnix > 0),
@@ -1122,6 +1125,7 @@ outer:
 			M:      m2,
 			Status: &s2,
 			Ready:  &r2,
+			Otlp:   app.NoopOTLPPublisher(),
 		})
 	}()
 
@@ -1192,6 +1196,7 @@ func TestRunDiscoveryLoopSecondTick(t *testing.T) {
 			M:      m,
 			Status: &status,
 			Ready:  &ready,
+			Otlp:   app.NoopOTLPPublisher(),
 		})
 	}()
 
@@ -1266,6 +1271,7 @@ func TestRunDiscoveryLoopContextCancelledDuringCycle(t *testing.T) {
 			M:      m,
 			Status: &status,
 			Ready:  &ready,
+			Otlp:   app.NoopOTLPPublisher(),
 		})
 	}()
 
@@ -1320,6 +1326,7 @@ func TestRunDiscoveryLoopCredResolverError(t *testing.T) {
 			M:      m,
 			Status: &status,
 			Ready:  &ready,
+			Otlp:   app.NoopOTLPPublisher(),
 		})
 	}()
 
@@ -1805,72 +1812,70 @@ func TestWalkSystemWithCredentialsAllTimeout(t *testing.T) {
 	}
 }
 
-// TestOtlpPushDropsWhenSemaphoreFull verifies that otlpPush increments the
-// dropped counter and returns immediately when the semaphore is full.
+// TestOtlpPushDropsWhenSemaphoreFull verifies that Push increments the
+// dropped counter and returns immediately when the semaphore is full. The
+// publisher is built in its enabled form (a bare non-nil exporter sentinel
+// plus a saturated cap-1 semaphore) so the drop path is exercised.
 func TestOtlpPushDropsWhenSemaphoreFull(t *testing.T) {
-	// Fill the semaphore to capacity.
-	sem := make(chan struct{}, 1)
-	sem <- struct{}{} // occupy the only slot
+	m := metrics.New(false)
+	pub := app.NewOTLPPublisher(&otlp.Exporter{}, 1, slog.Default(), m)
 
-	dropped := make(chan struct{}, 1)
-	lc := app.LoopConfig{
-		Logger:  slog.Default(),
-		M:       metrics.New(false),
-		OtlpSem: sem,
-	}
+	// Saturate the cap by enqueuing one push that blocks until released so the
+	// single semaphore slot stays occupied for the duration of the drop test.
+	unblock := make(chan struct{})
+	pub.Push(func(_ context.Context) error {
+		<-unblock
+		return nil
+	}, "occupier")
 
-	ctx := context.Background()
-	lc.OtlpPush(ctx, func(_ context.Context) error {
+	// The next push must be dropped immediately (semaphore full).
+	pub.Push(func(_ context.Context) error {
+		t.Error("dropped push fn ran")
 		return nil
 	}, "should not be called")
 
-	// otlpPush should have incremented the dropped counter and returned
-	// immediately. Issue #20 widened the label set to {status, reason}.
-	if got := testutil.ToFloat64(lc.M.OTLPPushTotal.WithLabelValues("dropped", metrics.ReasonNA)); got != 1 {
+	// Issue #20 widened the label set to {status, reason}.
+	if got := testutil.ToFloat64(m.OTLPPushTotal.WithLabelValues("dropped", metrics.ReasonNA)); got != 1 {
 		t.Errorf("OTLPPushTotal{dropped,n/a} = %v, want 1", got)
 	}
-	_ = dropped
+
+	close(unblock)
+	pub.Drain()
 }
 
-// TestOtlpPushDrainsOnShutdown verifies that otlpWg.Wait() drains all in-flight
-// goroutines before returning: the goroutine spawned by otlpPush must finish
-// before Wait() unblocks.
+// TestOtlpPushDrainsOnShutdown verifies that Drain blocks until all in-flight
+// goroutines finish: the goroutine spawned by Push must complete before Drain
+// returns.
 func TestOtlpPushDrainsOnShutdown(t *testing.T) {
-	var wg sync.WaitGroup
 	started := make(chan struct{})
 	unblock := make(chan struct{})
 
-	lc := app.LoopConfig{
-		Logger: slog.Default(),
-		M:      metrics.New(false),
-		OtlpWg: &wg,
-	}
+	pub := app.NewOTLPPublisher(&otlp.Exporter{}, 1, slog.Default(), metrics.New(false))
 
-	ctx := context.Background()
-	lc.OtlpPush(ctx, func(_ context.Context) error {
+	pub.Push(func(_ context.Context) error {
 		close(started) // signal that the goroutine has begun
 		<-unblock      // block until the test says go
 		return nil
 	}, "drain test")
 
-	// Wait until the goroutine has started before calling wg.Wait.
+	// Wait until the goroutine has started before draining.
 	select {
 	case <-started:
 	case <-time.After(5 * time.Second):
 		t.Fatal("goroutine did not start within 5s")
 	}
 
-	// Release the goroutine and wait for the WaitGroup to drain.
+	// Release the goroutine and drain.
 	close(unblock)
 
 	done := make(chan struct{})
-	go func() { wg.Wait(); close(done) }()
+	go func() { pub.Drain(); close(done) }()
 
 	select {
 	case <-done:
-		// WaitGroup drained cleanly.
+		// Drain returned cleanly.
 	case <-time.After(5 * time.Second):
-		t.Fatal("otlpWg.Wait() did not return within 5s after goroutine finished")
+		t.Fatal("Drain() did not return within 5s after goroutine finished")
 	}
 }
 
@@ -2223,6 +2228,7 @@ func TestGraphSizeAdmissionControl(t *testing.T) {
 			M:      m,
 			Status: &status,
 			Ready:  &ready,
+			Otlp:   app.NoopOTLPPublisher(),
 		})
 	}()
 
