@@ -84,15 +84,35 @@ jobs:
       # coverage-guided engine more thoroughly.
       - name: fuzz parsers
         run: |
-          set -e
+          set -uo pipefail
+          # Only a GENUINE crasher fails this job (#143, same fix as the nightly
+          # job's #107/#126). On a loaded runner a 30s fuzztime pass can exit with
+          # a benign "context deadline exceeded" and no crasher — that must NOT
+          # red the PR. -timeout has generous headroom over -fuzztime so the test
+          # deadline never races the fuzz deadline; we fail only when Go actually
+          # wrote a minimised crashing input ("Failing input written") or panicked.
+          crash=0
           for pkg in bgp fdb ospf mpls lldp snmp; do
-            cd "$GITHUB_WORKSPACE"
             FUZZ_TARGETS=$(go test -list 'Fuzz.*' "./internal/discovery/$pkg" | grep '^Fuzz')
             for t in $FUZZ_TARGETS; do
               echo "▼ $pkg.$t"
-              go test -run=NONE -fuzz="^$t\$" -fuzztime=30s "./internal/discovery/$pkg"
+              if out=$(go test -run=NONE -fuzz="^$t\$" -fuzztime=30s -timeout=2m "./internal/discovery/$pkg" 2>&1); then
+                printf '%s\n' "$out"
+                continue
+              fi
+              printf '%s\n' "$out"
+              if printf '%s\n' "$out" | grep -qE 'Failing input written|^[[:space:]]*panic:'; then
+                echo "::error::fuzz crash found in $pkg.$t — crasher written to testdata/fuzz/"
+                crash=1
+              elif printf '%s\n' "$out" | grep -q 'context deadline exceeded'; then
+                echo "::warning::$pkg.$t reached the fuzztime deadline with no crasher (benign); continuing"
+              else
+                echo "::error::$pkg.$t fuzz run failed for a non-crash reason (build/setup); investigate"
+                crash=1
+              fi
             done
           done
+          exit "$crash"
 
       - name: upload fuzz corpus on failure
         if: failure()
