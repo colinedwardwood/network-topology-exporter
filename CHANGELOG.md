@@ -8,6 +8,13 @@ the README. The lab-fixture-capture work previously slotted for
 v1.3.1 lands under this milestone instead, renamed to
 [v1.4.0-rc.1 — Lab Fixture Capture](https://github.com/colinedwardwood/network-topology-exporter/milestones).
 
+### Added
+
+- RFC 8345/8346 YANG-JSON topology output (#75). When `output.yang.enabled` is
+  set, `GET /topology/yang` renders the current reconciled topology as RFC 8345
+  `ietf-network` JSON (8346 l3-unicast network-type marker; `ntx-topology`
+  augmentation for discovery provenance), validated in CI with `yanglint`.
+
 ### Fixed
 
 - Spoke→hub push no longer runs inside the discovery cycle (#6). A slow or
