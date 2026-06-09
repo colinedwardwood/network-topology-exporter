@@ -231,40 +231,9 @@ func (pl *SessionPool) returnKey(key poolKey) {
 	}
 }
 
-// Checkout returns a live session for p, opening one if none is pooled.
-// It is the lower-level handle behind acquire; tests drive it directly to
-// assert hit/miss behaviour. The returned session must be handed back via
-// Return.
-func (pl *SessionPool) Checkout(p Params) (*g.GoSNMP, error) {
-	key := poolKey{ip: p.IP.String(), profile: p.CredentialProfile}
-
-	pl.mu.Lock()
-	if e, ok := pl.sessions[key]; ok && !e.inUse {
-		e.inUse = true
-		e.lastUsed = time.Now()
-		s := e.session
-		pl.recordHitLocked()
-		pl.mu.Unlock()
-		return s, nil
-	}
-	pl.mu.Unlock()
-
-	client, err := Open(p)
-	if err != nil {
-		pl.recordMiss()
-		return nil, err
-	}
-	pl.mu.Lock()
-	pl.sessions[key] = &poolEntry{session: client, lastUsed: time.Now(), inUse: true}
-	pl.setSizeLocked()
-	pl.recordMiss()
-	pl.mu.Unlock()
-	return client, nil
-}
-
 // Return hands a session back to the pool. When healthy is false (the walk hit
 // a connection-level error), the session is closed and evicted with reason
-// connection_error so the next Checkout dials fresh rather than reusing a dead
+// connection_error so the next acquire dials fresh rather than reusing a dead
 // socket. When healthy, the entry is marked available and its idle clock reset.
 func (pl *SessionPool) Return(p Params, s *g.GoSNMP, healthy bool) {
 	key := poolKey{ip: p.IP.String(), profile: p.CredentialProfile}

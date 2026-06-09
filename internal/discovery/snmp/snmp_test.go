@@ -2,6 +2,7 @@ package snmp
 
 import (
 	"context"
+	"math"
 	"net"
 	"strings"
 	"testing"
@@ -98,6 +99,11 @@ func TestPDUIntStrict(t *testing.T) {
 		{uint32(7), 7, true},
 		{int64(11), 11, true},
 		{uint64(13), 13, true},
+		{uint64(64512), 64512, true},
+		{uint32(4294967295), 4294967295, true}, // Gauge32 max — fits int on 64-bit, must not be rejected
+		{int64(math.MaxInt64), math.MaxInt64, true},
+		{uint64(math.MaxInt64) + 1, 0, false},
+		{uint64(math.MaxUint64), 0, false},
 		{float64(1.0), 0, false},
 		{"7", 0, false},
 	}
@@ -261,41 +267,41 @@ func TestWalkToIntMapStrictDecodeFailures(t *testing.T) {
 func TestEvaluateRequiredTablePolicy(t *testing.T) {
 	policy := RequiredTablePolicy{MinValidRows: 1, MaxInvalidRatio: 0.5}
 	cases := []struct {
-		name       string
-		stats      IntMapDecodeStats
-		wantDegrad bool
-		wantFail   string
+		name        string
+		stats       IntMapDecodeStats
+		wantOutcome TableOutcome
+		wantReason  string
 	}{
 		{
-			name:       "clean table",
-			stats:      IntMapDecodeStats{TotalRows: 10, ValidRows: 10, InvalidRows: 0, InvalidRatio: 0},
-			wantDegrad: false,
-			wantFail:   "",
+			name:        "clean table",
+			stats:       IntMapDecodeStats{TotalRows: 10, ValidRows: 10, InvalidRows: 0, InvalidRatio: 0},
+			wantOutcome: TableOK,
+			wantReason:  "",
 		},
 		{
-			name:       "partial anomalies below threshold",
-			stats:      IntMapDecodeStats{TotalRows: 10, ValidRows: 8, InvalidRows: 2, InvalidRatio: 0.2},
-			wantDegrad: true,
-			wantFail:   "",
+			name:        "partial anomalies below threshold",
+			stats:       IntMapDecodeStats{TotalRows: 10, ValidRows: 8, InvalidRows: 2, InvalidRatio: 0.2},
+			wantOutcome: TableDegraded,
+			wantReason:  "",
 		},
 		{
-			name:       "no valid rows",
-			stats:      IntMapDecodeStats{TotalRows: 2, ValidRows: 0, InvalidRows: 2, InvalidRatio: 1.0},
-			wantDegrad: false,
-			wantFail:   "required_table_no_valid_rows",
+			name:        "no valid rows",
+			stats:       IntMapDecodeStats{TotalRows: 2, ValidRows: 0, InvalidRows: 2, InvalidRatio: 1.0},
+			wantOutcome: TableHardFail,
+			wantReason:  "required_table_no_valid_rows",
 		},
 		{
-			name:       "invalid ratio exceeded",
-			stats:      IntMapDecodeStats{TotalRows: 3, ValidRows: 1, InvalidRows: 2, InvalidRatio: 0.666},
-			wantDegrad: false,
-			wantFail:   "required_table_invalid_ratio_exceeded",
+			name:        "invalid ratio exceeded",
+			stats:       IntMapDecodeStats{TotalRows: 3, ValidRows: 1, InvalidRows: 2, InvalidRatio: 0.666},
+			wantOutcome: TableHardFail,
+			wantReason:  "required_table_invalid_ratio_exceeded",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			gotDegrad, gotFail := EvaluateRequiredTablePolicy(tc.stats, policy)
-			if gotDegrad != tc.wantDegrad || gotFail != tc.wantFail {
-				t.Errorf("EvaluateRequiredTablePolicy(%+v) = (%v,%q), want (%v,%q)", tc.stats, gotDegrad, gotFail, tc.wantDegrad, tc.wantFail)
+			verdict := EvaluateRequiredTablePolicy(tc.stats, policy)
+			if verdict.Outcome != tc.wantOutcome || verdict.Reason != tc.wantReason {
+				t.Errorf("EvaluateRequiredTablePolicy(%+v) = {Outcome:%v Reason:%q}, want {Outcome:%v Reason:%q}", tc.stats, verdict.Outcome, verdict.Reason, tc.wantOutcome, tc.wantReason)
 			}
 		})
 	}
