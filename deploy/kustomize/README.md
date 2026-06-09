@@ -41,9 +41,13 @@ components:
   - ../../components/egress-networkpolicy
 ```
 
-With Egress enabled, **only the listed destinations are reachable** — edit the
-example CIDRs/ports in the component's patch to your environment first, or the
-exporter will lose connectivity. (Helm users set `networkPolicy.egress.*`.)
+With Egress enabled, **only the listed destinations are reachable**. The
+component **fails safe (deny-until-edit)**: the SNMP/OTLP/hub example CIDRs ship
+as `0.0.0.0/32` placeholders — a non-routable single address that matches no
+real traffic — so applying this component **unedited DENIES all SNMP/OTLP/hub
+egress** until you replace each `0.0.0.0/32` with your real CIDRs (and adjust
+ports). The DNS rule is scoped to the `kube-system` namespace; change it if your
+cluster DNS lives elsewhere. (Helm users set `networkPolicy.egress.*`.)
 
 ## Federation modes
 

@@ -177,11 +177,19 @@ networkPolicy:
   # scanner has no business reaching arbitrary destinations, so locking egress
   # limits the blast radius if the pod is compromised. You MUST enumerate every
   # destination the exporter legitimately needs, or it will break.
+  #
+  # Enabling egress requires at least one destination: when egress.enabled is
+  # true the chart FAILS to render unless one of snmp.cidrs / otlp.cidrs /
+  # hub.cidrs / extraRules is set, because a DNS-only egress policy would
+  # silently deny all SNMP discovery.
   egress:
     enabled: false
     # DNS resolution (kube-dns / CoreDNS). Almost always required. Allows
-    # UDP+TCP 53 egress (to any destination, since the DNS service IP varies).
+    # UDP+TCP 53 egress, scoped via namespaceSelector to dnsNamespace below.
     allowDNS: true
+    # Namespace the cluster DNS service runs in. Matched on the standard
+    # kubernetes.io/metadata.name label. Override for non-standard clusters.
+    dnsNamespace: kube-system
     # SNMP polling targets — typically your discovery scope
     # (config.discovery.scope.cidr_allow_list).
     snmp:
