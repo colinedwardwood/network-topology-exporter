@@ -931,7 +931,7 @@ func TestHubRestoreGraphPublishesMetrics(t *testing.T) {
 }
 
 // TestHubOOSUnmatchedMetricIncrementsOnMiss verifies that unmatched OOS hints
-// are reflected in HubOOSUnmatchedTotal after the build wins the publish CAS.
+// are reflected in HubOOSUnmatchedTotal after the build wins publishIfWinner.
 func TestHubOOSUnmatchedMetricIncrementsOnMiss(t *testing.T) {
 	m := metrics.New(false)
 	h := NewHub(config.FederationConfig{SpokeTimeout: 5 * time.Minute}, m, nil, "")
