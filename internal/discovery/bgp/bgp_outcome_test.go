@@ -192,7 +192,7 @@ func TestWalkerOutcomeRFC4273Edges(t *testing.T) {
 func TestWalkerOutcomeVendorCiscoEdges(t *testing.T) {
 	t.Parallel()
 	fake := &fakeWalkerMetrics{}
-	addr := snmptest.Start(t, "public", buildCiscoCbgpPeer2RealPDUs())
+	addr := snmptest.Start(t, "public", snmptest.LoadCapture(t, ciscoCapture))
 	ip, port := snmptest.ParseAddr(addr)
 
 	p := snmputil.Params{
@@ -222,7 +222,7 @@ func TestWalkerOutcomeVendorCiscoEdges(t *testing.T) {
 func TestWalkerOutcomeVendorAristaEdges(t *testing.T) {
 	t.Parallel()
 	fake := &fakeWalkerMetrics{}
-	addr := snmptest.Start(t, "public", buildAristaBgp4v2RealPDUs())
+	addr := snmptest.Start(t, "public", snmptest.LoadCapture(t, aristaCapture))
 	ip, port := snmptest.ParseAddr(addr)
 
 	p := snmputil.Params{
