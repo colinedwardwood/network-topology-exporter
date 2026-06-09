@@ -1,12 +1,13 @@
 # RFC 8345 YANG topology mapping
 
-> **Status: design reference (v2.0.0).** This document defines how the
+> **Status: implemented behind a flag (#75).** This document defines how the
 > exporter's in-memory topology graph maps onto the RFC 8345 / RFC 8346 YANG
-> data models. The YANG output path itself is planned for v2.0.0 behind
-> `output.yang.enabled: false` (tracked in #75); this document is the mapping
-> contract the implementation and its `pyang`/`yanglint` conformance tests will
-> follow. It is published now so the mapping is reviewable independently of the
-> code.
+> data models. The YANG output path is implemented and ships disabled by default
+> behind `output.yang.enabled: false`; when enabled, `GET /topology/yang`
+> renders the current reconciled topology as RFC 8345/8346 YANG-JSON (see
+> [Accessing the output](#accessing-the-output)). This document remains the
+> mapping contract, and the emitted document is validated against the canonical
+> modules with `yanglint` in CI (the `yang-validate` workflow).
 
 ## Why YANG
 
@@ -115,7 +116,9 @@ record per physical/logical link with a `Direction` flag, so:
 `DiscoveryProto`, `LinkKind`, `Direction`, `Confidence`, and `Adjacency` have no
 home in base RFC 8345/8346. They are the exporter's reconciliation provenance
 and are too useful to drop. They are carried under a small **vendor
-augmentation module** (working name `ntx-topology`, namespace TBD) that adds:
+augmentation module** (`ntx-topology`, namespace
+`https://github.com/colinedwardwood/network-topology-exporter/yang/ntx-topology`)
+that adds:
 
 - `link/ntx-topology:discovery-protocol` (enum mirroring `DiscoveryProtocol`)
 - `link/ntx-topology:link-kind`
@@ -160,15 +163,40 @@ Two switches with a confirmed bidirectional LLDP link `leaf1:Gi0/1 ↔ spine1:Gi
 }
 ```
 
-## Planned emission and validation (v2.0.0)
+## Accessing the output
 
-- **Config:** `output.yang.enabled` (default `false`) plus a destination
-  (file path written each cycle, parallel to the snapshot, and/or a
-  read endpoint). Exact surface decided when #75 is implemented.
-- **Conformance CI:** a job validates the emitted document against the canonical
-  RFC 8345 / RFC 8346 modules (plus the `ntx-topology` augmentation) using
-  `pyang` and `yanglint`. The mapping above is the contract those tests assert.
-- **Known gaps to encode as test expectations:** empty `l3-node-attributes`
+Enable the output in config:
+
+```yaml
+output:
+  yang:
+    enabled: true            # default false
+    network_id: my-fabric    # optional; default "network-topology-exporter"
+```
+
+When enabled, `GET /topology/yang` on the main listen port returns the current
+reconciled topology as RFC 8345/8346 YANG-JSON with
+`Content-Type: application/yang-data+json`. The `network_id` (config or the
+default) is emitted as the single `network`'s `network-id`.
+
+This read carries the **same trust level as `/metrics`**: it is served on the
+same listener with the same auth posture (no auth in the default ground state;
+basic_auth/mTLS when `listen.web_config_file` is configured). It is a
+RESTCONF-*flavored* convenience read — a single GET that returns a YANG-JSON
+document — **not** a conformant RESTCONF datastore: there is no
+`/restconf/data` tree, no query parameters, no edit/PATCH semantics, and no
+NETCONF datastore behind it.
+
+## Emission and validation
+
+- **Config:** `output.yang.enabled` (default `false`) plus optional
+  `output.yang.network_id`. The output is a read endpoint
+  (`GET /topology/yang`), not a file written each cycle.
+- **Conformance CI:** the `yang-validate` workflow validates an adversarial
+  emitted document against the canonical RFC 8345 / RFC 8346 modules (plus the
+  `ntx-topology` augmentation) with `yanglint`. The mapping above is the
+  contract those checks assert.
+- **Known gaps encoded as test expectations:** empty `l3-node-attributes`
   (no router-id/prefix collection today); termination-points are derived from
   observed edges, so a device with no discovered links contributes a node with
   no termination-points.

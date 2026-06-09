@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestLoadAppliesDefaults(t *testing.T) {
@@ -2544,5 +2546,24 @@ targets: []
 	}
 	if _, err := Load(path); err == nil {
 		t.Fatalf("expected error for negative session_pool.max_idle, got nil")
+	}
+}
+
+func TestOutputYANGConfigParses(t *testing.T) {
+	const y = `
+output:
+  yang:
+    enabled: true
+    network_id: my-net
+`
+	var c Config
+	if err := yaml.Unmarshal([]byte(y), &c); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !c.Output.YANG.Enabled {
+		t.Error("Output.YANG.Enabled = false, want true")
+	}
+	if c.Output.YANG.NetworkID != "my-net" {
+		t.Errorf("Output.YANG.NetworkID = %q, want my-net", c.Output.YANG.NetworkID)
 	}
 }

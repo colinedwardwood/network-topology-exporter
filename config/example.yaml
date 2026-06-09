@@ -302,6 +302,12 @@ snapshot:
 #       # (ParentBased). Default 0.1. Use 1.0 to trace every cycle while
 #       # debugging; keep it small in production to bound trace volume.
 #       sample_rate: 0.1              # default 0.1; [0, 1]
+#   # RFC 8345 YANG-JSON topology output (#75). When enabled, GET /topology/yang
+#   # renders the current reconciled topology as RFC 8345/8346 YANG-JSON (same
+#   # trust level as /metrics).
+#   yang:
+#     enabled: false
+#     network_id: network-topology-exporter
 
 # ─── Per-device enrichment ─────────────────────────────────────────────────
 # Targets attach enrichment metadata (SNMP port, site label, custom labels)

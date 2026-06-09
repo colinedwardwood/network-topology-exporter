@@ -409,3 +409,17 @@ func TestTopologyCollectorDescribeAllDescriptors(t *testing.T) {
 		}
 	}
 }
+
+func TestCurrentGraphReturnsLatest(t *testing.T) {
+	c := newTopologyCollector(false,
+		prometheus.NewGauge(prometheus.GaugeOpts{Name: "t_dur"}),
+		prometheus.NewGauge(prometheus.GaugeOpts{Name: "t_smp"}))
+	if g := c.CurrentGraph(); g == nil {
+		t.Fatal("CurrentGraph returned nil before any Update (init stores empty graph)")
+	}
+	c.Update(discovery.Graph{Devices: []discovery.Device{{ID: "x"}}})
+	g := c.CurrentGraph()
+	if g == nil || len(g.Devices) != 1 || g.Devices[0].ID != "x" {
+		t.Fatalf("CurrentGraph did not return the updated graph: %+v", g)
+	}
+}
