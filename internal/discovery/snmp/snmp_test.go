@@ -100,6 +100,7 @@ func TestPDUIntStrict(t *testing.T) {
 		{int64(11), 11, true},
 		{uint64(13), 13, true},
 		{uint64(64512), 64512, true},
+		{uint32(4294967295), 4294967295, true}, // Gauge32 max — fits int on 64-bit, must not be rejected
 		{int64(math.MaxInt64), math.MaxInt64, true},
 		{uint64(math.MaxInt64) + 1, 0, false},
 		{uint64(math.MaxUint64), 0, false},

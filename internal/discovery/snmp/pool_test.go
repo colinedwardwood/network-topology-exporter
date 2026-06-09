@@ -225,7 +225,7 @@ func TestSessionPoolCloseClosesAll(t *testing.T) {
 	pl.Close()
 }
 
-// TestSessionPoolConcurrentDistinctKeys drives Checkout/Return across many
+// TestSessionPoolConcurrentDistinctKeys drives checkout/release across many
 // goroutines for DIFFERENT keys concurrently and the same key sequentially.
 // Run under -race; the pool map must stay consistent with no data race.
 func TestSessionPoolConcurrentDistinctKeys(t *testing.T) {
