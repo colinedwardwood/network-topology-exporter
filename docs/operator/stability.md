@@ -136,7 +136,7 @@ Three commitments from the ROADMAP that have measurable acceptance criteria:
 |---|---|
 | Cisco IOL / IOS-XE (cbgpPeer2Table) | Real-device validated (`lab/cisco-iol-bgp/`, `lab/cisco-iosxe-bgp/`) |
 | Arista cEOS (enterprise BGP4V2) | Real-device validated (`lab/arista-ceos-bgp/`) |
-| Nokia SR-OS (tBgpPeerTable) | **Experimental** — pending colleague-capture (#57) |
+| Nokia SR-OS (tBgpPeerNgTable) | **Validated** against SR-OS 25.7.R2 (#57) |
 | Juniper Junos (jnxBgpM2PeerTable) | Validated against vJunos-router JUNOS 25.4R1.12 (#56) |
 | LLDP (IEEE 802.1AB) | Real-device validated via containerlab E2E (`make test-e2e`) |
 | CDP (CISCO-CDP-MIB) | Synthetic tests; real-device captures not yet landed |

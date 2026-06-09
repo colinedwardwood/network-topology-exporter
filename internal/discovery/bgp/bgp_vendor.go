@@ -23,12 +23,11 @@
 //     each IMPLICIT-length (no length sub-id), peer = the remote one. See
 //     decodeJuniperJnxBgpM2Index.
 //
-//   - Nokia TIMETRA-BGP-MIB::tBgpPeerTable at 1.3.6.1.4.1.6527.3.1.2.13.2
-//     Column numbers and index format are transcribed from vendor MIB docs
-//     and remain UNVERIFIED against real devices (no lab access yet). The
-//     `vendor_nokia` walker ships with best-effort configuration; its column
-//     constants should be confirmed before any operator relies on them.
-//     Tracked as part of issue #1 / #57.
+//   - Nokia TIMETRA-BGP-MIB::tBgpPeerNgTable at 1.3.6.1.4.1.6527.3.1.2.14.4.7,
+//     decoded by decodeNokiaTBgpPeerNgIndex. VERIFIED against a real SR-OS
+//     25.7.R2 (7750 SR) capture (#57). Modern SR-OS leaves the original
+//     tBgpPeerTable (…3.1.2.13.2) empty and populates this Ng table; pre-Ng
+//     SR-OS and SR Linux fall through to the RFC 4273 fallback.
 //
 // The shared "IETF draft form" walker that previously lived at
 // 1.3.6.1.3.5.1.1.2 has been removed: real-device probing (Arista 4.36
@@ -132,15 +131,19 @@ var (
 		verified:    true,
 	}
 
-	// Nokia: same caveat as Juniper. SR-OS / SR Linux licensing blocks
-	// lab access.
+	// Nokia SR-OS: the next-gen tBgpPeerNgTable. VERIFIED against a real
+	// TiMOS-C-25.7.R2 (7750 SR) capture supplied by a Nokia colleague (#57):
+	// lab/nokia-srbgp/captures/r1_nokia_tBgpPeerNgTable.txt. Modern SR-OS leaves
+	// the original tBgpPeerTable (1.3.6.1.4.1.6527.3.1.2.13.2) EMPTY and
+	// populates this Ng table instead; pre-Ng SR-OS (and SR Linux, which omits
+	// the table) falls through to the RFC 4273 bgpPeerTable fallback.
 	nokiaTBgpPeerSpec = vendorTableSpec{
-		name:        "nokia-tBgpPeerTable",
-		root:        "1.3.6.1.4.1.6527.3.1.2.13.2",
-		colState:    3,                         // tBgpPeerOperState — UNVERIFIED
-		colRemoteAs: 7,                         // tBgpPeerRemoteAS — UNVERIFIED
-		decodeIndex: decodeBgp4v2InstanceIndex, // best guess; same shape as Arista
-		verified:    false,
+		name:        "nokia-tBgpPeerNgTable",
+		root:        "1.3.6.1.4.1.6527.3.1.2.14.4.7",
+		colState:    59, // tBgpPeerNgOperStatus (BgpOperState; 6 = established)
+		colRemoteAs: 66, // tBgpPeerNgPeerAS4Byte (col 65 is LocalAS4Byte — not the peer's AS)
+		decodeIndex: decodeNokiaTBgpPeerNgIndex,
+		verified:    true,
 	}
 )
 
@@ -200,14 +203,27 @@ func decodeAristaBgp4v2Index(suffix string) (net.IP, bool) {
 	return ip, ok
 }
 
-// decodeBgp4v2InstanceIndex is a best-effort decoder for vendors whose
-// MIB documentation describes an Arista-style peerInstance-prefixed index
-// but whose real-device behavior is not verified. Used by the Juniper
-// and Nokia specs pending lab access. If a verified capture shows a
-// different format, swap in a vendor-specific decoder like
-// decodeAristaBgp4v2Index above.
-func decodeBgp4v2InstanceIndex(suffix string) (net.IP, bool) {
-	return decodeAristaBgp4v2Index(suffix)
+// decodeNokiaTBgpPeerNgIndex parses one tBgpPeerNgTable row index. VERIFIED
+// against a real SR-OS 25.7.R2 capture (#57,
+// lab/nokia-srbgp/captures/r1_nokia_tBgpPeerNgTable.txt).
+//
+// INDEX { tBgpPeerNgInstanceIndex (vRtrID), tBgpPeerNgAddressType
+// (InetAddressType), tBgpPeerNgAddress (InetAddress) }: a router-instance id
+// followed by an EXPLICIT-length InetAddress (addrType.addrLen.bytes) — the
+// same shape as Arista's index, just with a vRtrID rather than a peerInstance
+// in front. The peer is the (single) address.
+//
+//	<vRtrID>.<addrType>.<addrLen>.<addrBytes...>
+//
+// Real capture (ipv4 peer 10.10.10.2 on vRtrID 1): ".1.1.4.10.10.10.2"
+func decodeNokiaTBgpPeerNgIndex(suffix string) (net.IP, bool) {
+	parts, err := splitOIDParts(suffix)
+	if err != nil || len(parts) < 1 {
+		return nil, false
+	}
+	// Skip the vRtrID instance at parts[0]; the peer address follows.
+	ip, _, ok := readInetAddrAt(parts, 1)
+	return ip, ok
 }
 
 // decodeJuniperJnxBgpM2Index parses one jnxBgpM2PeerTable row index. VERIFIED

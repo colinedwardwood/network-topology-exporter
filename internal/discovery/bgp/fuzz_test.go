@@ -40,17 +40,16 @@ func FuzzDecodeAristaBgp4v2Index(f *testing.F) {
 	})
 }
 
-// FuzzDecodeBgp4v2InstanceIndex covers the Juniper / Nokia path. Currently
-// aliases Arista's decoder, but worth fuzzing under its own name so a future
-// vendor-specific decoder is regression-tested before swap-in.
-func FuzzDecodeBgp4v2InstanceIndex(f *testing.F) {
-	f.Add("1.1.4.10.0.0.2")
+// FuzzDecodeNokiaTBgpPeerNgIndex covers the Nokia tBgpPeerNgTable index decoder
+// (vRtrID + explicit-length InetAddress). Must never panic on arbitrary input.
+func FuzzDecodeNokiaTBgpPeerNgIndex(f *testing.F) {
+	f.Add("1.1.4.10.10.10.2")
 	f.Add("0.1.4.10.0.0.2")
 	f.Add("")
 	f.Add("1")
 
 	f.Fuzz(func(t *testing.T, suffix string) {
-		_, _ = decodeBgp4v2InstanceIndex(suffix)
+		_, _ = decodeNokiaTBgpPeerNgIndex(suffix)
 	})
 }
 

@@ -10,6 +10,14 @@ v1.3.1 lands under this milestone instead, renamed to
 
 ### Fixed
 
+- Nokia SR-OS BGP walker now targets the next-gen `tBgpPeerNgTable`
+  (`1.3.6.1.4.1.6527.3.1.2.14.4.7`), validated against a real SR-OS 25.7.R2
+  (7750 SR) capture (#57). The previous spec targeted the legacy `tBgpPeerTable`
+  (`…13.2`) with unverified columns — modern SR-OS leaves that table empty, so
+  the walker produced no Nokia edges on any current device. State is
+  `tBgpPeerNgOperStatus` (col 59), remote-AS is `tBgpPeerNgPeerAS4Byte` (col 66),
+  index is `vRtrID` + explicit-length InetAddress. Pre-Ng SR-OS / SR Linux fall
+  through to the RFC 4273 fallback.
 - Spoke→hub push no longer runs inside the discovery cycle (#6). A slow or
   unreachable hub can no longer stall discovery or evict the spoke; the spoke
   keeps the most-recent graph in a latest-only mailbox and pushes it
