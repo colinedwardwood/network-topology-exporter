@@ -79,7 +79,7 @@ func Run(ctx context.Context, args []string) int {
 		logger.Warn("FDB is enabled but ARP enrichment is off; DstPort backfill on FDB-only edges will be unavailable. Set modules.arp.enabled: true to re-enable.")
 	}
 
-	m := metrics.New(cfg.Federation.Role == "uncoordinated")
+	m := metrics.New(cfg.Federation.Role == config.RoleUncoordinated)
 	m.SnapshotLastWrittenUnix.SetToCurrentTime()
 
 	// walkerMetrics adapts m.BGPWalkerOutcomeTotal to the snmputil.WalkerMetrics
@@ -221,7 +221,7 @@ func Run(ctx context.Context, args []string) int {
 	pub := NoopOTLPPublisher()
 
 	switch cfg.Federation.Role {
-	case "hub":
+	case config.RoleHub:
 		// Hub mode: pure aggregator — no local SNMP discovery. The hub server
 		// exposes /spoke/push on a separate mTLS listener (LD-20).
 		hub := federation.NewHub(cfg.Federation, m, logger, cfg.Snapshot.Path)
@@ -276,7 +276,7 @@ func Run(ctx context.Context, args []string) int {
 		// Build the spoke client now so TLS errors surface at startup, not
 		// mid-cycle.
 		var spoke *federation.Spoke
-		if cfg.Federation.Role == "spoke" {
+		if cfg.Federation.Role == config.RoleSpoke {
 			var err error
 			spoke, err = federation.NewSpoke(cfg.Federation, logger, warnLimiter, m)
 			if err != nil {
@@ -473,7 +473,7 @@ func Run(ctx context.Context, args []string) int {
 // and no watchdog goroutine), which is exactly what hub mode and an explicit
 // opt-out both want.
 func livenessMaxStale(cfg *config.Config) time.Duration {
-	if cfg.Federation.Role == "hub" {
+	if cfg.Federation.Role == config.RoleHub {
 		return 0
 	}
 	cycles := cfg.Discovery.LivenessMaxStaleCyclesValue()
