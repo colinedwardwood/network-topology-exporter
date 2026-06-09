@@ -8,6 +8,15 @@ the README. The lab-fixture-capture work previously slotted for
 v1.3.1 lands under this milestone instead, renamed to
 [v1.4.0-rc.1 — Lab Fixture Capture](https://github.com/colinedwardwood/network-topology-exporter/milestones).
 
+### Fixed
+
+- Spoke→hub push no longer runs inside the discovery cycle (#6). A slow or
+  unreachable hub can no longer stall discovery or evict the spoke; the spoke
+  keeps the most-recent graph in a latest-only mailbox and pushes it
+  asynchronously. New metrics: `network_topology_federation_spoke_push_last_success_unix`
+  (freshness), `network_topology_federation_spoke_push_drops_total`,
+  `network_topology_federation_spoke_push_queue_depth`.
+
 ### Security & correctness (post-merge hardening)
 
 - **Nightly fuzz no longer false-alarms (#107).** The `fuzz-nightly` workflow ran

@@ -100,3 +100,30 @@ func TestRegistryExposesGoCollector(t *testing.T) {
 		t.Fatal("expected at least one go_* metric from the standard Go collector")
 	}
 }
+
+func TestSpokePushMetricsRegistered(t *testing.T) {
+	m := New(false)
+	m.FederationSpokePushLastSuccessUnix.Set(1)
+	m.FederationSpokePushDropsTotal.WithLabelValues("superseded").Inc()
+	m.FederationSpokePushQueueDepth.Set(1)
+
+	fams, err := m.Registry().Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	want := map[string]bool{
+		"network_topology_federation_spoke_push_last_success_unix": false,
+		"network_topology_federation_spoke_push_drops_total":       false,
+		"network_topology_federation_spoke_push_queue_depth":       false,
+	}
+	for _, f := range fams {
+		if _, ok := want[f.GetName()]; ok {
+			want[f.GetName()] = true
+		}
+	}
+	for name, seen := range want {
+		if !seen {
+			t.Errorf("metric %q not registered", name)
+		}
+	}
+}
