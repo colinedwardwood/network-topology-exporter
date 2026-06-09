@@ -9,6 +9,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"go.uber.org/goleak"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/federation"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
@@ -78,6 +79,42 @@ func TestSpokePusherEnqueueNeverBlocks(t *testing.T) {
 	close(release)
 	cancel()
 	<-p.stopped
+}
+
+// drainOnce must return within the bounded deadline when the final push hangs,
+// and count a shutdown drop. Driven directly (payload pre-loaded in the mailbox)
+// so the assertion is deterministic.
+func TestSpokePusherDrainOnceBounded(t *testing.T) {
+	push := func(ctx context.Context, _ federation.SpokePayload) error {
+		<-ctx.Done() // hang until the bounded drain context expires
+		return ctx.Err()
+	}
+	m := metrics.New(false)
+	p := newSpokePusher(push, m, testLogger())
+	p.drain = 50 * time.Millisecond
+
+	p.Enqueue(context.Background(), payload("A")) // sits in the mailbox, no consumer
+
+	start := time.Now()
+	p.drainOnce()
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("drainOnce took %v, want ~%v (bounded)", elapsed, p.drain)
+	}
+	if got := testutilCounterVecValue(t, m.FederationSpokePushDropsTotal, "shutdown"); got < 1 {
+		t.Errorf("shutdown drops = %v, want >= 1", got)
+	}
+}
+
+// run must exit cleanly on ctx cancel and leak no goroutine.
+func TestSpokePusherRunNoLeak(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	m := metrics.New(false)
+	p := newSpokePusher(func(context.Context, federation.SpokePayload) error { return nil }, m, testLogger())
+	ctx, cancel := context.WithCancel(context.Background())
+	go p.run(ctx)
+	p.Enqueue(context.Background(), payload("A"))
+	cancel()
+	p.Shutdown()
 }
 
 // On a successful push the freshness gauge advances.

@@ -105,6 +105,25 @@ func (p *spokePusher) doPush(ctx context.Context, q queuedPush) {
 	p.m.FederationSpokePushLastSuccessUnix.Set(float64(time.Now().Unix()))
 }
 
-// drainOnce is a temporary stub; Task 4 replaces it with the bounded final
-// drain attempt at shutdown.
-func (p *spokePusher) drainOnce() {}
+// drainOnce attempts a single final push of the latest pending payload under a
+// fresh bounded context (the loop ctx is already cancelled at this point). A
+// failure or empty mailbox is recorded as a shutdown drop.
+func (p *spokePusher) drainOnce() {
+	select {
+	case q := <-p.ch:
+		dctx, cancel := context.WithTimeout(context.Background(), p.drain)
+		defer cancel()
+		if err := p.push(trace.ContextWithSpanContext(dctx, q.span), q.payload); err != nil {
+			p.m.FederationSpokePushDropsTotal.WithLabelValues("shutdown").Inc()
+		} else {
+			p.m.FederationSpokePushLastSuccessUnix.Set(float64(time.Now().Unix()))
+		}
+	default:
+	}
+}
+
+// Shutdown blocks until run has exited (after its final drain). Safe to call
+// after the loop ctx is cancelled; idempotent.
+func (p *spokePusher) Shutdown() {
+	<-p.stopped
+}
