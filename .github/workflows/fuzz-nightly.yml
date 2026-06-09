@@ -16,9 +16,9 @@ jobs:
     name: fuzz (long, nightly)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.4'
           cache: true
@@ -66,7 +66,7 @@ jobs:
 
       - name: upload fuzz corpus on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: fuzz-corpus-${{ github.run_id }}
           path: internal/discovery/*/testdata/fuzz/**
@@ -74,7 +74,7 @@ jobs:
 
       - name: open issue on failure
         if: failure()
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             const title = `fuzz-nightly: regression detected in run ${context.runId}`;
