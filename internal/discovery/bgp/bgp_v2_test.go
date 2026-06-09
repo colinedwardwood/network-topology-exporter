@@ -13,6 +13,16 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/snmptest"
 )
 
+// Real-device capture files (snmpwalk -On -Oe), loaded directly by the vendor
+// walker integration tests via snmptest.LoadCapture so the tests run against
+// the exact bytes the device emitted rather than transcribed PDU slices (#59).
+// Paths are relative to this package directory (internal/discovery/bgp).
+const (
+	ciscoCapture   = "../../../lab/cisco-iol-bgp/captures/r1_cisco_cbgpPeer2Table.txt"
+	aristaCapture  = "../../../lab/arista-ceos-bgp/captures/r1_arista_bgp4v2.txt"
+	juniperCapture = "../../../lab/juniper-jnxbgp/captures/r1_juniper_jnxBgpM2PeerTable.txt"
+)
+
 // --- index decoder tests -----------------------------------------------
 
 // TestDecodeCiscoCbgpPeer2Index covers the index format used by Cisco's
@@ -127,7 +137,7 @@ func TestDecodeJuniperJnxBgpM2Index(t *testing.T) {
 // that mirrors real cbgpPeer2Table output (column numbers from the
 // real-device captures: state=3, remoteAs=11, peer IP in the index).
 func TestWalkVendorCisco(t *testing.T) {
-	addr := snmptest.Start(t, "public", buildCiscoCbgpPeer2RealPDUs())
+	addr := snmptest.Start(t, "public", snmptest.LoadCapture(t, ciscoCapture))
 	ip, port := snmptest.ParseAddr(addr)
 
 	p := snmputil.Params{
@@ -158,7 +168,7 @@ func TestWalkVendorCisco(t *testing.T) {
 // enterprise-MIB column numbers from real cEOS captures (state=13,
 // remoteAs=10, peer IP in index after peerInstance).
 func TestWalkVendorArista(t *testing.T) {
-	addr := snmptest.Start(t, "public", buildAristaBgp4v2RealPDUs())
+	addr := snmptest.Start(t, "public", snmptest.LoadCapture(t, aristaCapture))
 	ip, port := snmptest.ParseAddr(addr)
 
 	p := snmputil.Params{
@@ -191,7 +201,7 @@ func TestWalkVendorArista(t *testing.T) {
 func TestWalkUseV2MIBDisabledOnlyHitsRFC4273(t *testing.T) {
 	// Serve both: the vendor table has an IPv4 peer; RFC 4273 has the
 	// same peer. With kill-switch off, only the RFC 4273 path fires.
-	pdus := append(buildCiscoCbgpPeer2RealPDUs(), buildBgpAgentPDUs()...)
+	pdus := append(snmptest.LoadCapture(t, ciscoCapture), buildBgpAgentPDUs()...)
 	addr := snmptest.Start(t, "public", pdus)
 	ip, port := snmptest.ParseAddr(addr)
 
@@ -398,32 +408,42 @@ func TestPackageConstantsStable(t *testing.T) {
 	}
 }
 
-// --- synthesizers --------------------------------------------------------
+// TestWalkVendorJuniper end-to-ends the Juniper walker against the real
+// jnxBgpM2PeerTable captured from a vJunos-router (JUNOS 25.4R1.12, #56). The
+// capture has two established eBGP peers — 192.0.2.2 (IPv4) and 2001:db8:1::2
+// (IPv6) — both with remote AS 65002 (state col 2, remoteAs col 13).
+func TestWalkVendorJuniper(t *testing.T) {
+	addr := snmptest.Start(t, "public", snmptest.LoadCapture(t, juniperCapture))
+	ip, port := snmptest.ParseAddr(addr)
 
-// buildCiscoCbgpPeer2RealPDUs returns a PDU set that mirrors the real
-// cbgpPeer2Table output captured from cisco_iol L2-17.12.1. The minimum
-// columns needed for the walker are state (col 3) and remoteAs (col 11);
-// peer IP is in the index suffix. See
-// lab/cisco-iol-bgp/captures/r1_cisco_cbgpPeer2Table.txt for the full
-// real-device output this is modelled on.
-func buildCiscoCbgpPeer2RealPDUs() []gsnmp.SnmpPDU {
-	const base = ".1.3.6.1.4.1.9.9.187.1.2.5.1."
-	// Index: <addrType=1=ipv4>.<addrLen=4>.<addrBytes=10.0.0.2>
-	const idx = "1.4.10.0.0.2"
-	return []gsnmp.SnmpPDU{
-		{Name: base + "3." + idx, Type: gsnmp.Integer, Value: bgpStateEstablished},
-		{Name: base + "11." + idx, Type: gsnmp.Gauge32, Value: uint(65001)},
+	p := snmputil.Params{
+		IP:          ip,
+		Port:        port,
+		Community:   []byte("public"),
+		Timeout:     3 * time.Second,
+		UseBGPV2MIB: true,
+		Vendor:      "juniper",
 	}
-}
 
-// buildAristaBgp4v2RealPDUs mirrors Arista cEOS 4.36's enterprise BGP4V2
-// MIB. See lab/arista-ceos-bgp/captures/r1_arista_bgp4v2.txt.
-func buildAristaBgp4v2RealPDUs() []gsnmp.SnmpPDU {
-	const base = ".1.3.6.1.4.1.30065.4.1.1.2.1."
-	// Index: <peerInst=1>.<addrType=1=ipv4>.<addrLen=4>.<addrBytes=10.0.0.2>
-	const idx = "1.1.4.10.0.0.2"
-	return []gsnmp.SnmpPDU{
-		{Name: base + "13." + idx, Type: gsnmp.Integer, Value: bgpStateEstablished},
-		{Name: base + "10." + idx, Type: gsnmp.Gauge32, Value: uint(65001)},
+	edges, _, err := Walk(context.Background(), p, "rtr-juniper", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) != 2 {
+		t.Fatalf("expected 2 edges from Juniper vendor walker (one per peer), got %d: %+v", len(edges), edges)
+	}
+	got := map[string]string{}
+	for _, e := range edges {
+		got[e.DstDevice] = e.Metadata[metaKeyRemoteAs]
+	}
+	for _, peer := range []string{"192.0.2.2", "2001:db8:1::2"} {
+		as, ok := got[peer]
+		if !ok {
+			t.Errorf("no edge to peer %s; got %+v", peer, got)
+			continue
+		}
+		if as != "65002" {
+			t.Errorf("peer %s RemoteAs = %q, want 65002 (from col 13)", peer, as)
+		}
 	}
 }
