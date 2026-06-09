@@ -3,6 +3,7 @@ package snmp
 import (
 	"context"
 	"fmt"
+	"math"
 	"net"
 	"strconv"
 	"strings"
@@ -307,14 +308,26 @@ func PDUIntStrict(pdu g.SnmpPDU) (int, bool) {
 		return v, true
 	case int32:
 		return int(v), true
+	case int64:
+		if v < math.MinInt || v > math.MaxInt {
+			return 0, false
+		}
+		return int(v), true
 	case uint:
+		if uint64(v) > math.MaxInt {
+			return 0, false
+		}
 		return int(v), true
 	case uint32:
-		return int(v), true
-	case int64:
+		if uint64(v) > math.MaxInt { // always false on 64-bit; correct on 32-bit
+			return 0, false
+		}
 		return int(v), true
 	case uint64:
-		return int(v), true //nolint:gosec // SNMP Gauge64/Counter64 values in practice fit int on 64-bit hosts; this helper is only used to surface MIB-bounded values to internal callers, not untrusted arithmetic
+		if v > math.MaxInt {
+			return 0, false
+		}
+		return int(v), true
 	}
 	return 0, false
 }

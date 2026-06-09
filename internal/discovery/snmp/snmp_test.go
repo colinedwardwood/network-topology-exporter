@@ -2,6 +2,7 @@ package snmp
 
 import (
 	"context"
+	"math"
 	"net"
 	"strings"
 	"testing"
@@ -98,6 +99,10 @@ func TestPDUIntStrict(t *testing.T) {
 		{uint32(7), 7, true},
 		{int64(11), 11, true},
 		{uint64(13), 13, true},
+		{uint64(64512), 64512, true},
+		{int64(math.MaxInt64), math.MaxInt64, true},
+		{uint64(math.MaxInt64) + 1, 0, false},
+		{uint64(math.MaxUint64), 0, false},
 		{float64(1.0), 0, false},
 		{"7", 0, false},
 	}
