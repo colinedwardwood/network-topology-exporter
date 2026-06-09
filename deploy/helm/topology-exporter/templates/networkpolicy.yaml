@@ -11,6 +11,9 @@ spec:
       {{- include "topology-exporter.selectorLabels" . | nindent 6 }}
   policyTypes:
     - Ingress
+    {{- if .Values.networkPolicy.egress.enabled }}
+    - Egress
+    {{- end }}
   ingress:
     # Allow Prometheus scraping on the metrics port from anywhere.
     - ports:
@@ -30,4 +33,58 @@ spec:
         - port: {{ .Values.service.hubPort | default 9101 }}
           protocol: TCP
     {{- end }}
+  {{- if .Values.networkPolicy.egress.enabled }}
+  {{- $eg := .Values.networkPolicy.egress }}
+  egress:
+    {{- if $eg.allowDNS }}
+    # DNS resolution (kube-dns / CoreDNS).
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- end }}
+    {{- if $eg.snmp.cidrs }}
+    # SNMP polling targets (discovery scope).
+    - to:
+        {{- range $eg.snmp.cidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      ports:
+        {{- range $eg.snmp.ports }}
+        - port: {{ . }}
+          protocol: UDP
+        {{- end }}
+    {{- end }}
+    {{- if $eg.otlp.cidrs }}
+    # OTLP traces/metrics collector.
+    - to:
+        {{- range $eg.otlp.cidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      ports:
+        {{- range $eg.otlp.ports }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+    {{- if $eg.hub.cidrs }}
+    # Hub federation peers (spoke → hub push).
+    - to:
+        {{- range $eg.hub.cidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      ports:
+        {{- range $eg.hub.ports }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+    {{- with $eg.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
 {{- end }}

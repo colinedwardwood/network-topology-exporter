@@ -56,6 +56,9 @@ spec:
               port: metrics
             initialDelaySeconds: 5
             periodSeconds: 10
+          # CPU limit intentionally omitted: discovery is bursty and a cpu limit
+          # would invite CFS throttling that stretches cycle latency. Memory keeps
+          # a hard limit to bound blast radius. Mirrors deploy/helm values.yaml. (#122)
           resources:
             requests:
               cpu: 50m

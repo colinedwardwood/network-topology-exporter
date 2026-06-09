@@ -512,10 +512,44 @@
     "networkPolicy": {
       "type": "object",
       "additionalProperties": false,
-      "description": "NetworkPolicy that restricts ingress to the hub federation port.",
+      "description": "NetworkPolicy that restricts ingress to the hub federation port, with optional egress lockdown.",
       "properties": {
         "enabled": { "type": "boolean" },
-        "spokeSelector": { "type": "object" }
+        "spokeSelector": { "type": "object" },
+        "egress": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Opt-in egress restriction. When enabled, only the listed destinations are reachable.",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "allowDNS": { "type": "boolean" },
+            "snmp": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "cidrs": { "type": "array", "items": { "type": "string" } },
+                "ports": { "type": "array", "items": { "type": "integer" } }
+              }
+            },
+            "otlp": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "cidrs": { "type": "array", "items": { "type": "string" } },
+                "ports": { "type": "array", "items": { "type": "integer" } }
+              }
+            },
+            "hub": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "cidrs": { "type": "array", "items": { "type": "string" } },
+                "ports": { "type": "array", "items": { "type": "integer" } }
+              }
+            },
+            "extraRules": { "type": "array", "items": { "type": "object" } }
+          }
+        }
       }
     }
   }

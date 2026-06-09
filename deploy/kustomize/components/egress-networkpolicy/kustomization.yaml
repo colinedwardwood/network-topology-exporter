@@ -1,0 +1,22 @@
+# Opt-in egress NetworkPolicy component (#122).
+#
+# Including this component adds `Egress` to the base NetworkPolicy's policyTypes
+# and a set of allow-rules, so a compromised credential-bearing SNMP scanner
+# cannot reach arbitrary destinations. With Egress enabled, ONLY the rules in
+# patch-networkpolicy-egress.yaml are permitted — you MUST edit the example
+# CIDRs/ports to match your environment or the exporter will lose connectivity.
+#
+# Enable it from an overlay's kustomization.yaml:
+#
+#   components:
+#     - ../../components/egress-networkpolicy
+#
+# Helm users get the equivalent via networkPolicy.egress.* values.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+patches:
+  - path: patch-networkpolicy-egress.yaml
+    target:
+      kind: NetworkPolicy
+      name: topology-exporter
