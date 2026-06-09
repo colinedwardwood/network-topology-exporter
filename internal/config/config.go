@@ -52,9 +52,18 @@ type ListenConfig struct {
 	DebugListenAddr string `yaml:"debug_listen_addr"`
 }
 
-// OutputConfig holds optional push-mode output paths.
+// OutputConfig holds optional output paths beyond Prometheus /metrics.
 type OutputConfig struct {
 	OTLP OTLPOutputConfig `yaml:"otlp"`
+	YANG YANGOutputConfig `yaml:"yang"`
+}
+
+// YANGOutputConfig configures the RFC 8345 YANG-JSON pull endpoint (#75).
+// Disabled by default; when enabled, GET /topology/yang renders the current
+// reconciled topology as RFC 8345/8346 YANG-JSON.
+type YANGOutputConfig struct {
+	Enabled   bool   `yaml:"enabled"`    // default false
+	NetworkID string `yaml:"network_id"` // RFC 8345 network-id; default applied in defaults
 }
 
 // OTLPOutputConfig configures the OTLP push output.
@@ -525,6 +534,9 @@ func (c *Config) applyDefaults() {
 	if c.Output.OTLP.Traces.SampleRate == nil {
 		def := 0.1
 		c.Output.OTLP.Traces.SampleRate = &def
+	}
+	if c.Output.YANG.NetworkID == "" {
+		c.Output.YANG.NetworkID = "network-topology-exporter"
 	}
 }
 
