@@ -50,30 +50,45 @@ sudo containerlab deploy -t topology.clab.yml
 vJunos boots slowly — give it **~5 minutes**. (`docker logs clab-juniper-jnxbgp-r1`
 shows boot progress.)
 
+### 2a. If r1 boots unconfigured (factory default)
+On some vJunos-router builds (observed on **25.4R1.12**) vrnetlab does **not**
+consume the containerlab config drive — r1 comes up at factory default (you'll
+see "Auto Image Upgrade: ... NO VALID CONFIG" in `docker logs`, and the
+`admin`/`admin@123` login is rejected). If so, configure it once at the serial
+console:
+```bash
+sudo docker exec -it clab-juniper-jnxbgp-r1 telnet localhost 5000   # login: root  (no password)
+```
+Then in the Junos CLI (`cli` → `configure`), set a root password
+(`set system root-authentication plain-text-password`, prompts) and paste the
+`set` lines from [`configs/r1.conf`](configs/r1.conf) (ge-0/0/0 = the only
+`up/up` data port; confirm with `show interfaces terse | match ge-`), then
+`commit`. This is a one-time, in-memory config — it does the same thing the
+config drive would have.
+
 ### 3. Confirm both BGP sessions are Established
-The FRR side is the easy check (no Junos login needed) — both peers should leave
+Check from the FRR peer (no Junos login needed) — both peers should leave
 `Active` and show an uptime:
 ```bash
 docker exec clab-juniper-jnxbgp-p1 vtysh -c "show bgp summary"
 # expect 192.0.2.1 (v4) and 2001:db8:1::1 (v6) Established
 ```
-To check from Junos, SSH into the VM (vrnetlab default `admin` / `admin@123`;
-containerlab `exec` runs in the *container*, not the Junos CLI, so use SSH):
-```bash
-ssh admin@172.20.20.21 "show bgp summary"
-```
-If a peer is stuck in `Active`, give it another minute (vJunos is slow to
-settle) and confirm the link subnet is `192.0.2.0/30` — **not** `10.0.0.0/24`,
-which collides with vJunos's internal `fxp0` management network. The capture
-only needs the sessions Established — no routes.
+If stuck in `Active`, give it a minute (vJunos is slow) and confirm the link
+subnet is `192.0.2.0/30` — **not** `10.0.0.0/24`, which collides with vJunos's
+internal `fxp0` management network. The capture only needs the sessions
+Established — no routes.
 
 ### 4. Capture
 ```bash
 ./capture.sh
 ```
-Writes `captures/r1_juniper_jnxBgpM2PeerTable.txt` (plus the system group, the
-RFC 4273 fallback table, and the route table for context). Private lab
-addresses, so no redaction needed.
+`capture.sh` runs `snmpwalk` **from the FRR peer (p1) against r1's data-plane
+address `192.0.2.1`** — not the lab management IP. vrnetlab fronts `fxp0` with a
+NAT that does not forward UDP 161, so SNMP to the management IP times out; the
+data-plane path is also how a real exporter would reach the device. It writes
+`captures/r1_juniper_jnxBgpM2PeerTable.txt` (plus the system group, the RFC 4273
+fallback table, and the route table for context). Documentation-range addresses,
+so no redaction needed.
 
 ### 5. Hand it back
 Commit `captures/r1_juniper_jnxBgpM2PeerTable.txt` (and siblings) — that's the
