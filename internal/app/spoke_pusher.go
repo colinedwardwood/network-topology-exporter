@@ -107,7 +107,8 @@ func (p *spokePusher) doPush(ctx context.Context, q queuedPush) {
 
 // drainOnce attempts a single final push of the latest pending payload under a
 // fresh bounded context (the loop ctx is already cancelled at this point). A
-// failure or empty mailbox is recorded as a shutdown drop.
+// failed bounded push is recorded as a shutdown drop; an empty mailbox is a
+// no-op.
 func (p *spokePusher) drainOnce() {
 	select {
 	case q := <-p.ch:

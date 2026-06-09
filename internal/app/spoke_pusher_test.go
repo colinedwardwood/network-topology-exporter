@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -136,4 +137,64 @@ func TestSpokePusherFreshnessGauge(t *testing.T) {
 	}
 	cancel()
 	<-p.stopped
+}
+
+// End-to-end most-recent-wins: while the first push is blocked, payloads queued
+// behind it are superseded, and the next payload the consumer actually pushes is
+// the newest one queued.
+func TestSpokePusherMostRecentWinsThroughRun(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var pushed []string
+	push := func(_ context.Context, pl federation.SpokePayload) error {
+		mu.Lock()
+		pushed = append(pushed, pl.SpokeID)
+		n := len(pushed)
+		mu.Unlock()
+		if n == 1 {
+			started <- struct{}{}
+			<-release // block the first push
+		}
+		return nil
+	}
+	m := metrics.New(false)
+	p := newSpokePusher(push, m, testLogger())
+	ctx, cancel := context.WithCancel(context.Background())
+	go p.run(ctx)
+
+	p.Enqueue(context.Background(), payload("A")) // consumed; first push blocks
+	<-started
+	p.Enqueue(context.Background(), payload("B")) // queued
+	p.Enqueue(context.Background(), payload("C")) // supersedes B
+	close(release)                                // first push returns; C pushed next
+
+	deadline := time.After(2 * time.Second)
+	for {
+		mu.Lock()
+		n := len(pushed)
+		mu.Unlock()
+		if n >= 2 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("second push never happened")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	cancel()
+	<-p.stopped
+
+	mu.Lock()
+	defer mu.Unlock()
+	if pushed[0] != "A" {
+		t.Errorf("first push = %q, want A", pushed[0])
+	}
+	if pushed[1] != "C" {
+		t.Errorf("second push = %q, want C (most-recent-wins)", pushed[1])
+	}
+	if got := testutilCounterVecValue(t, m.FederationSpokePushDropsTotal, "superseded"); got < 1 {
+		t.Errorf("superseded drops = %v, want >= 1 (B superseded by C)", got)
+	}
 }
