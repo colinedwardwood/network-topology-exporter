@@ -17,12 +17,18 @@
 //     Cisco's narrower index.
 //
 //   - Juniper BGP4-V2-MIB-JUNIPER::jnxBgpM2PeerTable at 1.3.6.1.4.1.2636.5.1.1.2
-//     Nokia TIMETRA-BGP-MIB::tBgpPeerTable at 1.3.6.1.4.1.6527.3.1.2.13.2
+//     VERIFIED 2026-06 against vJunos-router JUNOS 25.4R1.12 (issue #56, see
+//     lab/juniper-jnxbgp/captures/). The columns matched the docs but the
+//     index format did NOT: it carries BOTH local and remote InetAddresses,
+//     each IMPLICIT-length (no length sub-id), peer = the remote one. See
+//     decodeJuniperJnxBgpM2Index.
+//
+//   - Nokia TIMETRA-BGP-MIB::tBgpPeerTable at 1.3.6.1.4.1.6527.3.1.2.13.2
 //     Column numbers and index format are transcribed from vendor MIB docs
 //     and remain UNVERIFIED against real devices (no lab access yet). The
-//     `vendor_juniper` and `vendor_nokia` walkers ship with best-effort
-//     configuration; their column constants should be confirmed before any
-//     operator relies on them. Tracked as part of issue #1 in milestone v1.3.1.
+//     `vendor_nokia` walker ships with best-effort configuration; its column
+//     constants should be confirmed before any operator relies on them.
+//     Tracked as part of issue #1 / #57.
 //
 // The shared "IETF draft form" walker that previously lived at
 // 1.3.6.1.3.5.1.1.2 has been removed: real-device probing (Arista 4.36
@@ -111,18 +117,19 @@ var (
 		verified:    true,
 	}
 
-	// Juniper: column numbers + index format transcribed from
-	// BGP4-V2-MIB-JUNIPER documentation. NOT verified against a real
-	// device (Juniper vMX/vSRX images require a Juniper account; lab
-	// blocked on that). Walker ships but operators should not yet rely
-	// on it. Issue #1 tracks the verification.
+	// Juniper jnxBgpM2PeerTable. VERIFIED 2026-06 against a real vJunos-router
+	// (JUNOS 25.4R1.12) capture at
+	// lab/juniper-jnxbgp/captures/r1_juniper_jnxBgpM2PeerTable.txt (issue #56).
+	// colState (jnxBgpM2PeerState) and colRemoteAs (jnxBgpM2PeerRemoteAs) were
+	// confirmed correct as transcribed from the MIB docs; the index format was
+	// NOT (it was the Arista-style best-guess) — see decodeJuniperJnxBgpM2Index.
 	juniperJnxBgpM2PeerSpec = vendorTableSpec{
 		name:        "juniper-jnxBgpM2PeerTable",
 		root:        "1.3.6.1.4.1.2636.5.1.1.2.1.1",
-		colState:    2,                         // jnxBgpM2PeerState — UNVERIFIED
-		colRemoteAs: 13,                        // jnxBgpM2PeerRemoteAs — UNVERIFIED
-		decodeIndex: decodeBgp4v2InstanceIndex, // best guess; same shape as Arista
-		verified:    false,
+		colState:    2,  // jnxBgpM2PeerState (6=established) — verified
+		colRemoteAs: 13, // jnxBgpM2PeerRemoteAs — verified
+		decodeIndex: decodeJuniperJnxBgpM2Index,
+		verified:    true,
 	}
 
 	// Nokia: same caveat as Juniper. SR-OS / SR Linux licensing blocks
@@ -201,6 +208,44 @@ func decodeAristaBgp4v2Index(suffix string) (net.IP, bool) {
 // decodeAristaBgp4v2Index above.
 func decodeBgp4v2InstanceIndex(suffix string) (net.IP, bool) {
 	return decodeAristaBgp4v2Index(suffix)
+}
+
+// decodeJuniperJnxBgpM2Index parses one jnxBgpM2PeerTable row index. VERIFIED
+// against a real vJunos-router (JUNOS 25.4R1.12) capture, issue #56
+// (lab/juniper-jnxbgp/captures/r1_juniper_jnxBgpM2PeerTable.txt).
+//
+// Format differs from Cisco/Arista in two ways:
+//
+//   - the InetAddress elements are IMPLICIT-length (no length sub-identifier —
+//     4 octets for ipv4, 16 for ipv6); and
+//
+//   - the index carries BOTH the local and the remote address, so the peer is
+//     the SECOND (remote) address, not the first.
+//
+//     <peerRoutingInstance>.<localAddrType>.<localAddr>.<remoteAddrType>.<remoteAddr>
+//
+// Real captures:
+//
+//	ipv4 peer 192.0.2.2:     ".0.1.192.0.2.1.1.192.0.2.2"
+//	ipv6 peer 2001:db8:1::2: ".0.2.<16 octets local>.2.<16 octets remote>"
+//
+// Returns the remote (peer) IP and ok=true on success.
+func decodeJuniperJnxBgpM2Index(suffix string) (net.IP, bool) {
+	parts, err := splitOIDParts(suffix)
+	if err != nil || len(parts) < 1 {
+		return nil, false
+	}
+	// parts[0] is the routing-instance index (0 in single-instance setups);
+	// skip it, read+discard the local address, then read the remote address.
+	_, pos, ok := readInetAddrImplicitAt(parts, 1)
+	if !ok {
+		return nil, false
+	}
+	remoteIP, _, ok := readInetAddrImplicitAt(parts, pos)
+	if !ok {
+		return nil, false
+	}
+	return remoteIP, true
 }
 
 // walkVendorPeerTable runs a generic walk of a vendor-specific peer table.

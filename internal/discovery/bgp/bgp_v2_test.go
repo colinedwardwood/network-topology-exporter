@@ -84,6 +84,43 @@ func TestDecodeAristaBgp4v2Index(t *testing.T) {
 	}
 }
 
+// TestDecodeJuniperJnxBgpM2Index covers Juniper's jnxBgpM2PeerTable index,
+// VERIFIED against a real vJunos-router (JUNOS 25.4R1.12) capture. Format:
+// <instance>.<localAddrType>.<localAddr>.<remoteAddrType>.<remoteAddr>, each
+// InetAddress implicit-length, peer = the remote (second) address.
+//
+// Suffixes are taken verbatim from
+// lab/juniper-jnxbgp/captures/r1_juniper_jnxBgpM2PeerTable.txt.
+func TestDecodeJuniperJnxBgpM2Index(t *testing.T) {
+	cases := []struct {
+		name   string
+		suffix string
+		want   string
+		ok     bool
+	}{
+		{"ipv4 peer", "0.1.192.0.2.1.1.192.0.2.2", "192.0.2.2", true},
+		{"ipv6 peer", "0.2.32.1.13.184.0.1.0.0.0.0.0.0.0.0.0.1.2.32.1.13.184.0.1.0.0.0.0.0.0.0.0.0.2", "2001:db8:1::2", true},
+		{"local only, no remote", "0.1.192.0.2.1", "", false},
+		{"truncated remote", "0.1.192.0.2.1.1.192.0", "", false},
+		{"unknown local family", "0.99.1.2.3.4.1.192.0.2.2", "", false},
+		{"empty", "", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ip, ok := decodeJuniperJnxBgpM2Index(c.suffix)
+			if ok != c.ok {
+				t.Fatalf("ok = %v, want %v", ok, c.ok)
+			}
+			if !ok {
+				return
+			}
+			if ip.String() != c.want {
+				t.Errorf("ip = %q, want %q", ip.String(), c.want)
+			}
+		})
+	}
+}
+
 // --- vendor walker integration tests -----------------------------------
 
 // TestWalkVendorCisco end-to-ends the Cisco walker against a stub agent
@@ -353,8 +390,8 @@ func TestPackageConstantsStable(t *testing.T) {
 	if !aristaBgp4v2Spec.verified {
 		t.Error("aristaBgp4v2Spec.verified must be true (lab/arista-ceos-bgp/captures/)")
 	}
-	if juniperJnxBgpM2PeerSpec.verified {
-		t.Error("juniperJnxBgpM2PeerSpec.verified must be false until lab fixtures exist")
+	if !juniperJnxBgpM2PeerSpec.verified {
+		t.Error("juniperJnxBgpM2PeerSpec.verified must be true (lab/juniper-jnxbgp/captures/)")
 	}
 	if nokiaTBgpPeerSpec.verified {
 		t.Error("nokiaTBgpPeerSpec.verified must be false until lab fixtures exist")

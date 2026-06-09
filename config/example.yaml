@@ -156,12 +156,12 @@ modules:
     #                          # RFC 4273 if the vendor walk is empty:
     #                          #   - Cisco   cbgpPeer2Table (1.3.6.1.4.1.9.9.187.1.2.5)   — verified
     #                          #   - Arista  enterprise BGP4V2 (1.3.6.1.4.1.30065.4.1.1.2) — verified
-    #                          #   - Juniper jnxBgpM2PeerTable (1.3.6.1.4.1.2636.5.1.1.2.1.1) — EXPERIMENTAL
+    #                          #   - Juniper jnxBgpM2PeerTable (1.3.6.1.4.1.2636.5.1.1.2.1.1) — verified
     #                          #   - Nokia   tBgpPeerTable (1.3.6.1.4.1.6527.3.1.2.13.2) — EXPERIMENTAL
     #                          # "EXPERIMENTAL" = column numbers transcribed from vendor MIB
     #                          # documentation but not yet validated against real hardware. On
-    #                          # Junos / SR-OS / SR Linux fleets, set disable_v2_mib: true until
-    #                          # the per-vendor capture issues close. The walker still surfaces
+    #                          # Nokia SR-OS / SR Linux fleets, set disable_v2_mib: true until
+    #                          # #57 closes (Juniper was verified against vJunos, #56). The walker still surfaces
     #                          # failure modes via network_topology_bgp_walker_outcome_total
     #                          # (labels walker_drift / malformed_index / mib_unimplemented),
     #                          # so silent zero-edge dropouts are alertable.
