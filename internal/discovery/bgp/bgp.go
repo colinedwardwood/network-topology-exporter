@@ -53,23 +53,6 @@ import (
 	snmputil "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
 )
 
-// recordWalkerOutcome forwards a {walker, outcome} observation to the
-// metrics sink carried on Params. Walker outcome accounting is dependency-
-// injected — the bgp package no longer holds a package-level counter handle.
-// See snmputil.WalkerMetrics for the interface and cmd/topology-exporter/
-// main.go for the adapter that wraps Metrics.BGPWalkerOutcomeTotal.
-//
-// nil-safety: drop the increment, don't crash. p may be nil in unit tests
-// that exercise recordWalkerOutcome directly, and p.WalkerMetrics may be
-// nil when discovery cycles run before main has finished wiring (or in
-// tests that intentionally inject no sink to verify the drop path).
-func recordWalkerOutcome(p *snmputil.Params, walker, outcome string) {
-	if p == nil || p.WalkerMetrics == nil {
-		return
-	}
-	p.WalkerMetrics.RecordWalkerOutcome(walker, outcome)
-}
-
 // Walker label constants. Keep these in sync with the metric's documented
 // label set in internal/metrics/metrics.go and docs/metrics.md.
 //
@@ -225,18 +208,18 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	// device implements the MIB but BGP is down).
 	peers, hadPDUs, err := walkBgpPeerTable(ctx, client)
 	if err != nil {
-		recordWalkerOutcome(&p, walkerRFC4273, outcomeError)
+		snmputil.RecordBGPWalkerOutcome(&p, walkerRFC4273, outcomeError)
 		return nil, nil, fmt.Errorf("bgp peer table %s: %w", p.IP, err)
 	}
 
 	edges, oos := buildEdges(localDevice, peers, allowedNets)
 	switch {
 	case len(edges) > 0:
-		recordWalkerOutcome(&p, walkerRFC4273, outcomeEdges)
+		snmputil.RecordBGPWalkerOutcome(&p, walkerRFC4273, outcomeEdges)
 	case hadPDUs:
-		recordWalkerOutcome(&p, walkerRFC4273, outcomeNoPeers)
+		snmputil.RecordBGPWalkerOutcome(&p, walkerRFC4273, outcomeNoPeers)
 	default:
-		recordWalkerOutcome(&p, walkerRFC4273, outcomeMIBUnimplemented)
+		snmputil.RecordBGPWalkerOutcome(&p, walkerRFC4273, outcomeMIBUnimplemented)
 	}
 
 	// Promote a stashed vendor-walker error to Warn now that RFC 4273

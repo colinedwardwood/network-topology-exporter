@@ -34,6 +34,19 @@ v1.3.1 lands under this milestone instead, renamed to
   (freshness), `network_topology_federation_spoke_push_drops_total`,
   `network_topology_federation_spoke_push_queue_depth`.
 
+### Internal
+
+- Walker outcome-accounting deduplicated into `internal/discovery/snmp`
+  (`snmputil`) (#149). The per-package `recordWalkerOutcome`/`recordDegraded`
+  forwarders, the five-value `outcome*` constant set, and the four-way terminal
+  classification switch — previously copy-pasted across the FDB, LLDP, CDP,
+  OSPF, IS-IS, and BGP walkers — now live once as
+  `snmputil.RecordProtocolWalkerOutcome` / `RecordBGPWalkerOutcome` /
+  `RecordDegraded` / `ClassifyNeighbourOutcome` and the `snmputil.Outcome*`
+  constants. No behavior change: every emitted `{walker, outcome}` /
+  `{module, reason}` metric label value is byte-identical (BGP keeps its own
+  `no_peers`/`malformed_index` vocabulary and stays on its separate counter).
+
 ### Security & correctness (post-merge hardening)
 
 - **Nightly fuzz no longer false-alarms (#107).** The `fuzz-nightly` workflow ran

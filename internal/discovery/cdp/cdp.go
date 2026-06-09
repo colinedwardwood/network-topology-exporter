@@ -36,30 +36,10 @@ const (
 	precedenceRank   = 3
 )
 
-// Walker label and outcome constants for network_topology_walker_outcome_total
-// (issue #98). The walker label is fixed per package; the outcome set is closed
-// and mirrors the four-bucket BGP categorisation documented on
-// internal/metrics/metrics.go (Metrics.WalkerOutcomeTotal). Keep in sync.
-const (
-	walkerCDP = "cdp"
-
-	outcomeEdges            = "edges"
-	outcomeMIBUnimplemented = "mib_unimplemented"
-	outcomeNoNeighbours     = "no_neighbours"
-	outcomeWalkerDrift      = "walker_drift"
-	outcomeError            = "error"
-)
-
-// recordWalkerOutcome forwards a {walker, outcome} observation to the generic
-// non-BGP counter via the metrics sink carried on Params. nil-safe: a nil
-// Params or nil Params.WalkerMetrics drops the increment rather than panicking,
-// mirroring bgp.recordWalkerOutcome.
-func recordWalkerOutcome(p *snmputil.Params, walker, outcome string) {
-	if p == nil || p.WalkerMetrics == nil {
-		return
-	}
-	p.WalkerMetrics.RecordProtocolWalkerOutcome(walker, outcome)
-}
+// walkerCDP is the fixed walker label for network_topology_walker_outcome_total
+// (issue #98). The outcome label values and the {walker, outcome} forwarder live
+// in snmputil (snmputil.Outcome*, snmputil.RecordProtocolWalkerOutcome).
+const walkerCDP = "cdp"
 
 // cdpCacheTable column numbers (CISCO-CDP-MIB).
 const (
@@ -83,14 +63,14 @@ type cacheEntry struct {
 func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
 	client, release, err := snmputil.Acquire(p)
 	if err != nil {
-		recordWalkerOutcome(&p, walkerCDP, outcomeError)
+		snmputil.RecordProtocolWalkerOutcome(&p, walkerCDP, snmputil.OutcomeError)
 		return nil, nil, fmt.Errorf("cdp %s: %w", p.IP, err)
 	}
 	defer release()
 
 	ifNames, err := snmputil.WalkIfNamesWithFallback(ctx, client)
 	if err != nil {
-		recordWalkerOutcome(&p, walkerCDP, outcomeError)
+		snmputil.RecordProtocolWalkerOutcome(&p, walkerCDP, snmputil.OutcomeError)
 		return nil, nil, fmt.Errorf("cdp ifname %s: %w", p.IP, err)
 	}
 
@@ -99,26 +79,16 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	// devices) from a device that does cache neighbours.
 	entries, hadPDUs, err := walkCacheTable(ctx, client)
 	if err != nil {
-		recordWalkerOutcome(&p, walkerCDP, outcomeError)
+		snmputil.RecordProtocolWalkerOutcome(&p, walkerCDP, snmputil.OutcomeError)
 		return nil, nil, fmt.Errorf("cdp cache %s: %w", p.IP, err)
 	}
 
 	edges, oos, decoded := buildEdges(ctx, localDevice, ifNames, entries, allowedNets)
 
-	switch {
-	case len(edges) > 0:
-		recordWalkerOutcome(&p, walkerCDP, outcomeEdges)
-	case !hadPDUs:
-		recordWalkerOutcome(&p, walkerCDP, outcomeMIBUnimplemented)
-	case decoded:
-		// PDUs arrived and at least one cache row decoded cleanly, but no
-		// usable edge resulted (e.g. neighbour filtered out of scope).
-		recordWalkerOutcome(&p, walkerCDP, outcomeNoNeighbours)
-	default:
-		// PDUs arrived but no cache row yielded a usable neighbour identity;
-		// the MIB is implemented but our decoder doesn't match this firmware.
-		recordWalkerOutcome(&p, walkerCDP, outcomeWalkerDrift)
-	}
+	// Terminal outcome classification (edges / mib_unimplemented / no_neighbours
+	// / walker_drift) lives in snmputil.ClassifyNeighbourOutcome, shared with the
+	// LLDP/OSPF/FDB walkers.
+	snmputil.RecordProtocolWalkerOutcome(&p, walkerCDP, snmputil.ClassifyNeighbourOutcome(len(edges), hadPDUs, decoded))
 
 	return edges, oos, nil
 }

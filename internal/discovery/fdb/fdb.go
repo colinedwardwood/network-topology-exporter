@@ -107,19 +107,10 @@ const (
 	colFdbStatus  = 3
 )
 
-// Walker label and outcome constants for network_topology_walker_outcome_total
-// (issue #98). The walker label is fixed per package; the outcome set is closed
-// and mirrors the four-bucket BGP categorisation documented on
-// internal/metrics/metrics.go (Metrics.WalkerOutcomeTotal). Keep in sync.
-const (
-	walkerFDB = "fdb"
-
-	outcomeEdges            = "edges"
-	outcomeMIBUnimplemented = "mib_unimplemented"
-	outcomeNoNeighbours     = "no_neighbours"
-	outcomeWalkerDrift      = "walker_drift"
-	outcomeError            = "error"
-)
+// walkerFDB is the fixed walker label for network_topology_walker_outcome_total
+// (issue #98). The outcome label values and the {walker, outcome} forwarder live
+// in snmputil (snmputil.Outcome*, snmputil.RecordProtocolWalkerOutcome).
+const walkerFDB = "fdb"
 
 // Degraded reasons for network_topology_discovery_degraded_total{module="fdb"}
 // (issue #100). These signal a sub-walk failure that left the device's
@@ -130,29 +121,6 @@ const (
 	reasonQBridgeWalkFailed = "qbridge_walk_failed"
 	reasonVLANWalkFailed    = "vlan_walk_failed"
 )
-
-// recordWalkerOutcome forwards a {walker, outcome} observation to the generic
-// non-BGP counter via the metrics sink carried on Params. nil-safe: a nil
-// Params or nil Params.WalkerMetrics drops the increment rather than panicking,
-// mirroring bgp.recordWalkerOutcome.
-func recordWalkerOutcome(p *snmputil.Params, walker, outcome string) {
-	if p == nil || p.WalkerMetrics == nil {
-		return
-	}
-	p.WalkerMetrics.RecordProtocolWalkerOutcome(walker, outcome)
-}
-
-// recordDegraded forwards a {module, reason} degraded observation to
-// DiscoveryDegradedTotal via the metrics sink carried on Params. nil-safe like
-// recordWalkerOutcome. This is the zero-edge degraded path (issue #100): a
-// failed sub-walk that yields no edge cannot be carried by the orchestrator's
-// edge-metadata degraded channel, so the module reports it directly.
-func recordDegraded(p *snmputil.Params, module, reason string) {
-	if p == nil || p.WalkerMetrics == nil {
-		return
-	}
-	p.WalkerMetrics.RecordDegraded(module, reason)
-}
 
 // Sub-walk seams (issue #100). Wrapping the two non-fatal sub-walks in
 // package-level function variables lets tests inject a failure that the
@@ -188,7 +156,7 @@ type fdbEntry struct {
 func Walk(ctx context.Context, p snmputil.Params, localDevice string, _ []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
 	client, release, err := snmputil.Acquire(p)
 	if err != nil {
-		recordWalkerOutcome(&p, walkerFDB, outcomeError)
+		snmputil.RecordProtocolWalkerOutcome(&p, walkerFDB, snmputil.OutcomeError)
 		return nil, nil, fmt.Errorf("fdb %s: %w", p.IP, err)
 	}
 	defer release()
@@ -198,7 +166,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, _ []*net.I
 	// a learning bridge) from a switch that does populate its forwarding DB.
 	entries, hadFdbPDUs, err := walkFdbTable(ctx, client)
 	if err != nil {
-		recordWalkerOutcome(&p, walkerFDB, outcomeError)
+		snmputil.RecordProtocolWalkerOutcome(&p, walkerFDB, snmputil.OutcomeError)
 		return nil, nil, fmt.Errorf("fdb table %s: %w", p.IP, err)
 	}
 	// Q-BRIDGE walk failures are non-fatal: devices that implement only B-MIB
@@ -216,7 +184,7 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, _ []*net.I
 	if err := walkQBridgeFdbTableFn(ctx, client, entries); err != nil {
 		slog.Debug("fdb: Q-BRIDGE walk failed; using B-MIB only", "device", p.IP, "err", err)
 		if !bmibHadEntries {
-			recordDegraded(&p, walkerFDB, reasonQBridgeWalkFailed)
+			snmputil.RecordDegraded(&p, walkerFDB, reasonQBridgeWalkFailed)
 		}
 	}
 	maxVlans := p.MaxVlans
@@ -230,37 +198,26 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, _ []*net.I
 	hadFdbPDUs = hadFdbPDUs || len(entries) > 0
 	bridgePorts, err := walkBasePortTable(ctx, client)
 	if err != nil {
-		recordWalkerOutcome(&p, walkerFDB, outcomeError)
+		snmputil.RecordProtocolWalkerOutcome(&p, walkerFDB, snmputil.OutcomeError)
 		return nil, nil, fmt.Errorf("fdb baseport %s: %w", p.IP, err)
 	}
 	stpStates, err := walkStpPortStates(ctx, client)
 	if err != nil {
-		recordWalkerOutcome(&p, walkerFDB, outcomeError)
+		snmputil.RecordProtocolWalkerOutcome(&p, walkerFDB, snmputil.OutcomeError)
 		return nil, nil, fmt.Errorf("fdb stpport %s: %w", p.IP, err)
 	}
 	ifNames, err := snmputil.WalkIfNamesWithFallback(ctx, client)
 	if err != nil {
-		recordWalkerOutcome(&p, walkerFDB, outcomeError)
+		snmputil.RecordProtocolWalkerOutcome(&p, walkerFDB, snmputil.OutcomeError)
 		return nil, nil, fmt.Errorf("fdb ifname %s: %w", p.IP, err)
 	}
 
 	edges, decoded := buildEdges(ctx, localDevice, entries, bridgePorts, ifNames, stpStates)
 
-	switch {
-	case len(edges) > 0:
-		recordWalkerOutcome(&p, walkerFDB, outcomeEdges)
-	case !hadFdbPDUs:
-		recordWalkerOutcome(&p, walkerFDB, outcomeMIBUnimplemented)
-	case decoded:
-		// FDB rows decoded cleanly but produced no peer (all entries filtered
-		// by status/STP, or only multi-MAC trunk ports that are suppressed,
-		// or no bridge-port→ifIndex mapping). Bridge is up, nothing to report.
-		recordWalkerOutcome(&p, walkerFDB, outcomeNoNeighbours)
-	default:
-		// PDUs arrived but no entry carried a valid MAC+port; the MIB is
-		// implemented but our decoder doesn't match this firmware.
-		recordWalkerOutcome(&p, walkerFDB, outcomeWalkerDrift)
-	}
+	// Terminal outcome classification (edges / mib_unimplemented / no_neighbours
+	// / walker_drift) lives in snmputil.ClassifyNeighbourOutcome, shared with the
+	// LLDP/CDP/OSPF walkers. fdb feeds it hadFdbPDUs as the "had PDUs" signal.
+	snmputil.RecordProtocolWalkerOutcome(&p, walkerFDB, snmputil.ClassifyNeighbourOutcome(len(edges), hadFdbPDUs, decoded))
 
 	return edges, nil, nil
 }
@@ -519,14 +476,14 @@ func walkVlanCommunityFdbs(ctx context.Context, pp *snmputil.Params, client *gsn
 				// A per-VLAN session that won't open leaves that VLAN's
 				// bridging topology undiscovered (issue #100). Label by reason
 				// only — never by vlan id — to keep cardinality bounded.
-				recordDegraded(pp, walkerFDB, reasonVLANWalkFailed)
+				snmputil.RecordDegraded(pp, walkerFDB, reasonVLANWalkFailed)
 				return
 			}
 			defer func() { _ = vlanClient.Conn.Close() }()
 			vlanEntries := make(map[string]*fdbEntry)
 			if _, err := walkFdbTableIntoFn(ctx, vlanClient, vlanEntries); err != nil {
 				slog.Debug("fdb: VLAN community walk incomplete", "device", vp.IP, "vlan", vlan, "err", err)
-				recordDegraded(pp, walkerFDB, reasonVLANWalkFailed)
+				snmputil.RecordDegraded(pp, walkerFDB, reasonVLANWalkFailed)
 			}
 			results[idx] = result{vlanEntries: vlanEntries}
 		}(i, vlanID)

@@ -66,30 +66,10 @@ const (
 	stateFull   = 8
 )
 
-// Walker label and outcome constants for network_topology_walker_outcome_total
-// (issue #98). The walker label is fixed per package; the outcome set is closed
-// and mirrors the four-bucket BGP categorisation documented on
-// internal/metrics/metrics.go (Metrics.WalkerOutcomeTotal). Keep in sync.
-const (
-	walkerOSPF = "ospf"
-
-	outcomeEdges            = "edges"
-	outcomeMIBUnimplemented = "mib_unimplemented"
-	outcomeNoNeighbours     = "no_neighbours"
-	outcomeWalkerDrift      = "walker_drift"
-	outcomeError            = "error"
-)
-
-// recordWalkerOutcome forwards a {walker, outcome} observation to the generic
-// non-BGP counter via the metrics sink carried on Params. nil-safe: a nil
-// Params or nil Params.WalkerMetrics drops the increment rather than panicking,
-// mirroring bgp.recordWalkerOutcome.
-func recordWalkerOutcome(p *snmputil.Params, walker, outcome string) {
-	if p == nil || p.WalkerMetrics == nil {
-		return
-	}
-	p.WalkerMetrics.RecordProtocolWalkerOutcome(walker, outcome)
-}
+// walkerOSPF is the fixed walker label for network_topology_walker_outcome_total
+// (issue #98). The outcome label values and the {walker, outcome} forwarder live
+// in snmputil (snmputil.Outcome*, snmputil.RecordProtocolWalkerOutcome).
+const walkerOSPF = "ospf"
 
 type nbrRow struct {
 	nbrIP net.IP
@@ -102,7 +82,7 @@ type nbrRow struct {
 func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
 	client, release, err := snmputil.Acquire(p)
 	if err != nil {
-		recordWalkerOutcome(&p, walkerOSPF, outcomeError)
+		snmputil.RecordProtocolWalkerOutcome(&p, walkerOSPF, snmputil.OutcomeError)
 		return nil, nil, fmt.Errorf("ospf %s: %w", p.IP, err)
 	}
 	defer release()
@@ -112,26 +92,15 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	// don't ship the RFC 4750 MIB) from a device that does report neighbours.
 	rows, hadPDUs, err := walkOspfNbrTable(ctx, client)
 	if err != nil {
-		recordWalkerOutcome(&p, walkerOSPF, outcomeError)
+		snmputil.RecordProtocolWalkerOutcome(&p, walkerOSPF, snmputil.OutcomeError)
 		return nil, nil, fmt.Errorf("ospf nbrTable %s: %w", p.IP, err)
 	}
 	edges, oos, decoded := buildEdges(localDevice, rows, allowedNets)
 
-	switch {
-	case len(edges) > 0:
-		recordWalkerOutcome(&p, walkerOSPF, outcomeEdges)
-	case !hadPDUs:
-		recordWalkerOutcome(&p, walkerOSPF, outcomeMIBUnimplemented)
-	case decoded:
-		// PDUs arrived and at least one neighbour row decoded cleanly, but no
-		// usable edge resulted (e.g. every neighbour is below full/twoWay, or
-		// all filtered out of scope). Protocol up, nothing to report.
-		recordWalkerOutcome(&p, walkerOSPF, outcomeNoNeighbours)
-	default:
-		// PDUs arrived but no row carried a usable neighbour IP; the MIB is
-		// implemented but our decoder doesn't match this firmware.
-		recordWalkerOutcome(&p, walkerOSPF, outcomeWalkerDrift)
-	}
+	// Terminal outcome classification (edges / mib_unimplemented / no_neighbours
+	// / walker_drift) lives in snmputil.ClassifyNeighbourOutcome, shared with the
+	// LLDP/CDP/FDB walkers.
+	snmputil.RecordProtocolWalkerOutcome(&p, walkerOSPF, snmputil.ClassifyNeighbourOutcome(len(edges), hadPDUs, decoded))
 
 	return edges, oos, nil
 }

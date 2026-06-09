@@ -43,30 +43,10 @@ const (
 	precedenceRank  = 2
 )
 
-// Walker label and outcome constants for network_topology_walker_outcome_total
-// (issue #98). The walker label is fixed per package; the outcome set is closed
-// and mirrors the four-bucket BGP categorisation documented on
-// internal/metrics/metrics.go (Metrics.WalkerOutcomeTotal). Keep in sync.
-const (
-	walkerLLDP = "lldp"
-
-	outcomeEdges            = "edges"
-	outcomeMIBUnimplemented = "mib_unimplemented"
-	outcomeNoNeighbours     = "no_neighbours"
-	outcomeWalkerDrift      = "walker_drift"
-	outcomeError            = "error"
-)
-
-// recordWalkerOutcome forwards a {walker, outcome} observation to the generic
-// non-BGP counter via the metrics sink carried on Params. nil-safe: a nil
-// Params or nil Params.WalkerMetrics drops the increment rather than panicking,
-// mirroring bgp.recordWalkerOutcome.
-func recordWalkerOutcome(p *snmputil.Params, walker, outcome string) {
-	if p == nil || p.WalkerMetrics == nil {
-		return
-	}
-	p.WalkerMetrics.RecordProtocolWalkerOutcome(walker, outcome)
-}
+// walkerLLDP is the fixed walker label for network_topology_walker_outcome_total
+// (issue #98). The outcome label values and the {walker, outcome} forwarder live
+// in snmputil (snmputil.Outcome*, snmputil.RecordProtocolWalkerOutcome).
+const walkerLLDP = "lldp"
 
 // LldpPortIdSubtype values from IEEE 802.1AB Table 8-3.
 const (
@@ -124,14 +104,14 @@ type remEntry struct {
 func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
 	client, release, err := snmputil.Acquire(p)
 	if err != nil {
-		recordWalkerOutcome(&p, walkerLLDP, outcomeError)
+		snmputil.RecordProtocolWalkerOutcome(&p, walkerLLDP, snmputil.OutcomeError)
 		return nil, nil, fmt.Errorf("lldp %s: %w", p.IP, err)
 	}
 	defer release()
 
 	locPorts, err := walkLocPorts(ctx, client)
 	if err != nil {
-		recordWalkerOutcome(&p, walkerLLDP, outcomeError)
+		snmputil.RecordProtocolWalkerOutcome(&p, walkerLLDP, snmputil.OutcomeError)
 		return nil, nil, fmt.Errorf("lldp locport %s: %w", p.IP, err)
 	}
 
@@ -140,32 +120,20 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 	// advertise neighbours.
 	remEntries, hadPDUs, err := walkRemEntries(ctx, client)
 	if err != nil {
-		recordWalkerOutcome(&p, walkerLLDP, outcomeError)
+		snmputil.RecordProtocolWalkerOutcome(&p, walkerLLDP, snmputil.OutcomeError)
 		return nil, nil, fmt.Errorf("lldp remtable %s: %w", p.IP, err)
 	}
 
 	edges, oos, decoded, err := buildEdges(ctx, localDevice, locPorts, remEntries, allowedNets)
 	if err != nil {
-		recordWalkerOutcome(&p, walkerLLDP, outcomeError)
+		snmputil.RecordProtocolWalkerOutcome(&p, walkerLLDP, snmputil.OutcomeError)
 		return nil, nil, err
 	}
 
-	switch {
-	case len(edges) > 0:
-		recordWalkerOutcome(&p, walkerLLDP, outcomeEdges)
-	case !hadPDUs:
-		recordWalkerOutcome(&p, walkerLLDP, outcomeMIBUnimplemented)
-	case decoded:
-		// PDUs arrived and at least one row decoded cleanly, but no usable
-		// edge resulted (e.g. all neighbours filtered out of scope, or
-		// unresolvable device/port). Protocol up, nothing to report.
-		recordWalkerOutcome(&p, walkerLLDP, outcomeNoNeighbours)
-	default:
-		// PDUs arrived but every assembled row was rejected by the decoder
-		// (invalid subtype/length, unparseable IDs). The MIB is implemented;
-		// our decoder doesn't match this firmware.
-		recordWalkerOutcome(&p, walkerLLDP, outcomeWalkerDrift)
-	}
+	// Terminal outcome classification (edges / mib_unimplemented / no_neighbours
+	// / walker_drift) lives in snmputil.ClassifyNeighbourOutcome, shared with the
+	// CDP/OSPF/FDB walkers.
+	snmputil.RecordProtocolWalkerOutcome(&p, walkerLLDP, snmputil.ClassifyNeighbourOutcome(len(edges), hadPDUs, decoded))
 
 	return edges, oos, nil
 }
