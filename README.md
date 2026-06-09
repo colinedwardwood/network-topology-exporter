@@ -223,7 +223,7 @@ modules:
 | Cisco | `cbgpPeer2Table` (1.3.6.1.4.1.9.9.187.1.2.5) | Real-device validated against Cisco IOL 17.12.1 (2026-05-16) and cross-confirmed against IOS-XE hardware (2026-05-30) |
 | Arista | enterprise BGP4V2 (1.3.6.1.4.1.30065.4.1.1.2) | Real-device validated (cEOS 4.36) |
 | Juniper | `jnxBgpM2PeerTable` (1.3.6.1.4.1.2636.5.1.1.2.1.1) | Real-device validated against vJunos-router (JUNOS 25.4R1.12, 2026-06) — see `lab/juniper-jnxbgp/` |
-| Nokia | `tBgpPeerTable` (1.3.6.1.4.1.6527.3.1.2.13.2) | **Experimental** — columns transcribed from MIB docs, not yet lab-verified (#57) |
+| Nokia | `tBgpPeerNgTable` (1.3.6.1.4.1.6527.3.1.2.14.4.7) | Real-device validated against SR-OS 25.7.R2 (7750 SR, 2026-06, #57). Modern SR-OS populates this next-gen table; the legacy `tBgpPeerTable` (.13.2) is empty, and pre-Ng SR-OS / SR Linux fall back to RFC 4273 |
 
 On Junos / SR-OS / SR Linux fleets, set `disable_v2_mib: true` until the per-vendor capture work lands. The walker exposes failure modes via `network_topology_bgp_walker_outcome_total{outcome=...}` (labels include `walker_drift`, `malformed_index`, `mib_unimplemented`) so a broken vendor walk is alertable rather than silent.
 

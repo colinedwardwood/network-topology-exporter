@@ -148,11 +148,16 @@ each one means and what to do:
 
 ## Maintainer notes (for Colin)
 
-This lab closes [issue #57](https://github.com/colinedwardwood/network-topology-exporter/issues/57)
+**Closed (2026-06): real-device capture landed.** This lab supported
+[issue #57](https://github.com/colinedwardwood/network-topology-exporter/issues/57)
 — real-device fixtures for the `nokiaTBgpPeerSpec` walker in
-`internal/discovery/bgp/bgp_vendor.go` (`tBgpPeerTable`,
-`1.3.6.1.4.1.6527.3.1.2.13.2`). Walker ships with `verified: false`
-until this lands.
+`internal/discovery/bgp/bgp_vendor.go`. A Nokia colleague captured a live SR-OS
+25.7.R2 (7750 SR): modern SR-OS serves the next-gen `tBgpPeerNgTable`
+(`1.3.6.1.4.1.6527.3.1.2.14.4.7`), **not** the legacy `tBgpPeerTable` (`…13.2`,
+empty on current releases). The walk is committed as
+`captures/r1_nokia_tBgpPeerNgTable.txt` and `nokiaTBgpPeerSpec` is now
+`verified: true`. The receipt procedure below is retained for future
+re-captures (note: target the `.14.4.7` Ng table, not the legacy `.13.2`).
 
 On receipt:
 

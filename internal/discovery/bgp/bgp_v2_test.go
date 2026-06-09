@@ -21,6 +21,7 @@ const (
 	ciscoCapture   = "../../../lab/cisco-iol-bgp/captures/r1_cisco_cbgpPeer2Table.txt"
 	aristaCapture  = "../../../lab/arista-ceos-bgp/captures/r1_arista_bgp4v2.txt"
 	juniperCapture = "../../../lab/juniper-jnxbgp/captures/r1_juniper_jnxBgpM2PeerTable.txt"
+	nokiaCapture   = "../../../lab/nokia-srbgp/captures/r1_nokia_tBgpPeerNgTable.txt"
 )
 
 // --- index decoder tests -----------------------------------------------
@@ -118,6 +119,44 @@ func TestDecodeJuniperJnxBgpM2Index(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			ip, ok := decodeJuniperJnxBgpM2Index(c.suffix)
+			if ok != c.ok {
+				t.Fatalf("ok = %v, want %v", ok, c.ok)
+			}
+			if !ok {
+				return
+			}
+			if ip.String() != c.want {
+				t.Errorf("ip = %q, want %q", ip.String(), c.want)
+			}
+		})
+	}
+}
+
+// TestDecodeNokiaTBgpPeerNgIndex covers the tBgpPeerNgTable index, VERIFIED
+// against a real SR-OS 25.7.R2 capture (#57). Format:
+// <vRtrID>.<addrType>.<addrLen>.<addrBytes> — explicit-length InetAddress after
+// the router-instance id.
+//
+// The ipv4 suffix is taken verbatim from
+// lab/nokia-srbgp/captures/r1_nokia_tBgpPeerNgTable.txt.
+func TestDecodeNokiaTBgpPeerNgIndex(t *testing.T) {
+	cases := []struct {
+		name   string
+		suffix string
+		want   string
+		ok     bool
+	}{
+		{"ipv4 peer (real capture)", "1.1.4.10.10.10.2", "10.10.10.2", true},
+		{"ipv6 peer", "1.2.16.32.1.13.184.0.0.0.0.0.0.0.0.0.0.0.2", "2001:db8::2", true},
+		{"vRtrID only", "1", "", false},
+		{"truncated address", "1.1.4.10.10", "", false},
+		{"length mismatch v4", "1.1.6.10.10.10.2", "", false},
+		{"unknown family", "1.99.4.10.10.10.2", "", false},
+		{"empty", "", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ip, ok := decodeNokiaTBgpPeerNgIndex(c.suffix)
 			if ok != c.ok {
 				t.Fatalf("ok = %v, want %v", ok, c.ok)
 			}
@@ -259,8 +298,8 @@ func TestVendorSpecForKnownVendors(t *testing.T) {
 		{"cisco", "cisco-cbgpPeer2Table"},
 		{"arista", "arista-bgp4v2"},
 		{"juniper", "juniper-jnxBgpM2PeerTable"},
-		{"nokia", "nokia-tBgpPeerTable"},
-		{"alcatel-lucent", "nokia-tBgpPeerTable"},
+		{"nokia", "nokia-tBgpPeerNgTable"},
+		{"alcatel-lucent", "nokia-tBgpPeerNgTable"},
 		{"mikrotik", ""},
 		{"", ""},
 		{"unknown", ""},
@@ -403,8 +442,8 @@ func TestPackageConstantsStable(t *testing.T) {
 	if !juniperJnxBgpM2PeerSpec.verified {
 		t.Error("juniperJnxBgpM2PeerSpec.verified must be true (lab/juniper-jnxbgp/captures/)")
 	}
-	if nokiaTBgpPeerSpec.verified {
-		t.Error("nokiaTBgpPeerSpec.verified must be false until lab fixtures exist")
+	if !nokiaTBgpPeerSpec.verified {
+		t.Error("nokiaTBgpPeerSpec.verified must be true (lab/nokia-srbgp/captures/, #57)")
 	}
 }
 
@@ -445,5 +484,37 @@ func TestWalkVendorJuniper(t *testing.T) {
 		if as != "65002" {
 			t.Errorf("peer %s RemoteAs = %q, want 65002 (from col 13)", peer, as)
 		}
+	}
+}
+
+// TestWalkVendorNokia end-to-ends the Nokia walker against the real
+// tBgpPeerNgTable captured from an SR-OS 25.7.R2 device (#57). One established
+// eBGP peer 10.10.10.2 with remote AS 64512 (state col 59, remote-AS col 66 =
+// tBgpPeerNgPeerAS4Byte; the index is vRtrID + explicit-length InetAddress).
+func TestWalkVendorNokia(t *testing.T) {
+	addr := snmptest.Start(t, "public", snmptest.LoadCapture(t, nokiaCapture))
+	ip, port := snmptest.ParseAddr(addr)
+
+	p := snmputil.Params{
+		IP:          ip,
+		Port:        port,
+		Community:   []byte("public"),
+		Timeout:     3 * time.Second,
+		UseBGPV2MIB: true,
+		Vendor:      "nokia",
+	}
+
+	edges, _, err := Walk(context.Background(), p, "rtr-nokia", nil)
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge from Nokia vendor walker, got %d: %+v", len(edges), edges)
+	}
+	if got := edges[0].DstDevice; got != "10.10.10.2" {
+		t.Errorf("DstDevice = %q, want 10.10.10.2 (from tBgpPeerNgTable index)", got)
+	}
+	if got := edges[0].Metadata[metaKeyRemoteAs]; got != "64512" {
+		t.Errorf("RemoteAs = %q, want 64512 (col 66 tBgpPeerNgPeerAS4Byte)", got)
 	}
 }
