@@ -1,0 +1,48 @@
+module ntx-topology {
+  yang-version 1.1;
+  namespace "https://github.com/colinedwardwood/network-topology-exporter/yang/ntx-topology";
+  prefix ntx;
+
+  import ietf-network { prefix nw; }
+  import ietf-network-topology { prefix nt; }
+
+  organization "network-topology-exporter";
+  contact "https://github.com/colinedwardwood/network-topology-exporter";
+  description
+    "Exporter-specific augmentations carrying reconciliation provenance that has
+     no home in base RFC 8345/8346: per-link discovery protocol, link kind,
+     confidence and adjacency; per-node inventory. A consumer that understands
+     only base RFC 8345 ignores these augmentations.";
+
+  revision 2026-06-09 {
+    description "Initial revision (issue #75).";
+  }
+
+  typedef discovery-protocol {
+    type enumeration {
+      enum "lldp"; enum "cdp"; enum "bgp"; enum "ospf";
+      enum "fdb"; enum "isis"; enum "mpls_te"; enum "configured";
+    }
+    description "Mirrors discovery.DiscoveryProtocol wire values verbatim.";
+  }
+  typedef link-kind {
+    type enumeration { enum "ethernet"; enum "mpls-te"; enum "ip"; enum "logical"; }
+  }
+  typedef confidence { type enumeration { enum "high"; enum "medium"; enum "low"; } }
+  typedef adjacency { type enumeration { enum "direct"; enum "indirect"; enum "unknown"; } }
+
+  augment "/nw:networks/nw:network/nt:link" {
+    description "Reconciliation provenance on each discovered link.";
+    leaf discovery-protocol { type discovery-protocol; }
+    leaf link-kind { type link-kind; }
+    leaf confidence { type confidence; }
+    leaf adjacency { type adjacency; }
+  }
+  augment "/nw:networks/nw:network/nw:node" {
+    description "Inventory attributes RFC 8345 has no home for.";
+    leaf vendor { type string; }
+    leaf model { type string; }
+    leaf os-version { type string; }
+    leaf site { type string; }
+  }
+}
