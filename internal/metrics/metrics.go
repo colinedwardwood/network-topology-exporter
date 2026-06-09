@@ -68,6 +68,18 @@ type Metrics struct {
 	// are exhausted. Alert on rate > 0 to detect silent channel breakage.
 	FederationSpokePushFailuresTotal prometheus.Counter
 
+	// FederationSpokePushLastSuccessUnix is the Unix time (seconds) of this
+	// spoke's most recent successful push to the hub. Headline freshness
+	// signal for the async pusher (#6); alert on time() - value > threshold.
+	FederationSpokePushLastSuccessUnix prometheus.Gauge
+
+	// FederationSpokePushDropsTotal counts spoke-push payloads dropped by the
+	// async pusher's latest-only mailbox. reason ∈ {superseded, shutdown}. (#6)
+	FederationSpokePushDropsTotal *prometheus.CounterVec
+
+	// FederationSpokePushQueueDepth is the async pusher mailbox depth (0 or 1). (#6)
+	FederationSpokePushQueueDepth prometheus.Gauge
+
 	// GraphUpdatesRejectedTotal counts combined-graph updates rejected at
 	// publish time, partitioned by reason. Reason label values are the
 	// underlying strings of the RejectReason constants declared in
@@ -329,6 +341,18 @@ func New(emitBoundaryObs bool) *Metrics {
 			Name: "network_topology_federation_spoke_push_failures_total",
 			Help: "Total number of spoke push attempts that failed after all retries. Alert on rate > 0.",
 		}),
+		FederationSpokePushLastSuccessUnix: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "network_topology_federation_spoke_push_last_success_unix",
+			Help: "Spoke mode: Unix timestamp (seconds) of this spoke's most recent successful push to the hub. Alert on time() - value > threshold.",
+		}),
+		FederationSpokePushDropsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "network_topology_federation_spoke_push_drops_total",
+			Help: "Spoke-push payloads dropped by the async pusher's latest-only mailbox. reason ∈ {superseded, shutdown}.",
+		}, []string{"reason"}),
+		FederationSpokePushQueueDepth: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "network_topology_federation_spoke_push_queue_depth",
+			Help: "Depth of the spoke async-push mailbox (0 or 1).",
+		}),
 		GraphUpdatesRejectedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "network_topology_graph_updates_rejected_total",
 			Help: "Combined-graph updates rejected at publish time, partitioned by reason (size_budget_exceeded, invalid_label_key, invalid_label_value, structural_invalid, stale_generation).",
@@ -430,6 +454,9 @@ func New(emitBoundaryObs bool) *Metrics {
 		m.FederationSpokeUp,
 		m.FederationSpokeLastPushUnix,
 		m.FederationSpokePushFailuresTotal,
+		m.FederationSpokePushLastSuccessUnix,
+		m.FederationSpokePushDropsTotal,
+		m.FederationSpokePushQueueDepth,
 		m.GraphUpdatesRejectedTotal,
 		m.HubOOSUnmatchedTotal,
 		m.TopologyLastScrapeDurationSeconds,
