@@ -134,13 +134,16 @@ func typedValue(pdu gsnmp.SnmpPDU, typ, val string) (gsnmp.SnmpPDU, error) {
 		}
 		pdu.Type, pdu.Value = gsnmp.Integer, n
 	case "Gauge32", "Gauge", "Unsigned32":
-		n, err := strconv.ParseUint(val, 10, 64)
+		// 32-bit SNMP type: parse with bitSize 32 so the value is bounded and
+		// the uint conversion cannot overflow (and a malformed >32-bit value is
+		// rejected rather than silently truncated).
+		n, err := strconv.ParseUint(val, 10, 32)
 		if err != nil {
 			return pdu, fmt.Errorf("%s %q: %w", typ, val, err)
 		}
 		pdu.Type, pdu.Value = gsnmp.Gauge32, uint(n)
 	case "Counter32", "Counter":
-		n, err := strconv.ParseUint(val, 10, 64)
+		n, err := strconv.ParseUint(val, 10, 32)
 		if err != nil {
 			return pdu, fmt.Errorf("%s %q: %w", typ, val, err)
 		}
