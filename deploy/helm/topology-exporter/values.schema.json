@@ -523,6 +523,10 @@
           "properties": {
             "enabled": { "type": "boolean" },
             "allowDNS": { "type": "boolean" },
+            "dnsNamespace": {
+              "type": "string",
+              "description": "Namespace the cluster DNS service runs in, matched via the kubernetes.io/metadata.name namespaceSelector label. Defaults to kube-system."
+            },
             "snmp": {
               "type": "object",
               "additionalProperties": false,

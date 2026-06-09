@@ -35,10 +35,17 @@ spec:
     {{- end }}
   {{- if .Values.networkPolicy.egress.enabled }}
   {{- $eg := .Values.networkPolicy.egress }}
+  {{- if and (not $eg.snmp.cidrs) (not $eg.otlp.cidrs) (not $eg.hub.cidrs) (not $eg.extraRules) }}
+  {{- fail "networkPolicy.egress.enabled is true but no egress destinations are configured (snmp.cidrs/otlp.cidrs/hub.cidrs/extraRules) — this would deny all SNMP discovery. Set at least snmp.cidrs." }}
+  {{- end }}
   egress:
     {{- if $eg.allowDNS }}
-    # DNS resolution (kube-dns / CoreDNS).
-    - ports:
+    # DNS resolution (kube-dns / CoreDNS), scoped to the cluster DNS namespace.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $eg.dnsNamespace | default "kube-system" }}
+      ports:
         - port: 53
           protocol: UDP
         - port: 53

@@ -1,5 +1,10 @@
-# Adds Egress to the base NetworkPolicy. EDIT the example CIDRs/ports below to
-# your environment — with Egress enabled, anything not listed here is DENIED.
+# Adds Egress to the base NetworkPolicy.
+#
+# FAIL-SAFE BY DESIGN: applying this component UNEDITED DENIES all SNMP/OTLP/hub
+# egress. The example CIDRs below are 0.0.0.0/32 placeholders — a non-routable
+# single address that matches no real traffic. You MUST replace each 0.0.0.0/32
+# with your real CIDRs (and adjust ports) before the exporter can reach anything.
+# With Egress enabled, anything not listed here is DENIED.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -9,30 +14,38 @@ spec:
     - Ingress
     - Egress
   egress:
-    # DNS resolution (kube-dns / CoreDNS). Required.
-    - ports:
+    # DNS resolution (kube-dns / CoreDNS), scoped to the cluster DNS namespace.
+    # Required. Change kube-system if your cluster DNS lives elsewhere.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
         - port: 53
           protocol: UDP
         - port: 53
           protocol: TCP
-    # SNMP polling targets — EDIT to your discovery scope (cidr_allow_list).
+    # SNMP polling targets — REPLACE 0.0.0.0/32 with your discovery scope
+    # (cidr_allow_list). Until replaced, all SNMP egress is DENIED.
     - to:
         - ipBlock:
-            cidr: 10.0.0.0/8
+            cidr: 0.0.0.0/32
       ports:
         - port: 161
           protocol: UDP
-    # OTLP traces/metrics collector — EDIT to your collector address.
+    # OTLP traces/metrics collector — REPLACE 0.0.0.0/32 with your collector
+    # address. Until replaced, all OTLP egress is DENIED.
     - to:
         - ipBlock:
-            cidr: 10.96.0.0/16
+            cidr: 0.0.0.0/32
       ports:
         - port: 4317
           protocol: TCP
-    # Hub federation peers (spoke → hub push) — EDIT, or remove if standalone.
+    # Hub federation peers (spoke → hub push) — REPLACE 0.0.0.0/32, or remove
+    # this rule if standalone. Until replaced, all hub egress is DENIED.
     - to:
         - ipBlock:
-            cidr: 10.0.0.0/8
+            cidr: 0.0.0.0/32
       ports:
         - port: 9101
           protocol: TCP
