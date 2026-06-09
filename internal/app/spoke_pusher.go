@@ -75,3 +75,36 @@ func (p *spokePusher) Enqueue(ctx context.Context, pl federation.SpokePayload) {
 	}
 	p.m.FederationSpokePushQueueDepth.Set(float64(len(p.ch)))
 }
+
+// run consumes the mailbox until ctx is cancelled, pushing one payload at a
+// time. On cancellation it makes one final bounded drain attempt, then exits.
+func (p *spokePusher) run(ctx context.Context) {
+	defer close(p.stopped)
+	defer recoverGoroutine("spoke_pusher", p.logger, p.m)
+	for {
+		select {
+		case <-ctx.Done():
+			p.drainOnce()
+			return
+		case q := <-p.ch:
+			p.doPush(ctx, q)
+			p.m.FederationSpokePushQueueDepth.Set(float64(len(p.ch)))
+		}
+	}
+}
+
+func (p *spokePusher) doPush(ctx context.Context, q queuedPush) {
+	pushCtx := trace.ContextWithSpanContext(ctx, q.span)
+	if err := p.push(pushCtx, q.payload); err != nil {
+		if ctx.Err() == nil {
+			p.m.FederationSpokePushFailuresTotal.Inc()
+			p.logger.Warn("spoke push failed", "error", err)
+		}
+		return
+	}
+	p.m.FederationSpokePushLastSuccessUnix.Set(float64(time.Now().Unix()))
+}
+
+// drainOnce is a temporary stub; Task 4 replaces it with the bounded final
+// drain attempt at shutdown.
+func (p *spokePusher) drainOnce() {}
