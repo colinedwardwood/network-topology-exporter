@@ -64,6 +64,20 @@ func startAgent(t *testing.T, community, profile string) Params {
 	return Params{IP: ip, Port: port, Community: []byte(community), CredentialProfile: profile, Timeout: 3 * time.Second}
 }
 
+// checkout drives the real acquire() state machine for tests, returning the
+// session and its release func. Replaces the deleted Checkout method so tests
+// exercise exactly one acquisition path.
+// NOTE: pool_test.go imports gosnmp as `gsnmp` (not `g`), so the return type is
+// *gsnmp.GoSNMP, not *g.GoSNMP.
+func checkout(t *testing.T, pl *SessionPool, p Params) (*gsnmp.GoSNMP, func()) {
+	t.Helper()
+	s, release, err := pl.acquire(p)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	return s, release
+}
+
 func TestSessionPoolCheckoutReuseSameKey(t *testing.T) {
 	fm := newFakeSessionPoolMetrics()
 	pl := NewSessionPool(SessionPoolOptions{MaxIdle: time.Hour, Metrics: fm})
@@ -71,20 +85,14 @@ func TestSessionPoolCheckoutReuseSameKey(t *testing.T) {
 
 	p := startAgent(t, "public", "profA")
 
-	s1, err := pl.Checkout(p)
-	if err != nil {
-		t.Fatalf("first checkout: %v", err)
-	}
-	pl.Return(p, s1, true)
+	s1, release1 := checkout(t, pl, p)
+	release1()
 
-	s2, err := pl.Checkout(p)
-	if err != nil {
-		t.Fatalf("second checkout: %v", err)
-	}
+	s2, release2 := checkout(t, pl, p)
 	if s1 != s2 {
 		t.Fatalf("expected same session reused on repeat checkout, got different instances")
 	}
-	pl.Return(p, s2, true)
+	release2()
 
 	hits, misses, _, _ := fm.snapshot()
 	if misses != 1 {
@@ -105,19 +113,13 @@ func TestSessionPoolDifferentProfileIsDifferentSession(t *testing.T) {
 	pB := pA
 	pB.CredentialProfile = "profB"
 
-	sA, err := pl.Checkout(pA)
-	if err != nil {
-		t.Fatalf("checkout A: %v", err)
-	}
-	sB, err := pl.Checkout(pB)
-	if err != nil {
-		t.Fatalf("checkout B: %v", err)
-	}
+	sA, releaseA := checkout(t, pl, pA)
+	sB, releaseB := checkout(t, pl, pB)
 	if sA == sB {
 		t.Fatalf("expected distinct sessions for distinct profiles")
 	}
-	pl.Return(pA, sA, true)
-	pl.Return(pB, sB, true)
+	releaseA()
+	releaseB()
 
 	_, misses, size, _ := fm.snapshot()
 	if misses != 2 {
@@ -134,11 +136,8 @@ func TestSessionPoolInvalidateProfile(t *testing.T) {
 	defer pl.Close()
 
 	p := startAgent(t, "public", "rotateme")
-	s1, err := pl.Checkout(p)
-	if err != nil {
-		t.Fatalf("checkout: %v", err)
-	}
-	pl.Return(p, s1, true)
+	s1, release1 := checkout(t, pl, p)
+	release1()
 
 	pl.InvalidateProfile("rotateme")
 
@@ -151,14 +150,11 @@ func TestSessionPoolInvalidateProfile(t *testing.T) {
 	}
 
 	// Subsequent checkout opens fresh (different instance, counted as a miss).
-	s2, err := pl.Checkout(p)
-	if err != nil {
-		t.Fatalf("checkout after invalidate: %v", err)
-	}
+	s2, release2 := checkout(t, pl, p)
 	if s2 == s1 {
 		t.Fatalf("expected a fresh session after InvalidateProfile")
 	}
-	pl.Return(p, s2, true)
+	release2()
 }
 
 func TestSessionPoolIdleEviction(t *testing.T) {
@@ -167,11 +163,8 @@ func TestSessionPoolIdleEviction(t *testing.T) {
 	defer pl.Close()
 
 	p := startAgent(t, "public", "idle")
-	s, err := pl.Checkout(p)
-	if err != nil {
-		t.Fatalf("checkout: %v", err)
-	}
-	pl.Return(p, s, true)
+	_, release := checkout(t, pl, p)
+	release()
 
 	// Force the entry's lastUsed far into the past, then run the evictor.
 	key := poolKey{ip: p.IP.String(), profile: p.CredentialProfile}
@@ -196,10 +189,7 @@ func TestSessionPoolReturnUnhealthyEvicts(t *testing.T) {
 	defer pl.Close()
 
 	p := startAgent(t, "public", "conn")
-	s, err := pl.Checkout(p)
-	if err != nil {
-		t.Fatalf("checkout: %v", err)
-	}
+	s, _ := checkout(t, pl, p)
 	pl.Return(p, s, false) // unhealthy
 
 	_, _, size, ev := fm.snapshot()
@@ -217,11 +207,8 @@ func TestSessionPoolCloseClosesAll(t *testing.T) {
 
 	for _, prof := range []string{"a", "b", "c"} {
 		p := startAgent(t, "public", prof)
-		s, err := pl.Checkout(p)
-		if err != nil {
-			t.Fatalf("checkout %s: %v", prof, err)
-		}
-		pl.Return(p, s, true)
+		_, release := checkout(t, pl, p)
+		release()
 	}
 	_, _, size, _ := fm.snapshot()
 	if size != 3 {
@@ -260,12 +247,8 @@ func TestSessionPoolConcurrentDistinctKeys(t *testing.T) {
 		go func(p Params) {
 			defer wg.Done()
 			for j := 0; j < iters; j++ {
-				s, err := pl.Checkout(p)
-				if err != nil {
-					t.Errorf("checkout: %v", err)
-					return
-				}
-				pl.Return(p, s, true)
+				_, release := checkout(t, pl, p)
+				release()
 			}
 		}(params[i])
 	}
