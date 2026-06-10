@@ -32,7 +32,6 @@ The release job (`.github/workflows/ci.yml::release`) builds a multi-arch image,
 
 - Workflow run succeeded — `gh run list --workflow=ci.yml --limit 3`
 - Image is on GHCR — `ghcr.io/colinedwardwood/network-topology-exporter:X.Y.Z` (and `:latest` for non-prerelease tags)
-- Image is also on the Docker Hub mirror — `docker.io/colinedwardwood/network-topology-exporter:X.Y.Z`
 - GitHub Release exists with both `topology-exporter-linux-amd64` and `topology-exporter-linux-arm64` attached
 - Each release binary has its cosign keyless `.sig` and `.cert` attachments alongside it
 - The SBOM (SPDX JSON, `network-topology-exporter-vX.Y.Z.spdx.json`) is attached and attested to the registry, with its own `.sig`/`.cert`

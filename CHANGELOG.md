@@ -424,14 +424,13 @@ v1.3.1 lands under this milestone instead, renamed to
   device's edges land in `/metrics` on the next regular cycle. New audit metric
   `network_topology_admin_rediscovery_total{outcome}`. See
   `docs/operator/troubleshooting.md` § 4a. Closes #73.
-- **#78 — Release artefacts mirrored beyond GHCR.** The release pipeline now
-  mirrors the multi-arch image to Docker Hub
-  (`docker.io/colinedwardwood/network-topology-exporter`) alongside GHCR, and
-  publishes a cosign-signed offline tarball (static binaries + sigs, example
-  config, Helm chart, Kustomize overlays) attached to each GitHub Release for
-  air-gapped / proxy-restricted environments. The Docker Hub push is gated on the
-  `DOCKERHUB_TOKEN` secret, so releases stay GHCR-complete until the repo owner
-  provisions the Docker Hub repo + secrets (remaining steps on #78).
+- **Offline release tarball for air-gapped installs.** Each GitHub Release now
+  attaches a cosign-signed `network-topology-exporter-<version>-offline.tar.gz`
+  bundling the static binaries (with sigs/certs), the example config, the Helm
+  chart, the Kustomize overlays, and the SBOM — for `curl`-and-untar deployment
+  in environments that cannot reach `ghcr.io`. (Docker Hub mirroring was
+  considered under #78 but dropped — image distribution will be handled at the
+  organisation level; #78 closed not-planned.)
 - **#79 — Kustomize manifests.** New `deploy/kustomize/` (base + `standalone` /
   `hub` / `spoke` overlays) lets the exporter be installed with `kubectl apply
   -k`, Argo CD, or Flux without Helm. The manifests mirror the Helm chart's

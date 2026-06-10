@@ -317,12 +317,6 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build-test, integration-test, lint, helm-lint, docker]
-    env:
-      # Secrets cannot be referenced directly in `if:` expressions, so derive a
-      # plain env flag from the Docker Hub token. When the DOCKERHUB_TOKEN secret
-      # is absent this is 'false' and the release stays GHCR-only; once the secret
-      # is provisioned it flips to 'true' and the image is mirrored to Docker Hub.
-      DOCKERHUB_ENABLED: ${{ secrets.DOCKERHUB_TOKEN != '' }}
     permissions:
       contents: write       # create GitHub release
       packages: write       # push to ghcr.io
@@ -345,38 +339,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Gated on DOCKERHUB_ENABLED: skipped (not failed) when the secret is absent.
-      - name: log in to Docker Hub
-        if: ${{ env.DOCKERHUB_ENABLED == 'true' }}
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
-
-      # Build the metadata-action images list: GHCR always, Docker Hub appended
-      # only when the mirror is enabled. Emitting a multiline value via a heredoc
-      # to $GITHUB_OUTPUT lets metadata-action push every tag to both registries
-      # from a single build-push, so the cosign loop and binary steps stay shared.
-      - name: compute image registries
-        id: imgs
-        run: |
-          {
-            echo "images<<EOF"
-            echo "ghcr.io/${{ github.repository }}"
-            if [ "${DOCKERHUB_ENABLED}" = "true" ]; then
-              echo "docker.io/${{ github.repository }}"
-            fi
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
 
       - name: docker metadata
         id: meta
         uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
         with:
-          images: ${{ steps.imgs.outputs.images }}
+          images: ghcr.io/${{ github.repository }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -411,15 +380,6 @@ jobs:
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-name: ghcr.io/${{ github.repository }}
-          subject-digest: ${{ steps.build_push.outputs.digest }}
-          push-to-registry: true
-
-      # Same digest, mirrored to Docker Hub; only runs when the mirror is enabled.
-      - name: attest container image build provenance (Docker Hub)
-        if: ${{ env.DOCKERHUB_ENABLED == 'true' }}
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
-        with:
-          subject-name: docker.io/${{ github.repository }}
           subject-digest: ${{ steps.build_push.outputs.digest }}
           push-to-registry: true
 
@@ -472,10 +432,6 @@ jobs:
         run: |
           cosign attest --yes --type spdxjson --predicate "${SBOM}" \
             "ghcr.io/${{ github.repository }}@${DIGEST}"
-          if [ "${DOCKERHUB_ENABLED}" = "true" ]; then
-            cosign attest --yes --type spdxjson --predicate "${SBOM}" \
-              "docker.io/${{ github.repository }}@${DIGEST}"
-          fi
 
       - name: sign SBOM (cosign keyless)
         env:
@@ -486,8 +442,8 @@ jobs:
             --output-certificate "${SBOM}.cert" \
             "${SBOM}"
 
-      # Offline install bundle for air-gapped / proxy-restricted shops that can
-      # reach neither ghcr.io nor docker.io. Contains the static binaries plus
+      # Offline install bundle for air-gapped / proxy-restricted shops that
+      # cannot reach ghcr.io. Contains the static binaries plus
       # their cosign sigs/certs, the example config, the Helm chart, and the
       # Helm-free Kustomize overlay tree.
       - name: assemble offline tarball
