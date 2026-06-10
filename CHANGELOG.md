@@ -43,6 +43,18 @@
   (`hub_snapshot.go`), with tests split along the same seams. Pure same-package
   moves — no signature or behaviour change.
 
+- Relocated the `internal/app` unit tests out of
+  `cmd/topology-exporter/main_test.go` (#171). 38 tests that exercise exported
+  `internal/app` behaviour (runCycle, the discovery loop, credential walking,
+  OTLP push, edge/OOS helpers) moved verbatim into `internal/app` as external
+  `package app_test` files (`run_cycle_test.go`, `run_loop_test.go`,
+  `walk_credentials_test.go`, `otlp_push_test.go`), so `go test ./internal/app`
+  now runs them with the package they test. Three moved tests were renamed
+  (`TestDeduplicateOOSTable`, `TestCollectDegradedReasonsTable`,
+  `TestNewLoggerLevels`) because package app already had whitebox tests of the
+  same names. `main_test.go` keeps only genuine `run()`-level concerns: flag
+  parsing, config errors, TLS/web-config startup failures, and shutdown.
+
 - The discovery loop and the `/admin/rediscover` endpoint now share one LD-12
   credential resolver (#169). Previously each path held an independent
   resolver: a sticky-credential win recorded by an admin forced walk was
