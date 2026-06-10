@@ -35,6 +35,14 @@
 
 ### Changed
 
+- Decomposed `internal/federation/hub.go` (1,254 lines) and `hub_test.go`
+  (3,053 lines) into concern-aligned files (#168): server bootstrap
+  (`hub_server.go`), push handling (`hub_push.go`), payload validation
+  (`hub_validate.go`), combined-graph merge (`hub_merge.go`), spoke eviction
+  (`hub_eviction.go`), publication (`hub_publish.go`), and snapshot persistence
+  (`hub_snapshot.go`), with tests split along the same seams. Pure same-package
+  moves — no signature or behaviour change.
+
 - The discovery loop and the `/admin/rediscover` endpoint now share one LD-12
   credential resolver (#169). Previously each path held an independent
   resolver: a sticky-credential win recorded by an admin forced walk was
