@@ -264,7 +264,6 @@ func (lc LoopConfig) publish(
 			Devices:    newGraph.Devices,
 			Edges:      newGraph.Edges,
 			OutOfScope: newGraph.OutOfScope,
-			Ages:       ageMap,
 		})
 	}
 	return prevGraph, ages, ps

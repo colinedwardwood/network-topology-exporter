@@ -9,6 +9,14 @@
   scrape topology. HA is opt-in via `federation.hub.ha.enabled`; single-hub
   deployments are unchanged.
 
+### Changed
+
+- Removed the dead `ages` field from the spoke→hub push payload (#165). Spokes
+  populated it every cycle but the hub never read it — LD-14 age lifecycle runs
+  inside each spoke and survives restarts via the spoke's local snapshot, not
+  the hub. The hub ignores unknown JSON fields, so pushes from older spokes
+  that still send `ages` remain accepted; newer spokes simply stop sending it.
+
 ## Unreleased — planned as v1.4.0-rc.1
 
 Upcoming releases adopt `-rc.N` suffixes to signal that the public
