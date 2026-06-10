@@ -54,7 +54,7 @@ docker run --rm -p 9100:9100 \
 ## Installation
 
 Released images are multi-arch (`linux/amd64`, `linux/arm64`), cosign-keyless
-signed, and carry SLSA build-provenance attestations. Three install paths cover
+signed, and carry SLSA build-provenance attestations. Two install paths cover
 registry-restricted and air-gapped environments:
 
 1. **GHCR (default):**
@@ -63,14 +63,7 @@ registry-restricted and air-gapped environments:
    docker pull ghcr.io/colinedwardwood/network-topology-exporter:latest
    ```
 
-2. **Docker Hub (mirror)** — for shops that cannot reach `ghcr.io`. The same
-   image (identical digest) is mirrored from each release:
-
-   ```bash
-   docker pull docker.io/colinedwardwood/network-topology-exporter:latest
-   ```
-
-3. **Offline tarball (air-gapped)** — each GitHub Release attaches a
+2. **Offline tarball (air-gapped)** — each GitHub Release attaches a
    cosign-signed `network-topology-exporter-<version>-offline.tar.gz` bundling
    the static binaries (with sigs/certs), the example config, the Helm chart,
    and the Kustomize overlays for `curl`-and-untar deployment.

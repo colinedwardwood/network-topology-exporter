@@ -118,9 +118,7 @@ docker run --rm -p 9100:9100 \
 ```
 
 The container reads `/etc/topology-exporter/config.yaml` by default (the
-flag default), so no extra args are needed. A Docker Hub mirror is also
-available: `docker.io/colinedwardwood/network-topology-exporter:latest`.
-Then go to **2.3 Verify**.
+flag default), so no extra args are needed. Then go to **2.3 Verify**.
 
 ### 2.2c Run path — Kubernetes (Kustomize)
 
