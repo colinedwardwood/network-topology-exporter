@@ -71,6 +71,7 @@ type Hub struct {
 	snapshotPath         string
 	snapshotCh           chan discovery.Graph
 	firstLive            atomic.Bool // set to true on the first live publishIfWinner call
+	isLeader             atomic.Bool // single-hub default true; flipped by the LeaderElector in HA mode
 	snapshotWriteFn      func(string, snapshot.File) error
 	snapshotWriteTimeout time.Duration
 	publishGen           atomic.Uint64
@@ -98,6 +99,8 @@ func NewHub(cfg config.FederationConfig, m *metrics.Metrics, logger *slog.Logger
 	if snapshotPath != "" {
 		h.snapshotCh = make(chan discovery.Graph, 1)
 	}
+	// Single-hub default: always leader. The elector (HA mode) flips this.
+	h.isLeader.Store(true)
 	return h
 }
 
@@ -1056,6 +1059,13 @@ func (h *Hub) publishIfWinner(gen uint64, g discovery.Graph, unmatched int, acce
 func (h *Hub) IsReady() bool {
 	return h.firstLive.Load()
 }
+
+// IsLeader reports whether this hub currently accepts pushes and publishes.
+// Always true in single-hub mode; flipped by the LeaderElector in HA mode.
+func (h *Hub) IsLeader() bool { return h.isLeader.Load() }
+
+// SetLeader is invoked by the LeaderElector callbacks (HA mode only).
+func (h *Hub) SetLeader(v bool) { h.isLeader.Store(v) }
 
 // writeSnapshot persists the hub's current graph to disk (LD-13). A no-op
 // when snapshotPath is empty. Hub snapshots omit credential cache and
