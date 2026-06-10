@@ -91,8 +91,8 @@ func TestSpokePushRetryExhaustionIncrementsCounter(t *testing.T) {
 	if err == nil {
 		t.Fatal("Push returned nil, want error after retry exhaustion")
 	}
-	if got := calls.Load(); got != 3 {
-		t.Errorf("server received %d requests, want 3 (maxAttempts)", got)
+	if got := calls.Load(); got != 5 {
+		t.Errorf("server received %d requests, want 5 (maxAttempts)", got)
 	}
 	// The failure counter must be incremented exactly once after all retries fail.
 	if got := testutil.ToFloat64(s.m.FederationSpokePushFailuresTotal); got != 1 {
@@ -311,8 +311,8 @@ func TestSpokePushFatalOn4xx(t *testing.T) {
 
 		s := newTestSpokeFor(t, srv.URL)
 		_ = s.Push(context.Background(), SpokePayload{SpokeID: "dc-test", CycleAt: time.Now()})
-		if got := calls.Load(); got != 3 {
-			t.Errorf("429: server received %d requests, want 3 (maxAttempts)", got)
+		if got := calls.Load(); got != 5 {
+			t.Errorf("429: server received %d requests, want 5 (maxAttempts)", got)
 		}
 	})
 }

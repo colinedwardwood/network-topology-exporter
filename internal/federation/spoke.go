@@ -92,9 +92,12 @@ func NewSpoke(cfg config.FederationConfig, logger *slog.Logger, limiter *loglimi
 // to avoid multi-second waits.
 var spokePushBaseBackoff = time.Second
 
-// Push serialises payload and POSTs it to the hub. It retries up to three
-// times with exponential backoff starting at spokePushBaseBackoff. A cancelled
-// context aborts immediately without retrying.
+// Push serialises payload and POSTs it to the hub. It retries up to five
+// times with exponential backoff starting at spokePushBaseBackoff (1s, 2s, 4s,
+// 8s between the five attempts). A cancelled context aborts immediately without
+// retrying. The 5-attempt window (#71 §7) is sized so a push in flight during
+// an HA hub leader-flip survives until the new leader's push Service is ready,
+// rather than being deferred to the next discovery cycle.
 func (s *Spoke) Push(ctx context.Context, payload SpokePayload) error {
 	// Issue #68: spoke.push span. The post() helper injects this span's W3C
 	// traceparent into each outbound HTTP request, so the hub's hub.handlePush
@@ -116,7 +119,7 @@ func (s *Spoke) Push(ctx context.Context, payload SpokePayload) error {
 		return fmt.Errorf("spoke: marshal payload: %w", err)
 	}
 
-	const maxAttempts = 3
+	const maxAttempts = 5
 	backoff := spokePushBaseBackoff
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if ctx.Err() != nil {
