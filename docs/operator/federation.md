@@ -347,39 +347,123 @@ The hub loads the same snapshot path as standalone/spoke instances. On startup, 
 
 Check `network_topology_federation_spoke_last_push_timestamp_seconds{spoke_id="..."}` to identify which spoke is overdue. A value of 0 means the hub has never received a push from that spoke since starting (no snapshot entry for it either).
 
-## Hub high-availability patterns
+## Hub high-availability (native, opt-in)
 
-The hub is a single point of failure today. If the active hub goes down, spokes' pushes fail with retries and the hub's `/metrics` endpoint stops serving topology data. Spokes continue local discovery uninterrupted and replay their most recent graph to the hub once it returns. Real native HA — leader election, shared state, automatic failover — is v2.0 work tracked separately. Until then, three patterns reduce blast radius. None is turnkey.
+Since v2.0.0 the hub supports native high availability on Kubernetes: run 2+ hub
+replicas, one of which is elected leader via a Kubernetes `Lease`. The leader is
+the only replica that accepts spoke pushes and publishes topology; followers
+stand by, ready to take over. Failover is automatic — no manual cutover, no
+operator-side load balancer tricks. HA is **opt-in** and **Kubernetes-only**;
+single-hub deployments (`replicaCount: 1`, HA disabled) are unchanged and make
+no Kubernetes API calls.
 
-### Pattern A: Cold standby with manual cutover
+The full design rationale lives in
+[`docs/superpowers/specs/2026-06-09-hub-ha-design.md`](../superpowers/specs/2026-06-09-hub-ha-design.md)
+(issue #71).
 
-Run a second hub binary against the same snapshot path (NFS, S3-mounted-via-csi-driver, EBS volume mounted on standby) configured with the same mTLS CA. Keep the standby stopped. On primary failure: stop the primary, start the standby, repoint DNS (or load balancer backend) for spokes' `hub_url` at the standby. Spokes' next push hits the standby and the graph is rebuilt within one `discovery.interval`.
+### How it works
 
-- **Recovery time:** human reaction time + spoke push retry interval (typically 1–3 minutes).
-- **Data loss window:** none — spokes replay their current graph on first successful push.
-- **Risk:** snapshot-path consistency. If the standby was reading the snapshot file mid-write by the primary, it may load a torn snapshot. Stop the primary first, then start the standby; never both at once.
+- **Leader election:** the replicas contend for a `coordination.k8s.io/Lease`
+  using client-go's leader-election state machine. The Lease is a compare-and-swap
+  against the API server, so at most one replica holds it at a time — two
+  replicas suffice and there is no quorum to deadlock.
+- **Spokes are the source of truth.** There is no replicated mutable hub state.
+  A newly-elected leader rebuilds the combined graph from the spokes' next push.
+  Because spokes push every discovery cycle (#6), the graph is fresh again within
+  one `discovery.interval` of failover. The optional shared snapshot (below) only
+  shortens the cold-start window; it is not required for correctness.
+- **Leader-only push routing:** a follower that receives a spoke push returns
+  `503 Service Unavailable` with `Connection: close`. 503 is retryable spoke-side,
+  so a spoke that briefly hits a follower (or a just-demoted leader) re-resolves
+  and retries onto the new leader. To survive the leader-flip window, the spoke
+  retries up to five times with exponential backoff (1s, 2s, 4s, 8s) before
+  deferring to its next discovery cycle.
 
-### Pattern B: Active-passive with shared TCP load balancer
+### Enabling HA
 
-Place a TCP-mode load balancer in front of two hub binaries; both share a snapshot path. Spokes push to the LB; the LB forwards to whichever hub is healthy. Configure the LB with a short health-check interval against `/healthz`.
+Set the following in the Helm values (the Kustomize `ha` component sets the
+equivalent):
 
-- **Recovery time:** load balancer health-check interval (typically 5–30s).
-- **Risk:** **split-brain.** Both hubs may simultaneously be marked healthy and write the snapshot, producing conflicting state. Mitigations: pick one as "writer" and configure the LB to fail to the other only when the writer is fully unreachable; OR mount the snapshot path read-only on the standby until cutover.
-- **Risk:** spoke push deduplication. The hub doesn't deduplicate by `(spoke_id, cycle_at)`, so if a push arrives at both hubs via LB retry semantics, the second one is processed normally.
-- **Recommendation:** if you go this route, prefer Pattern A's cold standby unless you've validated a specific LB's failure semantics against the snapshot write path.
+```yaml
+replicaCount: 2                 # 2 or more
+federation:
+  hub:
+    ha:
+      enabled: true             # opt-in; default false (single-hub)
+      lease_name: topology-exporter-hub
+      lease_namespace: ""       # defaults to the pod's namespace (downward API)
+      lease_duration: 15s
+      renew_deadline: 10s       # must be < lease_duration
+      retry_period: 2s
+```
 
-### Pattern C: Dual independent stacks with downstream aggregation
+The chart/Kustomize component provisions, **only when `ha.enabled`**:
 
-Run two fully independent hubs, each receiving pushes from a disjoint subset of spokes (or, for full coverage, each spoke pushes to both hubs via two `federation.spoke` instances on the spoke host). Each hub publishes its own `/metrics` to its own Prometheus scrape target. Aggregation happens downstream — e.g. a Mimir recording rule unions both hubs' `network_topology_edge_info` series with deduplication on `src_device, dst_device`.
+- **RBAC:** a namespaced `Role` granting `coordination.k8s.io/leases`
+  `{get, create, update}` plus a `RoleBinding` to the hub ServiceAccount. No
+  pod-patch permission is needed — routing is readiness-gated, not label-patched.
+  `automountServiceAccountToken` is flipped on only in HA mode.
+- **Two Services:**
+  - a **push Service** (`port 9101`) whose endpoints are gated on a
+    leadership-aware readiness probe, so it resolves to the **leader pod only**.
+    Spokes' `hub_url` points here.
+  - a **headless metrics Service** (`port 9100`) with
+    `publishNotReadyAddresses: true`, so **every** replica (leader and followers)
+    stays scrapeable by Prometheus / the `ServiceMonitor`, regardless of
+    push-readiness.
 
-- **Recovery time:** zero — both hubs are always live.
-- **Operational cost:** highest of the three. Two hub deployments, two scrape targets, downstream union rules to maintain.
-- **Caveat:** the topology metric carries no `hub_id` label today; the recording rule has to deduplicate on edge identity alone. If the two hubs disagree (e.g. different `network_topology_conflict_total` values for the same edge), the downstream view picks one arbitrarily.
-- **Best for:** large deployments where the hub is also the scrape source for `network_topology_conflict_total` alerting and you can't tolerate the scrape gap of Pattern A.
+Single-hub deployments keep a single Service, as before.
 
-### What changes in v2.0
+### Optional shared snapshot (warm-start)
 
-Real HA — leader election between hub instances, shared state via Raft or similar, automatic failover, deduplicated spoke pushes — is v2.0 work. See the [v2.0.0 milestone](https://github.com/colinedwardwood/network-topology-exporter/milestones) for design tracking. Today's patterns above are operator-side workarounds that don't require code changes.
+A freshly-elected leader cold-starts with `network_topology_graph_stale=1` and an
+empty graph, becoming fresh within one `discovery.interval`. To serve
+stale-but-valid metrics immediately on takeover, you may give the replicas a
+**shared `ReadWriteMany` (RWX)** snapshot volume (NFS / CephFS / EFS / Filestore):
+the new leader loads it on election.
+
+- This is **optional**. The default HA path uses **no shared volume** (cold-start),
+  which sidesteps RWX entirely — most default StorageClasses are RWO and a
+  multi-writer RWO mount will fail. The chart guards `replicaCount>1 + RWO +
+  shared snapshot` with a clear failure.
+- Concurrent writes by a briefly-overlapping old and new leader are made safe by
+  an atomic `tmp→fsync→rename` write **plus a fence token**: each snapshot carries
+  the leader's monotonic lease epoch, and a writer holding a lower epoch than the
+  on-disk file has its write refused. A resumed stale leader therefore cannot
+  overwrite the new leader's snapshot.
+
+### `/metrics` semantics across replicas
+
+The **leader's** `/metrics` is authoritative. Followers serve either a warm
+shared snapshot (lagged by the snapshot write/reload cadence) or, when cold,
+`network_topology_graph_stale=1` with an empty graph. So `/metrics` is
+**leader-authoritative, not byte-identical** across replicas. Scrape all
+replicas via the metrics Service; treat `graph_stale=1` followers as standby and
+prefer the leader in dashboards.
+
+### Recovery-time expectations
+
+Two honest numbers (design §7):
+
+- **Recovery-to-serving** (a warm or `graph_stale=1` `/metrics` is available
+  again): **seconds** — `lease_duration + retry_period` for a follower to acquire
+  the Lease, plus the EndpointSlice/kube-proxy flip of the push Service (1–10s,
+  cluster-dependent).
+- **Recovery-to-fresh** (a live, reconciled graph): **≤ the endpoint flip + one
+  `discovery.interval`**, after the spokes' next push reaches the new leader.
+
+**Zero data loss:** spokes replay their current graph on the first successful
+push to the new leader.
+
+### Failure modes
+
+- **One leader at a time.** The Lease CAS guarantees ≤1 holder; a brief
+  dual-leader window during failover is harmless — each leader has its own local
+  graph and the snapshot fence token rejects the stale writer.
+- **API-server outage** fails **closed**, not split-brain: neither replica can
+  renew or acquire, so both step down (zero leaders), spokes get 503 and retry,
+  and election resumes when the API server returns. HA election availability is
+  bounded by kube-apiserver availability.
 
 ## Alert runbook entries
 

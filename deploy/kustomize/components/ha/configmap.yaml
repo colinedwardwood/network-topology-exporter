@@ -1,0 +1,57 @@
+# Native hub HA (#71): re-writes config.yaml with the federation.hub.ha block
+# enabled. A strategic-merge patch replaces the whole data.config.yaml string,
+# so this is the hub overlay's config (overlays/hub/configmap.yaml) PLUS the ha
+# block — keep the two in sync if the hub config changes. Mirrors the
+# federation.hub.ha config surface in the design doc (§9).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: topology-exporter
+data:
+  config.yaml: |
+    discovery:
+      interval: 60s
+      timeout_per_device: 10s
+      parallelism: 20
+      unconfirmed_link_ttl_cycles: 3
+      scope:
+        cidr_allow_list: []
+    modules:
+      snmp:
+        enabled: false
+      lldp:
+        enabled: false
+      cdp:
+        enabled: false
+      bgp:
+        enabled: false
+      ospf:
+        enabled: false
+      fdb:
+        enabled: false
+    credentials:
+      profiles: []
+      assignments: []
+      fallback_order: []
+      trial_rate_per_second: 5
+    snapshot:
+      path: /var/lib/topology-exporter/snapshot.json
+    federation:
+      role: hub
+      spoke_timeout: 3m
+      known_inter_domain_links: []
+      hub:
+        listen_addr: ":9101"
+        tls_ca_cert: /etc/topology-exporter/pki/ca.crt
+        tls_cert: /etc/topology-exporter/pki/tls.crt
+        tls_key: /etc/topology-exporter/pki/tls.key
+        ha:
+          enabled: true
+          lease_name: topology-exporter-hub
+          lease_namespace: ""        # defaults to the pod's namespace (POD_NAMESPACE)
+          lease_duration: 15s
+          renew_deadline: 10s        # must be < lease_duration
+          retry_period: 2s
+        snapshot:
+          shared: false              # true => warm-start from a ReadWriteMany volume (opt-in)
+    targets: []

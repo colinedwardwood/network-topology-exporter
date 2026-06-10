@@ -26,7 +26,7 @@ import (
 //
 // site must be one of the closed, low-cardinality strings documented on
 // metrics.Metrics.PanicsRecoveredTotal (discovery_loop, snapshot_writer,
-// otlp_push, hub_serve, hub_rebuild, fdb_vlan_walk, stale_watchdog, ...).
+// otlp_push, hub_serve, hub_rebuild, hub_elector, fdb_vlan_walk, stale_watchdog, ...).
 //
 // Both logger and m are tolerated as nil (logger falls back to slog.Default;
 // a nil m skips the counter) so the helper is safe to use from goroutines

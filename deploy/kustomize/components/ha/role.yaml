@@ -1,0 +1,11 @@
+# Native hub HA (#71): leader election uses a coordination.k8s.io Lease.
+# get/create/update is the minimal verb set client-go leaderelection needs.
+# Mirrors deploy/helm/topology-exporter/templates/role.yaml.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: topology-exporter
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update"]

@@ -7,7 +7,14 @@ resources:
   - ../../base
 
 labels:
-  - pairs:
+  # includeTemplates propagates the instance label onto the pod template
+  # (spec.template.metadata.labels) without touching the immutable
+  # spec.selector.matchLabels. The HA component's headless metrics Service
+  # (components/ha/service-metrics.yaml) selects on app.kubernetes.io/instance
+  # to avoid matching spoke pods in a shared namespace, so hub pods must carry
+  # it. Mirrors the Helm chart, where selectorLabels include the instance.
+  - includeTemplates: true
+    pairs:
       app.kubernetes.io/instance: hub
 
 # Replace the base config (federation.role: hub + listener/TLS settings).

@@ -273,11 +273,49 @@
     "federation": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Federation TLS secret reference.",
+      "description": "Federation TLS secret reference and native hub HA toggles.",
       "properties": {
         "tlsSecret": {
           "type": "string",
           "description": "Name of a Secret containing tls.crt, tls.key, and ca.crt. Required for spoke and hub roles."
+        },
+        "hub": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Federation hub deployment options.",
+          "properties": {
+            "ha": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Native hub high-availability (#71). Opt-in; OFF renders identically to a non-HA deploy.",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Enable leader-elected multi-replica hub HA. Run replicaCount >= 2."
+                },
+                "leaseName": {
+                  "type": "string",
+                  "description": "Name of the coordination.k8s.io Lease used for election."
+                },
+                "leaseDuration": {
+                  "type": "string",
+                  "description": "Duration a non-leader waits before it may acquire an unrenewed Lease (e.g. 15s)."
+                },
+                "renewDeadline": {
+                  "type": "string",
+                  "description": "Leader renewal deadline; must be < leaseDuration (e.g. 10s)."
+                },
+                "retryPeriod": {
+                  "type": "string",
+                  "description": "Lease acquire retry period; must be > 0 and < renewDeadline (e.g. 2s)."
+                },
+                "snapshotShared": {
+                  "type": "boolean",
+                  "description": "Treat the snapshot volume as shared RWX for leader warm-start. Requires a ReadWriteMany PVC."
+                }
+              }
+            }
+          }
         }
       }
     },

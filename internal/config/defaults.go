@@ -69,6 +69,20 @@ func (c *Config) applyDefaults() {
 	if c.Federation.Hub.ListenAddr == "" {
 		c.Federation.Hub.ListenAddr = ":9101"
 	}
+	if c.Federation.Hub.HA.Enabled {
+		if c.Federation.Hub.HA.LeaseName == "" {
+			c.Federation.Hub.HA.LeaseName = "topology-exporter-hub"
+		}
+		if c.Federation.Hub.HA.LeaseDuration == 0 {
+			c.Federation.Hub.HA.LeaseDuration = 15 * time.Second
+		}
+		if c.Federation.Hub.HA.RenewDeadline == 0 {
+			c.Federation.Hub.HA.RenewDeadline = 10 * time.Second
+		}
+		if c.Federation.Hub.HA.RetryPeriod == 0 {
+			c.Federation.Hub.HA.RetryPeriod = 2 * time.Second
+		}
+	}
 	if c.Output.OTLP.HeartbeatCycles == 0 {
 		c.Output.OTLP.HeartbeatCycles = 10
 	}

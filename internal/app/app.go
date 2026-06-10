@@ -250,6 +250,106 @@ func Run(ctx context.Context, args []string) int {
 		// In hub mode, readiness is driven by the first live spoke push.
 		isReadyFn = hub.IsReady
 
+		// Issue #71 native HA. ONLY when ha.enabled: construct the k8s lease
+		// elector and drive hub leadership. When disabled this whole block is
+		// skipped — no elector, no in-cluster config attempt, zero k8s API
+		// calls — and the hub stays leader (isLeader defaults true in NewHub),
+		// byte-identical to single-hub mode (the regression gate).
+		if cfg.Federation.Hub.HA.Enabled {
+			ha := cfg.Federation.Hub.HA
+			identity := os.Getenv("POD_NAME")
+			if identity == "" {
+				if host, herr := os.Hostname(); herr == nil {
+					identity = host
+				}
+			}
+			namespace := ha.LeaseNamespace
+			if namespace == "" {
+				namespace = os.Getenv("POD_NAMESPACE")
+			}
+			elector, eerr := federation.NewK8sLeaseElector(federation.K8sElectorConfig{
+				LeaseName:      ha.LeaseName,
+				LeaseNamespace: namespace,
+				Identity:       identity,
+				LeaseDuration:  ha.LeaseDuration,
+				RenewDeadline:  ha.RenewDeadline,
+				RetryPeriod:    ha.RetryPeriod,
+			})
+			if eerr != nil {
+				// Off-cluster (no serviceaccount/kubeconfig) returns a clear
+				// error here, not a panic. Fatal at startup like the other
+				// build-the-client paths in this function.
+				logger.Error("building federation hub HA elector", "error", eerr)
+				return 1
+			}
+
+			// Until elected, the hub is NOT leader: it 503s pushes (with
+			// Connection: close) so spokes route to the actual leader. The
+			// callbacks below flip this.
+			hub.SetLeader(false)
+
+			// Fence-token epoch source (design §4.4). Prefer the Lease's
+			// server-assigned LeaderTransitions, which orders writes across pods.
+			// When NO EpochReader is available (e.g. the fake elector in tests),
+			// fall back to a process-local monotonic counter. When an EpochReader
+			// IS present but a transient CurrentEpoch read ERRORS, retain the
+			// hub's current epoch rather than overwriting it with the local
+			// counter: the server epoch and the local counter live in different
+			// number spaces, so substituting one for the other can DECREASE the
+			// stored epoch and make the snapshot fence refuse this pod's own
+			// writes. The guarantee here is "never decrease": the real-elector
+			// path advances only on a successful read and otherwise holds steady.
+			epochReader, _ := elector.(federation.EpochReader)
+			var localEpoch atomic.Uint64
+
+			workerDone.Add(1)
+			go func() {
+				defer workerDone.Done()
+				defer cancel()
+				defer recoverGoroutine("hub_elector", logger, m)
+				rerr := elector.Run(ctx, federation.LeaderCallbacks{
+					OnStartedLeading: func(c context.Context) {
+						hub.SetLeader(true)
+						if epochReader == nil {
+							// No server epoch available; use the local counter.
+							epoch := localEpoch.Add(1)
+							hub.SetLeaseEpoch(epoch)
+							logger.Info("hub HA: became leader", "identity", identity, "lease_epoch", epoch)
+							return
+						}
+						e, ferr := epochReader.CurrentEpoch(c)
+						if ferr != nil {
+							// Transient read error: keep the existing epoch so we
+							// never go backward. The fence stays at its last value.
+							logger.Warn("hub HA: lease epoch read failed; retaining current epoch",
+								"error", ferr, "current_epoch", hub.LeaseEpoch())
+							logger.Info("hub HA: became leader", "identity", identity, "lease_epoch", hub.LeaseEpoch())
+							return
+						}
+						hub.SetLeaseEpoch(e)
+						logger.Info("hub HA: became leader", "identity", identity, "lease_epoch", e)
+					},
+					OnStoppedLeading: func() {
+						// Step down NOW (design §4.3). The T3 Connection:close
+						// header on the push handler's 503 is the primary
+						// step-down mechanism: a spoke pinned via keep-alive to
+						// this just-demoted leader re-resolves to the new leader
+						// on its next attempt. We deliberately do NOT proactively
+						// close idle push conns here — it adds re-promotion
+						// complexity for no benefit over the header.
+						hub.SetLeader(false)
+						logger.Warn("hub HA: lost leadership; stepping down (503 + Connection:close on pushes)")
+					},
+					OnNewLeader: func(id string) {
+						logger.Info("hub HA: leadership", "leader", id)
+					},
+				})
+				if rerr != nil && ctx.Err() == nil {
+					logger.Error("hub HA elector error", "error", rerr)
+				}
+			}()
+		}
+
 		workerDone.Add(1)
 		go func() {
 			defer workerDone.Done()

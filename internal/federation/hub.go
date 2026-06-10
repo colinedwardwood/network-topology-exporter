@@ -70,7 +70,9 @@ type Hub struct {
 	logger               *slog.Logger
 	snapshotPath         string
 	snapshotCh           chan discovery.Graph
-	firstLive            atomic.Bool // set to true on the first live publishIfWinner call
+	firstLive            atomic.Bool   // set to true on the first live publishIfWinner call
+	isLeader             atomic.Bool   // single-hub default true; flipped by the LeaderElector in HA mode
+	leaseEpoch           atomic.Uint64 // fence token for shared-snapshot writes (#71 §4.4); 0 = single-hub / never fenced. T6 sets this from the elector.
 	snapshotWriteFn      func(string, snapshot.File) error
 	snapshotWriteTimeout time.Duration
 	publishGen           atomic.Uint64
@@ -98,6 +100,8 @@ func NewHub(cfg config.FederationConfig, m *metrics.Metrics, logger *slog.Logger
 	if snapshotPath != "" {
 		h.snapshotCh = make(chan discovery.Graph, 1)
 	}
+	// Single-hub default: always leader. The elector (HA mode) flips this.
+	h.isLeader.Store(true)
 	return h
 }
 
@@ -476,6 +480,16 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !h.isLeader.Load() {
+		// HA: only the leader hub accepts pushes; followers 503 (retryable
+		// spoke-side, see spoke.go). The Connection:close header makes a spoke
+		// pinned via keep-alive to a just-demoted leader re-resolve to the new
+		// leader on its next attempt (design §4.3). Single-hub mode is always
+		// leader (isLeader defaults true), so this never fires there.
+		w.Header().Set("Connection", "close")
+		http.Error(w, "not the leader hub", http.StatusServiceUnavailable)
 		return
 	}
 	defer func() { _ = r.Body.Close() }()
@@ -925,6 +939,15 @@ func (h *Hub) runEviction(ctx context.Context) {
 }
 
 func (h *Hub) evictSilentSpokes() {
+	// Eviction republishes the combined graph and writes a snapshot, so it is a
+	// leader-only path (mirrors the leader gate on handlePush, T3). A DEMOTED
+	// leader still holds spoke entries and its now-stale lease epoch; without
+	// this guard its next eviction tick would republish its graph and attempt a
+	// snapshot write under that stale epoch. Single-hub mode defaults isLeader
+	// true (NewHub), so eviction runs exactly as before.
+	if !h.isLeader.Load() {
+		return
+	}
 	now := time.Now()
 	h.mu.Lock()
 	var evicted []string
@@ -1049,13 +1072,41 @@ func (h *Hub) publishIfWinner(gen uint64, g discovery.Graph, unmatched int, acce
 	return true, ""
 }
 
-// IsReady reports whether the hub has received at least one live spoke push.
-// Use this as the readiness signal for Kubernetes readiness probes: the hub
-// can serve /metrics from the startup snapshot immediately, but it is only
-// "ready" once at least one spoke has confirmed its topology.
+// IsReady reports whether this hub should receive spoke pushes: it must have
+// live data (firstLive) AND be the leader. This gates the leader-only push
+// Service, so spokes route only to the leader (HA). Followers report
+// NotReady-for-push but stay scrapeable via the separate metrics Service
+// (publishNotReadyAddresses), so /metrics is never removed from a follower.
+//
+// In single-hub mode isLeader defaults true (NewHub stores true), so this is
+// identical to the previous firstLive-only semantics: the hub can serve
+// /metrics from the startup snapshot immediately, but is only "ready" once at
+// least one spoke has confirmed its topology.
 func (h *Hub) IsReady() bool {
-	return h.firstLive.Load()
+	return h.firstLive.Load() && h.isLeader.Load()
 }
+
+// IsLeader reports whether this hub currently accepts pushes and publishes.
+// Always true in single-hub mode; flipped by the LeaderElector in HA mode.
+func (h *Hub) IsLeader() bool { return h.isLeader.Load() }
+
+// SetLeader is invoked by the LeaderElector callbacks (HA mode only).
+func (h *Hub) SetLeader(v bool) { h.isLeader.Store(v) }
+
+// SetLeaseEpoch records the fence token (#71 §4.4) for shared-snapshot writes.
+// Invoked by the LeaderElector wiring on OnStartedLeading with the Lease's
+// server-assigned LeaderTransitions count, which orders writes across pods so a
+// resumed stale leader carrying a lower epoch has its snapshot write refused
+// (snapshot.ErrStaleEpoch). The wiring guarantees the value never decreases for
+// a given pod: on a transient epoch-read error it retains the current epoch
+// rather than substituting an unrelated local counter (see internal/app). A
+// no-op-safe store: single-hub mode never calls it, leaving leaseEpoch 0
+// (unfenced).
+func (h *Hub) SetLeaseEpoch(epoch uint64) { h.leaseEpoch.Store(epoch) }
+
+// LeaseEpoch returns the current fence token (#71 §4.4). Used by the elector
+// wiring to keep the epoch monotonic across re-acquisitions.
+func (h *Hub) LeaseEpoch() uint64 { return h.leaseEpoch.Load() }
 
 // writeSnapshot persists the hub's current graph to disk (LD-13). A no-op
 // when snapshotPath is empty. Hub snapshots omit credential cache and
@@ -1067,6 +1118,10 @@ func (h *Hub) writeSnapshot(g discovery.Graph) {
 	f := snapshot.File{
 		Devices: g.Devices,
 		Edges:   g.Edges,
+		// Fence token (#71 §4.4). leaseEpoch defaults 0 ⇒ single-hub writes are
+		// never fenced (byte-identical to today). T6 wires the elector's epoch
+		// and the real holder identity; for now Holder stays "".
+		LeaseEpoch: h.leaseEpoch.Load(),
 	}
 	if err := h.snapshotWriteFn(h.snapshotPath, f); err != nil {
 		h.logger.Error("hub: snapshot write failed", "error", err)

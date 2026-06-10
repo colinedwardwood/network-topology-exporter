@@ -340,6 +340,15 @@ func (c *Config) validateFederation() error {
 			}
 		}
 	case RoleHub:
+		if c.Federation.Hub.HA.Enabled {
+			ha := c.Federation.Hub.HA
+			if ha.RenewDeadline >= ha.LeaseDuration {
+				return fmt.Errorf("federation.hub.ha.renew_deadline (%s) must be less than lease_duration (%s)", ha.RenewDeadline, ha.LeaseDuration)
+			}
+			if ha.RetryPeriod <= 0 || ha.RetryPeriod >= ha.RenewDeadline {
+				return fmt.Errorf("federation.hub.ha.retry_period (%s) must be > 0 and < renew_deadline (%s)", ha.RetryPeriod, ha.RenewDeadline)
+			}
+		}
 		if c.Federation.Hub.TLSCACert == "" || c.Federation.Hub.TLSCert == "" || c.Federation.Hub.TLSKey == "" {
 			return errors.New("federation.hub.tls_ca_cert, tls_cert, and tls_key are all required for hub role (LD-20)")
 		}

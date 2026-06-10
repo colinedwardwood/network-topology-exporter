@@ -346,6 +346,112 @@ func TestWriteIsAtomic(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Fence-token tests (#71 — native hub HA, T5)
+// ---------------------------------------------------------------------------
+
+// TestWriteRefusesStaleEpoch: a writer holding a lower LeaseEpoch than the
+// on-disk file is a resumed stale leader and its write must be refused with
+// ErrStaleEpoch. Equal or higher epochs proceed. This is the core fencing
+// guarantee: atomic-rename prevents corruption, the epoch check prevents a
+// stale-epoch overwrite.
+func TestWriteRefusesStaleEpoch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "snap.json")
+
+	// Establish epoch 5 on disk.
+	if err := Write(path, File{Holder: "pod-a", LeaseEpoch: 5}); err != nil {
+		t.Fatalf("Write epoch 5: %v", err)
+	}
+
+	// A stale leader at epoch 4 must be refused.
+	err := Write(path, File{Holder: "pod-b", LeaseEpoch: 4})
+	if !errors.Is(err, ErrStaleEpoch) {
+		t.Fatalf("Write epoch 4 over 5: err = %v, want ErrStaleEpoch", err)
+	}
+
+	// The on-disk file must still be epoch 5 (the refused write did not land).
+	out, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load after refused write: %v", err)
+	}
+	if out.LeaseEpoch != 5 || out.Holder != "pod-a" {
+		t.Fatalf("refused write leaked: holder=%q epoch=%d, want pod-a/5", out.Holder, out.LeaseEpoch)
+	}
+
+	// Equal epoch (5) proceeds.
+	if err := Write(path, File{Holder: "pod-a", LeaseEpoch: 5}); err != nil {
+		t.Fatalf("Write epoch 5 == 5: %v", err)
+	}
+
+	// Higher epoch (6) proceeds and round-trips.
+	if err := Write(path, File{Holder: "pod-c", LeaseEpoch: 6}); err != nil {
+		t.Fatalf("Write epoch 6: %v", err)
+	}
+	out, err = Load(path)
+	if err != nil {
+		t.Fatalf("Load after epoch 6: %v", err)
+	}
+	if out.LeaseEpoch != 6 || out.Holder != "pod-c" {
+		t.Fatalf("epoch round-trip: holder=%q epoch=%d, want pod-c/6", out.Holder, out.LeaseEpoch)
+	}
+}
+
+// TestWriteEpochZeroNeverFenced: a writer with LeaseEpoch 0 (single-hub /
+// fencing-off) is NEVER refused, even when the on-disk file carries a high
+// epoch. This preserves byte-identical single-hub behaviour.
+func TestWriteEpochZeroNeverFenced(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "snap.json")
+
+	if err := Write(path, File{Holder: "pod-a", LeaseEpoch: 5}); err != nil {
+		t.Fatalf("Write epoch 5: %v", err)
+	}
+
+	// Epoch 0 always wins — the fence check is skipped entirely.
+	if err := Write(path, File{LeaseEpoch: 0}); err != nil {
+		t.Fatalf("Write epoch 0 over 5 should never be fenced: %v", err)
+	}
+	out, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if out.LeaseEpoch != 0 {
+		t.Fatalf("epoch-0 write did not land: epoch=%d", out.LeaseEpoch)
+	}
+}
+
+// TestWriteAllowedWhenNoExistingFile: a missing target file means there is no
+// existing epoch to compare against, so even a high-epoch write proceeds.
+func TestWriteAllowedWhenNoExistingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "snap.json")
+	if err := Write(path, File{Holder: "pod-a", LeaseEpoch: 9}); err != nil {
+		t.Fatalf("Write into empty dir: %v", err)
+	}
+}
+
+// TestLoadOldFormatHasZeroEpoch: an old-format snapshot written before the
+// fence token existed (JSON with no holder/lease_epoch keys) loads with zero
+// values — backward compatibility. omitempty also means a zero-epoch File
+// does not emit the keys at all.
+func TestLoadOldFormatHasZeroEpoch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "snap.json")
+	// Hand-rolled old-format envelope: no holder, no lease_epoch.
+	body := []byte(`{"version":3,"devices":[],"edges":[]}`)
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatalf("write old-format: %v", err)
+	}
+	out, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load old-format: %v", err)
+	}
+	if out == nil {
+		t.Fatal("Load returned nil for old-format file")
+		return
+	}
+	if out.Holder != "" || out.LeaseEpoch != 0 {
+		t.Fatalf("old-format should load zero fence fields: holder=%q epoch=%d", out.Holder, out.LeaseEpoch)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Load error-path tests
 // ---------------------------------------------------------------------------
 

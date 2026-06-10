@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — v2.0.0
+
+### Added
+
+- Native hub HA (#71): opt-in Kubernetes-lease leader election, leader-only push
+  routing, spokes-as-source-of-truth failover with snapshot fence token, two-Service
+  scrape topology. HA is opt-in via `federation.hub.ha.enabled`; single-hub
+  deployments are unchanged.
+
 ## Unreleased — planned as v1.4.0-rc.1
 
 Upcoming releases adopt `-rc.N` suffixes to signal that the public

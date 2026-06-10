@@ -6,4 +6,21 @@ metadata:
     {{- include "topology-exporter.labels" . | nindent 4 }}
 data:
   config.yaml: |
-    {{- .Values.config | toYaml | nindent 4 }}
+    {{- /*
+      Render the user-supplied config document. When native hub HA is enabled
+      (federation.hub.ha.enabled), merge the chart-level ha.* toggles into the
+      config the binary reads at config.federation.hub.ha.* (snake_case keys,
+      matching internal/config HubHAConfig). The off path renders .Values.config
+      verbatim, so a non-HA deploy is byte-identical to before this feature.
+    */}}
+    {{- $config := .Values.config }}
+    {{- if .Values.federation.hub.ha.enabled }}
+    {{- $ha := .Values.federation.hub.ha }}
+    {{- $hubHA := dict "enabled" true "lease_name" $ha.leaseName "lease_duration" $ha.leaseDuration "renew_deadline" $ha.renewDeadline "retry_period" $ha.retryPeriod "snapshot_shared" $ha.snapshotShared }}
+    {{- $fed := deepCopy (default dict $config.federation) }}
+    {{- $hub := deepCopy (default dict $fed.hub) }}
+    {{- $_ := set $hub "ha" $hubHA }}
+    {{- $_ := set $fed "hub" $hub }}
+    {{- $config = merge (dict "federation" $fed) (deepCopy $config) }}
+    {{- end }}
+    {{- $config | toYaml | nindent 4 }}

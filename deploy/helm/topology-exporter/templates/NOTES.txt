@@ -26,3 +26,33 @@ ServiceMonitor created. Prometheus Operator will scrape this instance automatica
 
 To enable Prometheus Operator scraping, set serviceMonitor.enabled=true.
 {{- end }}
+
+{{- if .Values.federation.hub.ha.enabled }}
+
+Native hub HA is ENABLED (#71). Leader election uses Lease "{{ .Values.federation.hub.ha.leaseName }}"
+in namespace "{{ .Release.Namespace }}". A Role + RoleBinding grant the
+ServiceAccount get/create/update on coordination.k8s.io/leases.
+
+  - Spoke pushes route to the elected leader via svc/{{ include "topology-exporter.fullname" . }} (port {{ .Values.service.hubPort }}),
+    which only the leader reports Ready for.
+  - Prometheus scrapes ALL replicas via headless svc/{{ include "topology-exporter.fullname" . }}-metrics (port {{ .Values.service.port }}).
+{{- if lt (int .Values.replicaCount) 2 }}
+
+WARNING: federation.hub.ha.enabled=true but replicaCount={{ .Values.replicaCount }}. HA needs
+         replicaCount >= 2 for failover; a single replica is degraded (no standby).
+{{- end }}
+{{- if .Values.federation.hub.ha.snapshotShared }}
+
+WARNING: federation.hub.ha.snapshotShared=true requires a ReadWriteMany (RWX) snapshot
+         volume so a new leader can warm-start from the previous leader's snapshot.
+{{- if and .Values.persistence.enabled (ne .Values.persistence.accessMode "ReadWriteMany") }}
+         persistence.accessMode is currently "{{ .Values.persistence.accessMode }}", NOT ReadWriteMany.
+         Most default StorageClasses are RWO and will fail to attach to multiple replicas.
+         Set persistence.accessMode=ReadWriteMany with an RWX StorageClass (NFS/CephFS/EFS/Filestore),
+         or leave snapshotShared=false to cold-start (rebuilds within one discovery interval).
+{{- else if not .Values.persistence.enabled }}
+         persistence is disabled, so there is no shared volume to warm-start from.
+         Enable persistence with a ReadWriteMany volume, or leave snapshotShared=false.
+{{- end }}
+{{- end }}
+{{- end }}

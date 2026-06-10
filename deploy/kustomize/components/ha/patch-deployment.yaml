@@ -1,0 +1,26 @@
+# Native hub HA (#71): downward-API pod identity for the leader elector.
+# POD_NAME is the election identity, POD_NAMESPACE the Lease namespace.
+# Mirrors the ha.enabled env block in
+# deploy/helm/topology-exporter/templates/deployment.yaml.
+#
+# NOTE: this does NOT set replicas. HA needs replicaCount >= 2 for failover;
+# set it in your overlay (a `replicas:` patch on the Deployment). A single
+# replica is degraded (no standby) but valid.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: topology-exporter
+spec:
+  template:
+    spec:
+      containers:
+        - name: topology-exporter
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
