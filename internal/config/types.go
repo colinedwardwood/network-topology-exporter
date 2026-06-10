@@ -148,6 +148,25 @@ type FederationHubConfig struct {
 	// check; set to roughly half the spoke's discovery_interval for a sane
 	// floor. Must be strictly less than spoke_timeout.
 	MinPushInterval time.Duration `yaml:"min_push_interval"`
+
+	// HA configures opt-in native hub high-availability (issue #71). The zero
+	// value (Enabled:false) preserves single-hub behaviour exactly.
+	HA HubHAConfig `yaml:"ha"`
+}
+
+// HubHAConfig is the opt-in native-HA block for federation.hub. When Enabled,
+// 2+ hub replicas elect one leader (k8s Lease); only the leader accepts spoke
+// pushes and serves authoritative /metrics. See docs/superpowers/specs/2026-06-09-hub-ha-design.md.
+type HubHAConfig struct {
+	Enabled        bool          `yaml:"enabled"`
+	LeaseName      string        `yaml:"lease_name"`
+	LeaseNamespace string        `yaml:"lease_namespace"` // "" ⇒ pod namespace at runtime
+	LeaseDuration  time.Duration `yaml:"lease_duration"`
+	RenewDeadline  time.Duration `yaml:"renew_deadline"`
+	RetryPeriod    time.Duration `yaml:"retry_period"`
+	// SnapshotShared marks the snapshot path as a shared RWX volume so a new
+	// leader warm-starts from the previous leader's snapshot. Optional.
+	SnapshotShared bool `yaml:"snapshot_shared"`
 }
 
 // FederationSpokeConfig holds the spoke's settings.

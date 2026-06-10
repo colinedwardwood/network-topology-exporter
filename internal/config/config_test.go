@@ -2567,3 +2567,17 @@ output:
 		t.Errorf("Output.YANG.NetworkID = %q, want my-net", c.Output.YANG.NetworkID)
 	}
 }
+
+func TestHubHADefaultsAndValidation(t *testing.T) {
+	c := &Config{}
+	c.Federation.Role = RoleHub
+	c.Federation.Hub.HA.Enabled = true
+	c.applyDefaults()
+	if c.Federation.Hub.HA.LeaseDuration != 15*time.Second || c.Federation.Hub.HA.RenewDeadline != 10*time.Second || c.Federation.Hub.HA.RetryPeriod != 2*time.Second {
+		t.Fatalf("HA defaults not applied: %+v", c.Federation.Hub.HA)
+	}
+	c.Federation.Hub.HA.RenewDeadline = 20 * time.Second // >= lease_duration
+	if err := c.validateFederation(); err == nil {
+		t.Fatal("expected validation error: renew_deadline >= lease_duration")
+	}
+}

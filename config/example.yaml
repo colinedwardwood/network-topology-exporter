@@ -267,6 +267,19 @@ snapshot:
 #     # 429 + Retry-After. 0 = disabled (default). Must be < spoke_timeout.
 #     # min_push_interval: 30s        # default 0 (disabled); set to ~½ spoke discovery_interval
 #
+#     # Native hub high-availability (issue #71). Opt-in; default off keeps
+#     # single-hub behaviour byte-identical (no k8s API calls, no elector).
+#     # When enabled, 2+ hub replicas elect one leader via a k8s Lease; only
+#     # the leader accepts spoke pushes and serves authoritative /metrics.
+#     # ha:
+#     #   enabled: false              # opt-in; default = today's single-hub
+#     #   lease_name: topology-exporter-hub   # k8s Lease name (default shown)
+#     #   lease_namespace: ""         # "" ⇒ the pod's own namespace at runtime
+#     #   lease_duration: 15s         # how long a lease is held before expiry
+#     #   renew_deadline: 10s         # must be < lease_duration
+#     #   retry_period: 2s            # acquire/renew retry; > 0 and < renew_deadline
+#     #   snapshot_shared: false      # true ⇒ warm-start from a shared RWX snapshot volume (optional)
+#
 #   # Spoke-side settings (role: spoke). mTLS is required.
 #   spoke:
 #     spoke_id: dc-a                  # unique identifier; used in hub metric labels
