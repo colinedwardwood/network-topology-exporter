@@ -51,6 +51,12 @@ Endpoints exposed on the listen address:
   discovery cycle completes.
 - `:9100/healthz` — liveness: returns `last_cycle_at` and an aggregate
   `device_errors` count.
+- `:9100/topology/yang` — the reconciled topology as an RFC 8345/8346
+  YANG-JSON document. Only served when `output.yang.enabled: true`
+  (see [`docs/operator/yang-topology.md`](docs/operator/yang-topology.md)).
+- `:9100/admin/rediscover` — `POST` forces an out-of-cycle re-discovery of a
+  target. Privileged: returns `403` unless `listen.web_config_file`
+  authenticates the caller (basic auth or client certs).
 
 (In hub-spoke mode the hub additionally listens on `:9101` for spoke pushes.)
 
@@ -310,7 +316,8 @@ When a spoke POSTs to the hub's `/spoke/push`, the hub replies with:
 | `400` | Malformed payload | Fatal for this payload (a retry fails identically) |
 | `403` | mTLS / identity failure (cert or `spoke_id` mismatch) | Fix certs / `spoke_id` |
 | `409` | Stale generation (older than the hub already holds) | Next cycle's fresher data wins |
-| `413` | Payload over the hub's device/edge cap | Reduce graph size / raise hub caps |
+| `413` | Payload too large — over the 32 MiB body cap (wire or gzip-decompressed) or the hub's device/edge cap | Reduce graph size / raise hub caps |
+| `415` | Unsupported `Content-Encoding` (hub accepts `gzip` or identity) | Set `federation.spoke.compression` to `gzip` or `none` |
 | `429` | Rate-limited (`min_push_interval` not yet elapsed) | Back off; next cycle |
 | `503` | Transient internal hub failure | Retry next cycle |
 

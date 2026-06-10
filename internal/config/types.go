@@ -206,7 +206,7 @@ type InterDomainLink struct {
 //
 // Scope (LD-11): CIDRAllowList is a hard bound on what the exporter polls.
 // Targets must fall within it; LLDP/CDP-discovered neighbours outside it
-// surface as network_topology_out_of_scope_neighbour and are never polled.
+// surface as network_topology_out_of_scope_neighbours_total and are never polled.
 //
 // UnconfirmedLinkTTLCycles (LD-14): a unidirectional link removed from the
 // graph after this many consecutive unconfirmed cycles. Default 3.

@@ -2,21 +2,24 @@
 
 > [!WARNING]
 > **This is a test release, not a stable v1.x.** Despite the existing
-> `v1.0.0`–`v1.3.0` tags, the project follows pre-1.0 stability
+> `v1.0.0`–`v1.3.x` tags, the project follows pre-1.0 stability
 > conventions: the public surface (config schema, metric names, CLI
 > flags, on-disk snapshot format, federation API) can break between
-> minor releases. Upcoming releases will use `-rc.N` suffixes —
-> next: `v1.4.0-rc.1`. Pin exact versions in anything you care about,
-> and please file issues for anything you can break.
+> minor releases. Releases use `-rc.N` suffixes to signal this.
+> Pin exact versions in anything you care about, and please file
+> issues for anything you can break.
 
-A standalone, AGPL-3.0-licensed Go exporter that discovers network topology over SNMP, LLDP, CDP, BGP, OSPF, FDB, IS-IS, and MPLS-TE, and emits four signals:
+A standalone, AGPL-3.0-licensed Go exporter that discovers network topology over SNMP — walking LLDP, CDP, BGP, OSPF, FDB, IS-IS, and MPLS-TE tables — and emits five signals:
 
 - **Prometheus metrics** for device inventory and topology edges, scraped via `/metrics`.
 - **Structured log lines** (JSON to stderr) for topology change events and operational state.
 - **A versioned JSON snapshot** on disk so `/metrics` serves the previous graph immediately on restart.
-- **OTLP push** (optional) — topology edges and devices as OTLP metrics, change events as OTLP log records, delivered directly to any OTLP-capable receiver.
+- **OTLP push** (optional) — topology edges and devices as OTLP metrics, change events as OTLP log records, and (opt-in) discovery-cycle traces, delivered directly to any OTLP-capable receiver.
+- **A YANG topology document** (optional) — `GET /topology/yang` renders the current reconciled graph as RFC 8345 / RFC 8346 YANG-JSON (`ietf-network` / L3 topology) for interchange with NETCONF/RESTCONF-aware tooling. Enable with `output.yang.enabled`.
 
 By default there is no bespoke control-plane API and the exporter does not push to external systems. Anything that needs the topology graph queries Prometheus / Mimir. Topology change events are log lines — ship them to Loki, Elasticsearch, or any log aggregator using the collector agent already in your stack (Promtail, Alloy, Fluentd). Enable `output.otlp` to additionally push topology state directly to an OTLP endpoint.
+
+Protocol names, MIB names, and other abbreviations used throughout the docs (OOS, USM, PDU, …) are defined in the [glossary](docs/glossary.md).
 
 ## Why this exists
 
@@ -26,7 +29,7 @@ For a side-by-side feature comparison with LibreNMS, SuzieQ, Nautobot, OpenNMS, 
 
 ## Status
 
-**Functionally complete, public surface intentionally unstable.** SNMP / LLDP / CDP / BGP / OSPF / FDB / IS-IS / MPLS-TE discovery, graph reconciliation, credential management, snapshot persistence, multi-instance federation, and optional OTLP push are all implemented and covered by unit, integration, and end-to-end tests. The project ships against test deployments and welcomes adversarial feedback — see the pre-release notice at the top of this README.
+**Functionally complete, public surface intentionally unstable.** SNMP / LLDP / CDP / BGP / OSPF / FDB / IS-IS / MPLS-TE discovery, graph reconciliation, credential management, snapshot persistence, multi-instance federation (including opt-in hub high availability), optional OTLP push, and optional RFC 8345 YANG output are all implemented and covered by unit, integration, and end-to-end tests. The project ships against test deployments and welcomes adversarial feedback — see the pre-release notice at the top of this README.
 
 The path to a real v1.0 GA — what's left, the per-release plan, and what's intentionally out of scope — is in [ROADMAP.md](ROADMAP.md).
 
@@ -84,13 +87,15 @@ The Kustomize overlays `standalone`, `hub`, and `spoke` map to the corresponding
 
 ### Prometheus metrics
 
+The table below is a representative subset — the full reference (all ~50 series, label values, cardinality budget, and recommended alerts) is [`docs/metrics.md`](docs/metrics.md).
+
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
 | `network_topology_device_info` | gauge (always 1) | `device_id`, `vendor`, `model`, `os_version`, `site` | One series per discovered device. |
 | `network_topology_device_uptime_seconds` | gauge | `device_id` | Per-device uptime from sysUpTime. |
 | `network_topology_edge_info` | gauge (always 1) | `src_device`, `src_port`, `dst_device`, `dst_port`, `discovery_proto`, `link_kind`, `direction` | One series per discovered edge. |
 | `network_topology_change_total` | counter | `change_kind` (added\|removed\|updated), `discovery_proto` | Topology mutations between cycles. Use `increase()` not `rate()`. |
-| `network_topology_out_of_scope_neighbours_total` | gauge | (none) | Count of LLDP/CDP neighbours outside the CIDR allow-list this cycle. Detail in log lines. |
+| `network_topology_out_of_scope_neighbours_total` | gauge | (none) | Count of LLDP/CDP neighbours outside the CIDR allow-list — "out of scope" (OOS) — this cycle. Detail in log lines. |
 | `network_topology_graph_stale` | gauge (0/1) | (none) | 1 while serving the startup snapshot; 0 after first live cycle. |
 | `network_topology_snapshot_last_written_timestamp_seconds` | gauge | (none) | Wall-clock time of most recent snapshot write. |
 | `network_topology_snapshot_loaded_devices_total` | gauge | (none) | Device count loaded from snapshot at startup. |
@@ -103,7 +108,7 @@ The Kustomize overlays `standalone`, `hub`, and `spoke` map to the corresponding
 | `network_topology_federation_spoke_up` | gauge (0/1) | `spoke_id` | Hub mode only. 1 while spoke has pushed within `spoke_timeout`; 0 after eviction. |
 | `network_topology_federation_spoke_last_push_timestamp_seconds` | gauge | `spoke_id` | Hub mode only. Wall-clock time of most recent push from each spoke. |
 | `network_topology_federation_spoke_push_failures_total` | counter | (none) | Spoke mode only. Incremented each time a push exhausts all retries. |
-| `network_topology_hub_oos_unmatched_total` | gauge | (none) | Hub mode only. OOS neighbour hints that could not be matched to any known device name. |
+| `network_topology_hub_oos_unmatched_total` | gauge | (none) | Hub mode only. Out-of-scope (OOS) neighbour hints that could not be matched to any known device name. |
 | `network_topology_otlp_push_total` | counter | `status` (ok\|error\|dropped) | Incremented after each OTLP push attempt. Only present when `output.otlp.enabled: true`. `dropped` means the per-process push concurrency limit (`maxOTLPPushConcurrency = 4`) was already saturated and this attempt was discarded without contacting the receiver — see troubleshooting §11/§OTLP push saturation. |
 
 Full label reference, cardinality budget, and recommended alerts: [`docs/metrics.md`](docs/metrics.md).
@@ -119,6 +124,19 @@ All operational output goes to structured JSON on stderr. Topology change events
 ```
 
 Ship these to Loki with the `{job="topology-exporter"}` label using the collector already in your stack.
+
+### YANG topology document
+
+When `output.yang.enabled: true`, `GET /topology/yang` renders the current reconciled topology as an RFC 8345 `ietf-network` document (with the RFC 8346 L3-unicast network-type marker and an `ntx-topology` augmentation carrying discovery provenance). This is an *interchange* encoding — the structured-document complement to the metric and log signals — for feeding the discovered graph into NETCONF/RESTCONF tooling or other controllers. The emitted document is validated against the canonical YANG modules with `yanglint` in CI.
+
+```yaml
+output:
+  yang:
+    enabled: true
+    network_id: network-topology-exporter   # the network-id in the emitted document
+```
+
+Mapping contract, module set, and example output: [`docs/operator/yang-topology.md`](docs/operator/yang-topology.md).
 
 ## Configuration
 
@@ -218,7 +236,7 @@ modules:
 | Juniper | `jnxBgpM2PeerTable` (1.3.6.1.4.1.2636.5.1.1.2.1.1) | Real-device validated against vJunos-router (JUNOS 25.4R1.12, 2026-06) — see `lab/juniper-jnxbgp/` |
 | Nokia | `tBgpPeerNgTable` (1.3.6.1.4.1.6527.3.1.2.14.4.7) | Real-device validated against SR-OS 25.7.R2 (7750 SR, 2026-06, #57). Modern SR-OS populates this next-gen table; the legacy `tBgpPeerTable` (.13.2) is empty, and pre-Ng SR-OS / SR Linux fall back to RFC 4273 |
 
-On Junos / SR-OS / SR Linux fleets, set `disable_v2_mib: true` until the per-vendor capture work lands. The walker exposes failure modes via `network_topology_bgp_walker_outcome_total{outcome=...}` (labels include `walker_drift`, `malformed_index`, `mib_unimplemented`) so a broken vendor walk is alertable rather than silent.
+All four vendor walkers are now real-device validated (the per-vendor capture milestone is complete). `disable_v2_mib: true` remains as the escape hatch if a vendor walker regresses on a newer firmware. The walker exposes failure modes via `network_topology_bgp_walker_outcome_total{outcome=...}` (labels include `walker_drift`, `malformed_index`, `mib_unimplemented`) so a broken vendor walk is alertable rather than silent.
 
 ### MPLS-TE (RFC 3812)
 
@@ -286,10 +304,14 @@ A single instance covers one contiguous CIDR range. Links that cross a boundary 
 | Mode | How it works |
 |---|---|
 | `uncoordinated` | Each instance emits `network_topology_boundary_observation_info` per OOS neighbour. A Mimir recording rule `count by(peer_a,peer_b,proto)(...) == 2` fires when both sides report — no inter-instance coordination required. |
-| `spoke` | Instances push their reconciled graph to a hub after each cycle. The hub aggregates, re-reconciles across all domains, and emits unified metrics. Requires mTLS. |
+| `spoke` | Instances push their reconciled graph to a hub after each cycle. The hub aggregates, re-reconciles across all domains, and emits unified metrics. Requires mutual TLS (mTLS). |
 | `hub` | Pure aggregator — no local SNMP discovery. Receives spoke pushes on a separate listener (default `:9101`). |
 
-Federation runbook (mTLS setup, tuning, troubleshooting): [`docs/operator/federation.md`](docs/operator/federation.md).
+Spoke pushes are gzip-compressed by default (`federation.spoke.compression: gzip`, or `none` to disable) — topology JSON typically shrinks 10–20×, keeping large graphs well below the hub's 32 MiB body cap.
+
+The hub can optionally run **highly available** on Kubernetes: multiple replicas elect a leader via a `Lease`, spokes follow the leader through a readiness-gated Service, and a fresh leader rebuilds the combined graph from the spokes' next pushes. HA is opt-in (`federation.hub.ha.enabled`); single-hub deployments are unchanged. See the [federation runbook](docs/operator/federation.md#hub-high-availability-native-opt-in).
+
+Federation runbook (mTLS setup, HA, tuning, troubleshooting): [`docs/operator/federation.md`](docs/operator/federation.md).
 
 Operator troubleshooting (no edges, SNMP timeouts, credential failures, slow cycles, snapshot issues): [`docs/operator/troubleshooting.md`](docs/operator/troubleshooting.md).
 

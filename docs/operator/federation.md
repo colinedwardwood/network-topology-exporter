@@ -1,6 +1,6 @@
 # Federation
 
-Federation lets multiple `network-topology-exporter` instances coordinate across administrative boundaries. This runbook covers choosing a mode, PKI setup, configuration, tuning, and troubleshooting.
+Federation lets multiple `network-topology-exporter` instances coordinate across administrative boundaries. This runbook covers choosing a mode, PKI setup, configuration, tuning, and troubleshooting. "OOS" throughout means *out of scope* — a neighbour outside the instance's CIDR allow-list; see the [glossary](../glossary.md).
 
 ## Mode selection
 

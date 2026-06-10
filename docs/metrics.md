@@ -1,6 +1,6 @@
 # Metrics Reference
 
-All metrics use the `network_` prefix. No metric uses a raw IP address or free-form text as a label value.
+All metrics use the `network_` prefix. No metric uses a raw IP address or free-form text as a label value. Abbreviations (OOS, MIB, PDU, …) are defined in the [glossary](glossary.md).
 
 ## Topology inventory
 
@@ -28,6 +28,7 @@ All metrics use the `network_` prefix. No metric uses a raw IP address or free-f
 | `network_topology_snapshot_last_written_timestamp_seconds` | gauge | Alert: absent or stopped advancing after two cycle intervals. |
 | `network_topology_snapshot_loaded_devices_total` | gauge | Sanity check at startup; compare to expected fleet size. |
 | `network_topology_snapshot_drops_total` | counter | Snapshot writes dropped because the persistence pipeline could not absorb them. `reason` ∈ {`queue_full`, `write_in_flight`}. Issue #42. Alert: `rate(...) > 0 for 5m` — persistent drops mean on-disk state is going stale; restart will cold-start from a worse position the longer the stall lasts. |
+| `network_topology_snapshot_queue_depth` | gauge | Current number of snapshots queued for writing. A persistently non-zero value means snapshot writes are slower than the discovery cycle produces them — the precursor to `snapshot_drops_total`. |
 
 ## Discovery cycle health
 
@@ -45,6 +46,27 @@ All metrics use the `network_` prefix. No metric uses a raw IP address or free-f
 | `network_topology_walker_outcome_total` | counter | `walker` (lldp\|cdp\|ospf\|fdb), `outcome` (edges\|mib_unimplemented\|no_neighbours\|walker_drift\|error) | Per-walker outcome accounting for the non-BGP discovery walkers — the generic sibling of `network_topology_bgp_walker_outcome_total`, added in #98. Additive and non-breaking: the BGP counter was **not** renamed and the two coexist. `outcome=edges` means the walker produced ≥1 edge; `mib_unimplemented` means the base table returned zero PDUs (the device does not implement the table — expected on non-applicable devices, **do not alert**); `no_neighbours` means PDUs arrived AND at least one row decoded cleanly but zero usable edges resulted (protocol up, nothing to report); `walker_drift` means PDUs arrived but EVERY row was rejected by the decoder (the MIB is implemented but our decoder doesn't match this firmware — page-level signal); `error` means the walk itself errored (emitted alongside `network_topology_discovery_hard_fail_total`). Mirrors the BGP four-bucket semantics. |
 | `network_topology_bgp_walker_outcome_total` | counter | `walker` (vendor_cisco\|vendor_arista\|vendor_juniper\|vendor_nokia\|rfc4273), `outcome` (edges\|no_peers\|mib_unimplemented\|walker_drift\|error\|malformed_index) | Per-walker outcome accounting for the BGP module's fallback chain. `outcome=edges` means the walker produced rows; `mib_unimplemented` means `BulkWalk` returned zero PDUs — the device does not implement the table (expected for non-BGP devices, do not alert); `no_peers` means PDUs arrived AND at least one row decoded cleanly but no peer reached `bgpStateEstablished` (BGP is configured but down — operationally distinct from `mib_unimplemented` and the correct signal for "BGP broken" alerts); `walker_drift` means PDUs arrived but EVERY row was rejected by the vendor decoder (the device DOES implement the MIB but our walker doesn't match — page-level signal that the walker is broken on this vendor's MIB); `error` means the SNMP walk failed and the next walker was tried; `malformed_index` means a row was dropped because its index couldn't be decoded under the spec's per-vendor decoder. A non-zero `malformed_index` rate on a known vendor is a signal that the column numbers or index format in `internal/discovery/bgp/bgp_vendor.go` may be wrong for that vendor's OS version — the documented failure mode this counter exists to surface. **Breaking change (issue #27):** the all-rows-malformed sub-case of the prior `no_peers` semantics was hoisted to its own `walker_drift` outcome. Operator alerts on `outcome="no_peers"` that expected to fire on "every row was decoder-rejected" must migrate to `outcome="walker_drift"`. **Earlier breaking change (issue #31, v1.3.0):** the prior `walker="v2_draft"` label has been removed (the IETF draft OID at 1.3.6.1.3.5 is not implemented by any vendor tested). The new `walker="vendor_arista"` label covers Arista cEOS via its enterprise BGP4V2 MIB at 1.3.6.1.4.1.30065.4. Operators alerting on `walker="v2_draft"` should migrate to `walker="vendor_arista"` or `walker="rfc4273"` depending on the device fleet. **Earlier breaking change (issue #15):** the prior `empty` outcome was split into `no_peers` and `mib_unimplemented`. |
 | `network_topology_system_walk_anomaly_total` | counter | `reason` (empty_sysname\|unknown_vendor) | Content anomalies in an otherwise-successful per-device SNMP system GET, added in #101. Closed two-value set, low cardinality — there is **no** device/IP/OID label. `empty_sysname` means the system GET succeeded but `sysName` was empty/garbage, so the device ID falls back to the management IP. `unknown_vendor` means the `sysObjectID` did not resolve to a known vendor (Vendor stays `"unknown"`), so the vendor-specific BGP4-V2 walker is skipped — BGP still falls through to the observable RFC 4273 path, so this signal flags *which* devices were never tried against a vendor table rather than indicating a BGP failure. |
+| `network_topology_module_last_status` | gauge | `module` | Status of each discovery module in the most recent cycle: `0` = ok, `1` = degraded (partial results), `2` = failed (no results). The point-in-time companion to the `degraded`/`hard_fail` counters — alert on `network_topology_module_last_status >= 1` for a sustained period. |
+| `network_topology_cycle_budget_skips_total` | counter | (none) | Targets skipped in a discovery cycle because the cycle budget deadline expired before their goroutine could start. Non-zero means the fleet does not fit in `discovery.interval` — see `docs/operator/scale.md`. |
+| `network_topology_fdb_suppressed_macs_total` | counter | (none) | FDB MAC peers dropped because no LLDP chassis-MAC correlation was found. These passed the single-learned-MAC filter but could not be resolved to a device identity — enable `modules.arp.enabled` or expect host MACs on access ports. |
+| `network_topology_snmp_rate_limit_wait_seconds` | histogram | (none) | Time spent blocked on the per-target SNMP rate limiter before issuing a walk (issue #72). Non-zero observations mean `per_target_pdu_rate_per_second` is biting; sustained waits stretch the cycle. |
+
+## SNMP session pool
+
+All four series are zero unless `discovery.snmp.session_pool.enabled` (issue #83).
+
+| Metric | Type | Labels | Notes |
+|--------|------|--------|-------|
+| `network_topology_snmp_session_pool_size` | gauge | (none) | Current number of pooled SNMP sessions — one per (target, credential profile). |
+| `network_topology_snmp_session_pool_hits_total` | counter | (none) | Checkouts that reused a live pooled session. |
+| `network_topology_snmp_session_pool_misses_total` | counter | (none) | Checkouts that opened a fresh session (cold key or in-use fallback). |
+| `network_topology_snmp_session_pool_evictions_total` | counter | `reason` (idle\|credential_rotation\|connection_error) | Sessions closed and removed from the pool. `connection_error` evictions mean a transport-level walk failure closed the session so the next acquire dials fresh. |
+
+## Admin endpoints
+
+| Metric | Type | Labels | Notes |
+|--------|------|--------|-------|
+| `network_topology_admin_rediscovery_total` | counter | `outcome` (success\|timeout\|auth_failure\|out_of_scope\|error) | Per-target outcomes of forced out-of-cycle re-discovery via `POST /admin/rediscover` (issue #73). The endpoint only operates when `listen.web_config_file` actually authenticates the caller. |
 
 ## Cardinality budget
 
@@ -62,8 +84,17 @@ This is well within Prometheus defaults. If LLDP and CDP both report the same li
 | Metric | Type | Labels | Notes |
 |--------|------|--------|-------|
 | `network_topology_otlp_push_total` | counter | `status` (ok\|error\|dropped), `reason` | Incremented after each OTLP push attempt (both `/v1/metrics` and `/v1/logs` share this counter). Only present when `output.otlp.enabled: true`. `reason` partitions `status="error"` into `timeout`, `tls_error`, `http_4xx`, `http_5xx`, `payload_rejected`, `network` (the catch-all for transport faults — DNS, connection refused, EOF). `status="ok"` and `status="dropped"` rows carry `reason="n/a"`. `dropped` means the per-process push concurrency limit (`maxOTLPPushConcurrency = 4`) was saturated and the push was discarded without contacting the receiver — see operator troubleshooting "OTLP push saturation". **Breaking change (issue #20):** label set widened from `{status}` to `{status, reason}`. Migrate `{status="error"}` queries to `sum by (status)(...)` or branch on the new `reason` for triage (`reason="tls_error"` → cert problem; `reason="http_5xx"` → receiver crashing; `reason="network"` → collector down). Mirrors the partition that landed for `network_topology_graph_updates_rejected_total` in D29. |
+
+## Process self-observability
+
+| Metric | Type | Labels | Notes |
+|--------|------|--------|-------|
 | `network_topology_metrics_render_duration_seconds` | histogram | (none) | Wall time to render one `/metrics` scrape response. Alert at p99 against the scraper's `scrape_timeout`. See `docs/operator/scale.md` for guidance. |
 | `network_topology_metrics_payload_bytes` | histogram | (none) | Response body size of one `/metrics` scrape, in bytes. Tracks growth as the topology scales; useful for capacity planning. See `docs/operator/scale.md`. |
+| `network_topology_last_scrape_duration_seconds` | gauge | (none) | Time taken to render all topology metrics at the most recent scrape — the point-in-time companion to the render-duration histogram. |
+| `network_topology_last_scrape_samples_total` | gauge | (none) | Number of metric samples emitted at the most recent scrape. Watch this against the cardinality budget below as the topology grows. |
+| `network_topology_goroutines` | gauge | (none) | Current number of live goroutines in the process. A monotonic climb across cycles indicates a leak. |
+| `network_topology_panics_total` | counter | `site` | Panics recovered in background goroutines, by recovery site. Any non-zero value indicates a bug — alert on increase and file an issue. |
 
 ## Federation
 
@@ -73,6 +104,9 @@ This is well within Prometheus defaults. If LLDP and CDP both report the same li
 | `network_topology_federation_spoke_up` | gauge (0/1) | `spoke_id` | Hub mode only. 1 while a spoke has pushed within `federation.spoke_timeout`; drops to 0 after eviction. Alert: `network_topology_federation_spoke_up == 0` |
 | `network_topology_federation_spoke_last_push_timestamp_seconds` | gauge | `spoke_id` | Hub mode only. Unix timestamp in seconds of the most recent push from each spoke. Alert: `time() - network_topology_federation_spoke_last_push_timestamp_seconds > federation.spoke_timeout` |
 | `network_topology_federation_spoke_push_failures_total` | counter | (none) | Spoke mode only. Incremented each time a push attempt exhausts all retries. A non-zero rate means the hub is not receiving topology data from this spoke. |
+| `network_topology_federation_spoke_push_last_success_unix` | gauge | (none) | Spoke mode only. Unix timestamp (seconds) of this spoke's most recent successful push to the hub — the spoke-side counterpart of the hub's `..._last_push_timestamp_seconds`. Alert: `time() - value` exceeding a few `discovery.interval`s. |
+| `network_topology_federation_spoke_push_drops_total` | counter | `reason` (superseded\|shutdown) | Spoke mode only. Payloads dropped by the async pusher's latest-only mailbox. `superseded` is normal under hub slowness (a newer graph replaced a queued one — only the freshest snapshot matters); `shutdown` counts payloads abandoned at process exit. |
+| `network_topology_federation_spoke_push_queue_depth` | gauge | (none) | Spoke mode only. Depth of the spoke async-push mailbox (0 or 1 by design — the mailbox holds only the latest unsent graph). |
 | `network_topology_hub_oos_unmatched_total` | gauge | (none) | Hub mode only. Count of out-of-scope hints received this cycle that could not be matched to any known device name via `normalizeDeviceName`. A value > 0 indicates vendor chassis-id encoding differences; add static `known_inter_domain_links` entries as the reliable workaround. |
 | `network_topology_graph_updates_rejected_total` | counter | `reason` (size_budget_exceeded\|invalid_label_key\|invalid_label_value\|structural_invalid\|stale_generation) | Combined-graph updates rejected at publish time, partitioned by reason. `size_budget_exceeded` means the graph exceeded `MaxGraphEdges` or `MaxGraphDevices` (either federation hub or local standalone). `invalid_label_key` / `invalid_label_value` / `structural_invalid` are hub-mode only and mean a spoke-supplied payload failed validation — label safety (`invalid_label_*`) or structural invariants such as empty identifiers, duplicate device IDs, self-edges, or oversize fields (`structural_invalid`). `stale_generation` means the spoke pushed an older graph generation than the hub already holds. See `docs/operator/federation.md` for the on-wire reject contract. Alert: `rate(network_topology_graph_updates_rejected_total[5m]) > 0`, with per-reason breakdown for triage. |
 

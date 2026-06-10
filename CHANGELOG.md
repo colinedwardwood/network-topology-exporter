@@ -113,6 +113,23 @@
   `publish` instead of a three-value tuple re-assigned at every call site. No
   behaviour change.
 
+- Documentation refresh. The README now lists all five emitted signals (the
+  RFC 8345/8346 YANG output was missing), documents hub HA and gzip push
+  compression in the federation section, drops the stale "until the per-vendor
+  capture work lands" BGP4V2 guidance (all four vendor walkers are
+  real-device validated), and no longer names a specific next release in the
+  pre-release banner. `docs/metrics.md` gained the 17 series that were
+  implemented but undocumented (SNMP session pool, spoke async-pusher,
+  `/admin/rediscover` outcomes, module last-status, cycle-budget skips, FDB
+  suppression, rate-limiter wait, and a new process self-observability
+  section). New `docs/glossary.md` defines the abbreviations used across the
+  docs (OOS, MIB, PDU, USM, …) and is linked from the README, metrics
+  reference, and federation runbook. `GETTING_STARTED.md` documents the
+  `/topology/yang` and `/admin/rediscover` endpoints and the hub's `415`
+  response for unsupported push encodings. `docs/architecture.md`'s output
+  contract now covers the opt-in OTLP traces and YANG paths instead of
+  declaring trace export out of scope.
+
 - CI gains a build-tag-agnostic `gofmt -s -l .` gate. golangci-lint's
   formatter pass only analyses packages loaded under the default tag set, so
   files behind `//go:build e2e` had silently drifted out of format; they are
