@@ -290,7 +290,7 @@ func RunCycle(
 			// supplies FULL instrumentation (metrics + tracer + logger) so its
 			// behaviour is byte-identical to the pre-extraction inline loop.
 			mEdges, mOOS, modStatus := walkModules(devCtx, cfg, *dev, ip, params, allowedNets,
-				moduleInstrumentation{metrics: m, tracer: tracing.Tracer(), logger: logger})
+				moduleInstrumentation{metrics: m, tracer: tracing.Tracer(), logger: logger, host: target.Host})
 			allEdges = append(allEdges, mEdges...)
 			allOOS = append(allOOS, mOOS...)
 

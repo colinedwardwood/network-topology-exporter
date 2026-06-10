@@ -59,6 +59,11 @@ type moduleInstrumentation struct {
 	metrics *metrics.Metrics
 	tracer  trace.Tracer
 	logger  *slog.Logger
+	// host is the display label for logs — the configured target host
+	// (cycle) or the resolved IP (rediscover). The per-module failure log
+	// uses it so a hostname target surfaces its configured name rather than
+	// the resolved IP.
+	host string
 }
 
 // walkModules runs every enabled-and-in-scope module against one device and
@@ -119,7 +124,7 @@ func walkModules(
 			modSpan.SetAttributes(attribute.Int("walk.pdu_count", len(mEdges)))
 		}
 		if err != nil {
-			inst.logger.Debug(mod.Proto+" walk failed", "target", ip.String(), "error", err)
+			inst.logger.Debug(mod.Proto+" walk failed", "target", inst.host, "error", err)
 			if modSpan != nil {
 				modSpan.SetAttributes(attribute.String("walk.outcome", "failed"))
 				modSpan.RecordError(err)

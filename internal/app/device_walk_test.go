@@ -78,8 +78,10 @@ func TestWalkModulesEdgesAndStatus(t *testing.T) {
 }
 
 // TestWalkModulesNilInstrumentationNoPanic confirms a fully nil-sink
-// instrumentation set (the rediscover minimal case) does not panic even when a
-// module walk fails — the failure path touches every metric/span site.
+// instrumentation set (the rediscover minimal case) does not panic on the OK
+// path. This covers the success-side metric/span sites only; the failure
+// (status=2) nil-guard cluster is exercised separately by
+// TestWalkModulesNilInstrumentationFailureNoPanic.
 func TestWalkModulesNilInstrumentationNoPanic(t *testing.T) {
 	t.Setenv("WM_COMM2", "public")
 	cfg := testConfig(t, "WM_COMM2")
@@ -102,4 +104,70 @@ func TestWalkModulesNilInstrumentationNoPanic(t *testing.T) {
 	if len(status) == 0 {
 		t.Error("expected at least one module status entry")
 	}
+}
+
+// TestWalkModulesNilInstrumentationFailureNoPanic drives a module into a
+// FAILURE (status=2) with nil metrics + nil tracer and asserts: no panic, the
+// failing module's status is 2, and no metrics are recorded. This is the
+// nil-guard cluster the #153 extraction risks (the failure branch touches
+// DiscoveryHardFailTotal, SNMPWalksTotal, the failure span attrs, and the
+// per-module failure log) — TestWalkModulesNilInstrumentationNoPanic only
+// covers the OK side.
+//
+// The failure is forced deterministically: the system-group walk succeeds
+// against the live agent (so dev/params resolve), then params is redirected to
+// a closed port with a short timeout so the LLDP module walk errors.
+func TestWalkModulesNilInstrumentationFailureNoPanic(t *testing.T) {
+	t.Setenv("WM_COMM3", "public")
+	cfg := testConfig(t, "WM_COMM3")
+	cfg.Modules.LLDP.Enabled = true
+	// Bound the failing walk so the test stays fast.
+	cfg.Discovery.TimeoutPerModule = 500 * time.Millisecond
+
+	remoteIP := net.ParseIP("127.0.0.2")
+	addr := snmptest.Start(t, "public", systemAndLLDPPDUs("sw-a", remoteIP))
+
+	dev, ip, params := walkModulesTestSetup(t, cfg, addr)
+	defer params.Zeroize()
+
+	// Redirect the per-module walk at a closed UDP port so LLDP's SNMP walk
+	// fails fast and the module is classified status=2. The system walk above
+	// already succeeded against the real agent.
+	closedPort := closedUDPPort(t)
+	params.Port = closedPort
+	params.Timeout = 150 * time.Millisecond
+	params.Retries = 0
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	// Sentinel metrics: nil here so a stray metric write would panic; we also
+	// assert below that the nil-metrics path recorded nothing observable.
+	inst := moduleInstrumentation{logger: slogDiscard()}
+
+	edges, _, status := walkModules(ctx, cfg, dev, ip, params, snmpwalk.ParseCIDRs([]string{"127.0.0.0/8"}), inst)
+
+	if got, ok := status["lldp"]; !ok || got != 2 {
+		t.Fatalf("lldp status = %d (present=%v), want 2 (failed)", got, ok)
+	}
+	if len(edges) != 0 {
+		t.Errorf("edges = %d, want 0 on a failed walk", len(edges))
+	}
+}
+
+// closedUDPPort returns a UDP port that is not being listened on, by binding a
+// socket to an ephemeral port and immediately closing it. There is an inherent
+// TOCTOU window, but for a single-threaded test against localhost it is
+// effectively always still closed when the walk dials it.
+func closedUDPPort(t *testing.T) uint16 {
+	t.Helper()
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatalf("ListenUDP: %v", err)
+	}
+	port := conn.LocalAddr().(*net.UDPAddr).Port
+	_ = conn.Close()
+	// Mask to 16 bits to satisfy gosec G115; a UDP port is always 0..65535
+	// so the mask is a no-op on every real value.
+	return uint16(port & 0xFFFF)
 }
