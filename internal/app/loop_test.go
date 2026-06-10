@@ -10,8 +10,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/colinedwardwood/network-topology-exporter/internal/app/httpx"
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
+	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
+	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+	"github.com/colinedwardwood/network-topology-exporter/internal/events"
+	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
 	"github.com/colinedwardwood/network-topology-exporter/internal/loglimit"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
 	"github.com/colinedwardwood/network-topology-exporter/internal/output/otlp"
@@ -120,6 +126,110 @@ func TestOtlpPushNoOpWhenDisabled(t *testing.T) {
 		t.Error("push fn ran on a disabled publisher")
 	}
 	p.Drain() // must not panic on a nil wg
+}
+
+// publishTestLoopConfig builds a minimal LoopConfig for exercising publish in
+// isolation: real metrics, a disabled (no-op) OTLP publisher, a real resolver,
+// and no snapshot channel / spoke pusher. Ready is wired so the happy path can
+// exercise the CAS without nil-deref.
+func publishTestLoopConfig(t *testing.T, m *metrics.Metrics) (LoopConfig, *credentials.Resolver) {
+	t.Helper()
+	cfg := testConfig(t, "TEST_COMM")
+	cfg.Output.OTLP.HeartbeatCycles = 1
+	resolver, err := credentials.New(cfg.Credentials)
+	if err != nil {
+		t.Fatalf("credentials.New: %v", err)
+	}
+	var ready atomic.Bool
+	return LoopConfig{
+		Logger: slogDiscard(),
+		Cfg:    cfg,
+		M:      m,
+		Ready:  &ready,
+		Otlp:   &otlpPublisher{}, // disabled: Push is a no-op
+	}, resolver
+}
+
+func edge(src, dst string) discovery.Edge {
+	return discovery.Edge{
+		SrcDevice: src, SrcPort: "p1", DstDevice: dst, DstPort: "p2",
+		DiscoveryProto: discovery.DiscoveryProtocolLLDP,
+	}
+}
+
+// TestPublishAdvancesAgesAndDiffsAgainstOldPrev pins condition C8: ages always
+// advance to newAges on BOTH the size-budget-reject path and the happy path,
+// and the diff is computed against the OLD prevGraph passed in (so a second
+// publish against the returned prevGraph sees no further change).
+func TestPublishAdvancesAgesAndDiffsAgainstOldPrev(t *testing.T) {
+	ctx := context.Background()
+	keyA := graph.EdgeKey{}
+	const lldp = string(discovery.DiscoveryProtocolLLDP)
+
+	t.Run("size-reject advances ages and publishes nothing", func(t *testing.T) {
+		m := metrics.New(false)
+		lc, resolver := publishTestLoopConfig(t, m)
+		lc.Cfg.Discovery.MaxGraphEdges = 1
+		ev := events.New(slogDiscard())
+
+		prev := discovery.Graph{Edges: []discovery.Edge{edge("a", "b")}}
+		newG := discovery.Graph{Edges: []discovery.Edge{edge("a", "b"), edge("c", "d")}} // 2 > budget 1
+		newAges := map[graph.EdgeKey]int{keyA: 7}
+
+		nextPrev, nextAges, _ := lc.publish(ctx, ctx, ev, resolver, nil, nil,
+			prev, newG, newAges, nil, 1, time.Now(), publishState{})
+
+		if nextAges[keyA] != 7 {
+			t.Fatalf("ages not advanced on reject path: got %v", nextAges)
+		}
+		// prevGraph must be unchanged (the rejected newG is not published).
+		if len(nextPrev.Edges) != 1 {
+			t.Fatalf("prevGraph changed on reject path: got %d edges, want 1", len(nextPrev.Edges))
+		}
+		if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(string(metrics.RejectReasonSizeBudgetExceeded))); got != 1 {
+			t.Fatalf("reject metric = %v, want 1", got)
+		}
+		// Nothing published: no topology-change events recorded.
+		if got := testutil.ToFloat64(m.TopologyChangeTotal.WithLabelValues("added", lldp)); got != 0 {
+			t.Fatalf("change metric = %v on reject path, want 0", got)
+		}
+	})
+
+	t.Run("happy path advances ages, diffs old prev, reassigns prev", func(t *testing.T) {
+		m := metrics.New(false)
+		lc, resolver := publishTestLoopConfig(t, m)
+		ev := events.New(slogDiscard())
+
+		prev := discovery.Graph{Edges: []discovery.Edge{edge("a", "b")}}
+		newG := discovery.Graph{Edges: []discovery.Edge{edge("a", "b"), edge("c", "d")}}
+		newAges := map[graph.EdgeKey]int{keyA: 7}
+
+		nextPrev, nextAges, _ := lc.publish(ctx, ctx, ev, resolver, nil, nil,
+			prev, newG, newAges, nil, 1, time.Now(), publishState{})
+
+		if nextAges[keyA] != 7 {
+			t.Fatalf("ages not advanced on happy path: got %v", nextAges)
+		}
+		if len(nextPrev.Edges) != 2 {
+			t.Fatalf("prevGraph not reassigned to newGraph: got %d edges, want 2", len(nextPrev.Edges))
+		}
+		firstChanges := testutil.ToFloat64(m.TopologyChangeTotal.WithLabelValues("added", lldp))
+		if firstChanges == 0 {
+			t.Fatalf("expected an 'added' change vs old prevGraph, got 0")
+		}
+		if got := testutil.ToFloat64(m.GraphStale); got != 0 {
+			t.Fatalf("GraphStale = %v, want 0 after happy publish", got)
+		}
+
+		// Second publish against the returned prevGraph with an identical
+		// newGraph must produce NO further 'added' change — proving the diff
+		// ran against the OLD prevGraph, and the caller-owned reassignment took.
+		_, _, _ = lc.publish(ctx, ctx, ev, resolver, nil, nil,
+			nextPrev, newG, newAges, nil, 2, time.Now(), publishState{})
+		if got := testutil.ToFloat64(m.TopologyChangeTotal.WithLabelValues("added", lldp)); got != firstChanges {
+			t.Fatalf("second publish recorded extra changes: got %v, want %v", got, firstChanges)
+		}
+	})
 }
 
 // TestRunDiscoveryLoopShutsDownCleanly drives the full loop against an
