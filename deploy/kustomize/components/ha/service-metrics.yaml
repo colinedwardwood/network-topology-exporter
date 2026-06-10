@@ -1,7 +1,7 @@
 # Native hub HA (#71): headless metrics Service so Prometheus scrapes EVERY
 # replica. The primary push Service (base service.yaml) is readiness-gated to
 # the leader only; that gate would hide follower /metrics, so HA adds this
-# headless Service with publishNotReadyAddresses: true and the all-pods
+# headless Service with publishNotReadyAddresses: true and an all-hub-pods
 # selector. Mirrors deploy/helm/topology-exporter/templates/service-metrics.yaml.
 apiVersion: v1
 kind: Service
@@ -20,5 +20,10 @@ spec:
       port: 9100
       targetPort: metrics
       protocol: TCP
+  # All hub pods of this instance. The instance label is set by the hub
+  # overlay's labels transformer, which the component can't see at authoring
+  # time, so it's hardcoded here: it MUST match the hub overlay's
+  # app.kubernetes.io/instance value (deploy/kustomize/overlays/hub).
   selector:
     app.kubernetes.io/name: topology-exporter
+    app.kubernetes.io/instance: hub
