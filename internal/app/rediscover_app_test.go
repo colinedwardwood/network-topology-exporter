@@ -141,6 +141,57 @@ func TestRediscoverHappyPath(t *testing.T) {
 	}
 }
 
+// TestRediscoverEmitsNoPerCycleMetrics pins the intentional instrumentation
+// gap (issue #153, spec C2): the /admin/rediscover forced walk must return the
+// same (outcome, edgeCount) as the inline loop did AND emit ZERO per-cycle
+// walker/decode/module-duration metric series. Feeding those series from the
+// out-of-cycle path would corrupt the cycle's rate(...) dashboards, so routing
+// walkOne through the shared walkModules helper must keep passing nil
+// metrics + nil tracer and leave params.WalkerMetrics unset. This test locks
+// that invariant; it passed against the pre-refactor inline loop too.
+func TestRediscoverEmitsNoPerCycleMetrics(t *testing.T) {
+	t.Setenv("TEST_COMM", "public")
+	cfg := testConfig(t, "TEST_COMM")
+	m := metrics.New(false)
+
+	remoteIP := net.ParseIP("127.0.0.2")
+	addr := snmptest.Start(t, "public", systemAndLLDPPDUs("sw-a", remoteIP))
+	ip, port := snmptest.ParseAddr(addr)
+
+	rd := newTestRediscoverer(t, cfg, m, []string{"127.0.0.0/8"}, true)
+	rd.targetPortOverride = map[string]uint16{ip.String(): port}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	results := rd.Rediscover(ctx, []string{ip.String()})
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if results[0].Outcome != RediscoverSuccess {
+		t.Fatalf("outcome = %q (err=%q), want success", results[0].Outcome, results[0].Error)
+	}
+	if results[0].Edges != 1 {
+		t.Errorf("edges = %d, want 1", results[0].Edges)
+	}
+
+	// No per-cycle walker-outcome series (driven by params.WalkerMetrics, left
+	// unset by rediscover).
+	if got := testutil.CollectAndCount(m.WalkerOutcomeTotal); got != 0 {
+		t.Errorf("walker_outcome_total series = %d, want 0 (rediscover emits none)", got)
+	}
+	if got := testutil.CollectAndCount(m.BGPWalkerOutcomeTotal); got != 0 {
+		t.Errorf("bgp_walker_outcome_total series = %d, want 0 (rediscover emits none)", got)
+	}
+	// No per-module SNMP-walk counter (driven by inst.metrics, passed nil).
+	if got := testutil.CollectAndCount(m.SNMPWalksTotal); got != 0 {
+		t.Errorf("snmp_walks_total series = %d, want 0 (rediscover emits none)", got)
+	}
+	// No per-module duration histogram observations.
+	if got := testutil.CollectAndCount(m.DiscoveryModuleDuration); got != 0 {
+		t.Errorf("discovery_module_duration_seconds series = %d, want 0 (rediscover emits none)", got)
+	}
+}
+
 // TestRediscoverInvalidIPRejected verifies a non-IP target string is rejected
 // with the error outcome and never walked.
 func TestRediscoverInvalidIPRejected(t *testing.T) {
