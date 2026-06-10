@@ -289,10 +289,16 @@ func Run(ctx context.Context, args []string) int {
 			hub.SetLeader(false)
 
 			// Fence-token epoch source (design §4.4). Prefer the Lease's
-			// server-assigned, monotonic LeaderTransitions (orders writes
-			// across pods); fall back to a process-local monotonic counter if
-			// the elector can't read it (degrades to last-writer-wins, which is
-			// corruption-free via atomic rename — never a panic).
+			// server-assigned LeaderTransitions, which orders writes across pods.
+			// When NO EpochReader is available (e.g. the fake elector in tests),
+			// fall back to a process-local monotonic counter. When an EpochReader
+			// IS present but a transient CurrentEpoch read ERRORS, retain the
+			// hub's current epoch rather than overwriting it with the local
+			// counter: the server epoch and the local counter live in different
+			// number spaces, so substituting one for the other can DECREASE the
+			// stored epoch and make the snapshot fence refuse this pod's own
+			// writes. The guarantee here is "never decrease": the real-elector
+			// path advances only on a successful read and otherwise holds steady.
 			epochReader, _ := elector.(federation.EpochReader)
 			var localEpoch atomic.Uint64
 
@@ -303,17 +309,25 @@ func Run(ctx context.Context, args []string) int {
 				defer recoverGoroutine("hub_elector", logger, m)
 				rerr := elector.Run(ctx, federation.LeaderCallbacks{
 					OnStartedLeading: func(c context.Context) {
-						epoch := localEpoch.Add(1)
-						if epochReader != nil {
-							if e, ferr := epochReader.CurrentEpoch(c); ferr != nil {
-								logger.Warn("hub HA: lease epoch read failed; using local counter", "error", ferr, "local_epoch", epoch)
-							} else {
-								epoch = e
-							}
-						}
 						hub.SetLeader(true)
-						hub.SetLeaseEpoch(epoch)
-						logger.Info("hub HA: became leader", "identity", identity, "lease_epoch", epoch)
+						if epochReader == nil {
+							// No server epoch available; use the local counter.
+							epoch := localEpoch.Add(1)
+							hub.SetLeaseEpoch(epoch)
+							logger.Info("hub HA: became leader", "identity", identity, "lease_epoch", epoch)
+							return
+						}
+						e, ferr := epochReader.CurrentEpoch(c)
+						if ferr != nil {
+							// Transient read error: keep the existing epoch so we
+							// never go backward. The fence stays at its last value.
+							logger.Warn("hub HA: lease epoch read failed; retaining current epoch",
+								"error", ferr, "current_epoch", hub.LeaseEpoch())
+							logger.Info("hub HA: became leader", "identity", identity, "lease_epoch", hub.LeaseEpoch())
+							return
+						}
+						hub.SetLeaseEpoch(e)
+						logger.Info("hub HA: became leader", "identity", identity, "lease_epoch", e)
 					},
 					OnStoppedLeading: func() {
 						// Step down NOW (design §4.3). The T3 Connection:close

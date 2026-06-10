@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/colinedwardwood/network-topology-exporter/internal/snapshot"
 )
 
 func TestHubLeadershipState(t *testing.T) {
@@ -66,6 +68,69 @@ func TestFakeElectorDrivesCallbacks(t *testing.T) {
 	if err := <-done; err == nil {
 		t.Fatal("Run should return ctx.Err() after cancel")
 	}
+}
+
+// TestEvictionGatedOnLeadership verifies Fix 1 of the Task-6 follow-up: a
+// DEMOTED leader (isLeader=false but still holding spoke entries) must NOT
+// run eviction-driven republish/snapshot, while a leader still evicts as
+// before (single-hub regression check).
+func TestEvictionGatedOnLeadership(t *testing.T) {
+	t.Run("non-leader does not evict, republish, or snapshot", func(t *testing.T) {
+		var snapshotWrites atomic.Int64
+		h := NewHub(config.FederationConfig{SpokeTimeout: 100 * time.Millisecond}, metrics.New(false), nil, "")
+		h.snapshotWriteFn = func(string, snapshot.File) error {
+			snapshotWrites.Add(1)
+			return nil
+		}
+		h.SetLeader(false)
+
+		h.mu.Lock()
+		h.spokes["dc-a"] = spokeEntry{
+			payload:  SpokePayload{SpokeID: "dc-a"},
+			lastSeen: time.Now().Add(-time.Second), // already expired
+		}
+		h.mu.Unlock()
+
+		genBefore := h.publishGen.Load()
+		h.evictSilentSpokes()
+
+		h.mu.Lock()
+		_, present := h.spokes["dc-a"]
+		h.mu.Unlock()
+		if !present {
+			t.Error("non-leader must not evict spokes")
+		}
+		if got := h.publishGen.Load(); got != genBefore {
+			t.Errorf("non-leader republished: publishGen %d -> %d", genBefore, got)
+		}
+		if got := snapshotWrites.Load(); got != 0 {
+			t.Errorf("non-leader wrote %d snapshots, want 0", got)
+		}
+	})
+
+	t.Run("leader still evicts and republishes (regression)", func(t *testing.T) {
+		h := NewHub(config.FederationConfig{SpokeTimeout: 100 * time.Millisecond}, metrics.New(false), nil, "")
+		// NewHub defaults isLeader=true (single-hub mode).
+		h.mu.Lock()
+		h.spokes["dc-a"] = spokeEntry{
+			payload:  SpokePayload{SpokeID: "dc-a"},
+			lastSeen: time.Now().Add(-time.Second), // already expired
+		}
+		h.mu.Unlock()
+
+		genBefore := h.publishGen.Load()
+		h.evictSilentSpokes()
+
+		h.mu.Lock()
+		_, present := h.spokes["dc-a"]
+		h.mu.Unlock()
+		if present {
+			t.Error("leader must still evict expired spokes")
+		}
+		if got := h.publishGen.Load(); got == genBefore {
+			t.Errorf("leader did not republish after eviction: publishGen still %d", got)
+		}
+	})
 }
 
 func TestIsReadyRequiresLeadership(t *testing.T) {

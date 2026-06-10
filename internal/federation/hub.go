@@ -939,6 +939,15 @@ func (h *Hub) runEviction(ctx context.Context) {
 }
 
 func (h *Hub) evictSilentSpokes() {
+	// Eviction republishes the combined graph and writes a snapshot, so it is a
+	// leader-only path (mirrors the leader gate on handlePush, T3). A DEMOTED
+	// leader still holds spoke entries and its now-stale lease epoch; without
+	// this guard its next eviction tick would republish its graph and attempt a
+	// snapshot write under that stale epoch. Single-hub mode defaults isLeader
+	// true (NewHub), so eviction runs exactly as before.
+	if !h.isLeader.Load() {
+		return
+	}
 	now := time.Now()
 	h.mu.Lock()
 	var evicted []string
@@ -1086,10 +1095,18 @@ func (h *Hub) SetLeader(v bool) { h.isLeader.Store(v) }
 
 // SetLeaseEpoch records the fence token (#71 §4.4) for shared-snapshot writes.
 // Invoked by the LeaderElector wiring on OnStartedLeading with the Lease's
-// monotonic LeaderTransitions count, so a resumed stale leader carrying a lower
-// epoch has its snapshot write refused (snapshot.ErrStaleEpoch). A no-op-safe
-// store: single-hub mode never calls it, leaving leaseEpoch 0 (unfenced).
+// server-assigned LeaderTransitions count, which orders writes across pods so a
+// resumed stale leader carrying a lower epoch has its snapshot write refused
+// (snapshot.ErrStaleEpoch). The wiring guarantees the value never decreases for
+// a given pod: on a transient epoch-read error it retains the current epoch
+// rather than substituting an unrelated local counter (see internal/app). A
+// no-op-safe store: single-hub mode never calls it, leaving leaseEpoch 0
+// (unfenced).
 func (h *Hub) SetLeaseEpoch(epoch uint64) { h.leaseEpoch.Store(epoch) }
+
+// LeaseEpoch returns the current fence token (#71 §4.4). Used by the elector
+// wiring to keep the epoch monotonic across re-acquisitions.
+func (h *Hub) LeaseEpoch() uint64 { return h.leaseEpoch.Load() }
 
 // writeSnapshot persists the hub's current graph to disk (LD-13). A no-op
 // when snapshotPath is empty. Hub snapshots omit credential cache and
