@@ -23,6 +23,14 @@
 
 ### Changed
 
+- The discovery loop and the `/admin/rediscover` endpoint now share one LD-12
+  credential resolver (#169). Previously each path held an independent
+  resolver: a sticky-credential win recorded by an admin forced walk was
+  invisible to the next regular cycle (which re-ran the full trial ladder),
+  and the admin path started cold with no snapshot hydration. Both paths were
+  already serialised by the cycle mutex, so sharing is safe; the resolver is
+  also internally synchronised.
+
 - Extracted `internal/otelx` (#172): the OTLP transport protocol enum, endpoint
   normalisation (HTTP `WithEndpointURL` base + insecure flag, gRPC bare
   authority), and the shared service resource (`service.name`,

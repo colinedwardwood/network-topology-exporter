@@ -21,6 +21,7 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/loglimit"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
 	"github.com/colinedwardwood/network-topology-exporter/internal/output/otlp"
+	"github.com/colinedwardwood/network-topology-exporter/internal/snapshot"
 	"github.com/colinedwardwood/network-topology-exporter/internal/snmptest"
 )
 
@@ -292,5 +293,83 @@ func TestRunDiscoveryLoopShutsDownCleanly(t *testing.T) {
 
 	if status.Load() == nil {
 		t.Error("cycle status was never stored")
+	}
+}
+
+// TestRunDiscoveryLoopUsesProvidedResolver pins the #169 sharing contract:
+// when LoopConfig.Resolver is set (production wiring passes the same instance
+// to the admin Rediscoverer), RunDiscoveryLoop must use THAT instance — not a
+// private one — and hydrate it from the LD-13 snapshot. Observable from the
+// outside: the caller's resolver instance ends up holding the snapshot's
+// credential-cache entry, which is exactly what makes a sticky-credential win
+// visible across the loop and /admin/rediscover paths.
+func TestRunDiscoveryLoopUsesProvidedResolver(t *testing.T) {
+	t.Setenv("TEST_COMM", "public")
+	cfg := testConfig(t, "TEST_COMM")
+	cfg.Discovery.Interval = time.Hour // one immediate cycle, then block on ticker
+	cfg.Discovery.CycleBudgetFraction = 1
+	cfg.Discovery.UnconfirmedLinkTTLCycles = 3
+	cfg.Snapshot.Path = filepath.Join(t.TempDir(), "snap.json")
+
+	// Seed a snapshot whose credential cache names a device the loop itself
+	// will not walk; if the loop hydrates a private resolver instead of the
+	// provided one, this entry never appears on ours.
+	if err := snapshot.Write(cfg.Snapshot.Path, snapshot.File{
+		Version:         snapshot.CurrentVersion,
+		WrittenAt:       time.Now(),
+		CredentialCache: map[string]string{"192.0.2.99": "profile-from-snapshot"},
+	}); err != nil {
+		t.Fatalf("snapshot.Write: %v", err)
+	}
+
+	addr := snmptest.Start(t, "public", systemAndLLDPPDUs("sw-a", net.ParseIP("127.0.0.2")))
+	ip, port := snmptest.ParseAddr(addr)
+	cfg.Targets = []config.TargetConfig{{Host: ip.String(), Port: int(port)}}
+
+	resolver, err := credentials.New(cfg.Credentials)
+	if err != nil {
+		t.Fatalf("credentials.New: %v", err)
+	}
+
+	m := metrics.New(false)
+	ctx, cancel := context.WithCancel(context.Background())
+	var status atomic.Pointer[httpx.CycleStatus]
+	var ready atomic.Bool
+	lc := LoopConfig{
+		Cancel:   cancel,
+		Logger:   slogDiscard(),
+		Cfg:      cfg,
+		M:        m,
+		Status:   &status,
+		Ready:    &ready,
+		Otlp:     &otlpPublisher{},
+		Resolver: resolver,
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		RunDiscoveryLoop(ctx, lc)
+	}()
+
+	deadline := time.After(8 * time.Second)
+	for !ready.Load() {
+		select {
+		case <-deadline:
+			cancel()
+			<-done
+			t.Fatal("loop never became ready")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(8 * time.Second):
+		t.Fatal("RunDiscoveryLoop did not return after context cancel")
+	}
+
+	if got, ok := resolver.CachedProfile("192.0.2.99"); !ok || got != "profile-from-snapshot" {
+		t.Errorf("provided resolver CachedProfile(192.0.2.99) = (%q, %v), want (profile-from-snapshot, true) — loop did not hydrate the shared resolver", got, ok)
 	}
 }

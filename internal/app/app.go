@@ -401,22 +401,24 @@ func Run(ctx context.Context, args []string) int {
 		}
 
 		// Issue #73: admin out-of-cycle re-discovery. cycleMu serialises forced
-		// walks against the regular cycle (shared with LoopConfig.CycleMu). The
-		// Rediscoverer carries its own credential resolver built from the same
-		// config; access to either resolver is serialised by cycleMu, so the
+		// walks against the regular cycle (shared with LoopConfig.CycleMu).
+		// The Rediscoverer shares ONE credential resolver with the discovery
+		// loop (#169): a sticky-credential win recorded by either path is
+		// reused by the other, and the snapshot hydration the loop performs
+		// benefits admin walks too. Access is serialised by cycleMu, so the
 		// two paths never hit a device concurrently. The endpoint is privileged:
 		// it only runs when listen.web_config_file actually authenticates the
 		// caller (basic_auth_users, or a client-cert-requiring client_auth_type).
 		// A TLS-only web-config encrypts but does NOT authenticate the client, so
 		// it does not enable the endpoint — the handler returns 403.
 		var cycleMu sync.Mutex
-		adminResolver, err := credentials.New(cfg.Credentials)
+		resolver, err := credentials.New(cfg.Credentials)
 		if err != nil {
-			logger.Error("building admin rediscover credential resolver", "error", err)
+			logger.Error("building credential resolver", "error", err)
 			return 1
 		}
 		allowedNets := snmpwalk.ParseCIDRs(cfg.Discovery.Scope.CIDRAllowList)
-		rediscoverer := NewRediscoverer(cfg, m, logger, adminResolver, allowedNets, &cycleMu, WebConfigHasClientAuth(cfg.Listen.WebConfigFile))
+		rediscoverer := NewRediscoverer(cfg, m, logger, resolver, allowedNets, &cycleMu, WebConfigHasClientAuth(cfg.Listen.WebConfigFile))
 		mux.HandleFunc("/admin/rediscover", httpx.NewRediscoverHandler(rediscoverer))
 
 		// Graph-stale watchdog (ops hardening): re-assert GraphStale=1 when this
@@ -460,6 +462,7 @@ func Run(ctx context.Context, args []string) int {
 				Otlp:          pub,
 				CycleMu:       &cycleMu,
 				Pool:          sessionPool,
+				Resolver:      resolver,
 			})
 		}()
 	}

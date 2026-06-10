@@ -81,8 +81,10 @@ type Rediscoverer struct {
 }
 
 // NewRediscoverer builds a Rediscoverer sharing cycleMu with the discovery
-// loop. resolver may be the same resolver the loop uses; access is serialised
-// by cycleMu. allowedNets is the parsed CIDR allow-list (LD-11).
+// loop. In production resolver IS the loop's resolver (#169): a credential
+// win recorded by a forced walk is reused by the next regular cycle and vice
+// versa, and the loop's snapshot hydration covers admin walks too. Access is
+// serialised by cycleMu. allowedNets is the parsed CIDR allow-list (LD-11).
 func NewRediscoverer(
 	cfg *config.Config,
 	m *metrics.Metrics,

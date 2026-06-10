@@ -76,6 +76,14 @@ type LoopConfig struct {
 	// is true; RunCycle threads it into every Params so a target reuses one
 	// session across its sequential module walks.
 	Pool *snmpwalk.SessionPool
+	// Resolver is the LD-12 credential resolver. In production app.Run builds
+	// exactly one and passes it both here and to the admin Rediscoverer
+	// (#169), so a credential win recorded on either path — a regular cycle
+	// or POST /admin/rediscover — is reused by the other instead of re-running
+	// the trial ladder. The loop hydrates it from the LD-13 snapshot at
+	// startup. May be nil in unit tests that drive the loop without the admin
+	// endpoint; the loop then constructs its own.
+	Resolver *credentials.Resolver
 }
 
 // WarnSnapshot rate-limits chronic snapshot Warns via lc.WarnLimiter,
@@ -308,12 +316,21 @@ func RunDiscoveryLoop(ctx context.Context, lc LoopConfig) {
 		lc.M.Topology.Update(prevGraph)
 	}
 
-	// LD-12: credential resolver.
-	resolver, err := credentials.New(lc.Cfg.Credentials)
-	if err != nil {
-		lc.Logger.Error("building credential resolver", "error", err)
-		lc.Cancel()
-		return
+	// LD-12: credential resolver — the instance shared with the admin
+	// Rediscoverer when app.Run provided one (#169). Snapshot hydration
+	// happens here regardless of who constructed it: the Resolver is
+	// internally synchronised, and at this point no cycle has run yet, so a
+	// concurrent /admin/rediscover can at worst lose its own first win to the
+	// cache replacement — never corrupt it.
+	resolver := lc.Resolver
+	if resolver == nil {
+		var err error
+		resolver, err = credentials.New(lc.Cfg.Credentials)
+		if err != nil {
+			lc.Logger.Error("building credential resolver", "error", err)
+			lc.Cancel()
+			return
+		}
 	}
 	if snap != nil {
 		resolver.LoadCache(snap.CredentialCache)
