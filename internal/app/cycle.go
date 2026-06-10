@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"maps"
 	"net"
@@ -11,9 +10,6 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
-	"golang.org/x/time/rate"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
@@ -84,15 +80,6 @@ func RunCycle(
 	prevAges map[graph.EdgeKey]int,
 	pool *snmpwalk.SessionPool,
 ) (discovery.Graph, map[graph.EdgeKey]int, []graph.Conflict, int) {
-	type probeResult struct {
-		targetIdx    int
-		device       *discovery.Device
-		edges        []discovery.Edge
-		outOfScope   []discovery.OutOfScopeNeighbour
-		mgmtIP       string
-		moduleStatus map[string]int // proto -> 0 ok | 1 degraded | 2 failed
-	}
-
 	cycleCtx := ctx
 	cycleCancel := func() {}
 	if cfg.Discovery.CycleBudgetFraction > 0 {
@@ -119,18 +106,37 @@ func RunCycle(
 		mu.Unlock()
 	}
 
+	// Read-only deps shared by every probe goroutine. probeTarget captures
+	// none of the cycle's mutable aggregation state (mu/results/okCount/
+	// failByReason/allARPMACs) and no graph/ages handle (C6/C7).
+	deps := probeDeps{
+		cfg:           cfg,
+		m:             m,
+		walkerMetrics: walkerMetrics,
+		warnLimiter:   warnLimiter,
+		resolver:      resolver,
+		allowedNets:   allowedNets,
+		pool:          pool,
+		logger:        logger,
+	}
+
 	for i, t := range cfg.Targets {
 		target := t
 		idx := i
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// A recover() only catches its own goroutine's panics, so the
+			// per-device panic-recover MUST wrap the probeTarget call here
+			// rather than living inside probeTarget (C7).
 			defer func() {
 				if r := recover(); r != nil {
 					logger.Error("per-device probe panicked", "target", target.Host, "panic", r)
 					recordFail(metrics.DiscoveryReasonPanic)
 				}
 			}()
+			// Cycle-budget admission. The budget early-exit is an
+			// admission-shell concern and stays in the closure (C7).
 			select {
 			case sem <- struct{}{}:
 			case <-cycleCtx.Done():
@@ -140,196 +146,29 @@ func RunCycle(
 			}
 			defer func() { <-sem }()
 
-			// Issue #68: per-target span, child of discovery.cycle. targetCtx
-			// flows into the credential resolve and every module walk so they
-			// nest under target.poll. No-op when tracing is disabled.
-			targetStart := time.Now()
-			targetCtx, targetSpan := tracing.Tracer().Start(cycleCtx, "target.poll",
-				trace.WithAttributes(attribute.String("target.ip", target.Host)))
-			defer func() {
-				targetSpan.SetAttributes(
-					attribute.Float64("target.latency_seconds", time.Since(targetStart).Seconds()))
-				targetSpan.End()
-			}()
+			res, arp, ok, failReason := probeTarget(cycleCtx, deps, target, idx)
 
-			ip := net.ParseIP(target.Host)
-			if ip == nil {
-				addrs, err := net.DefaultResolver.LookupHost(targetCtx, target.Host)
-				if err != nil || len(addrs) == 0 {
-					logger.Warn("host resolution failed", "host", target.Host, "error", err)
-					recordFail(metrics.DiscoveryReasonDNSFailed)
-					targetSpan.SetStatus(codes.Error, "dns resolution failed")
-					return
-				}
-				ip = net.ParseIP(addrs[0])
-			}
-
-			// LD-11: enforce CIDR allow-list for hostname-based targets whose
-			// IP is only known after DNS resolution.
-			if len(allowedNets) > 0 && !snmpwalk.IPInNets(ip, allowedNets) {
-				logger.Warn("resolved target outside allow-list, skipping",
-					"host", target.Host, "ip", ip)
-				recordFail(metrics.DiscoveryReasonOutsideAllowList)
-				targetSpan.SetStatus(codes.Error, "outside allow-list")
-				return
-			}
-
-			dev, params, profileName, err := WalkSystemWithCredentials(targetCtx, cfg, resolver, ip, target, logger)
-			targetSpan.SetAttributes(attribute.String("credential.profile", profileName))
-			if err != nil {
-				logger.Warn("snmp walk failed", "target", target.Host, "error", err)
-				targetSpan.RecordError(err)
-				targetSpan.SetStatus(codes.Error, "credential resolve / system walk failed")
-				m.DiscoveryHardFailTotal.WithLabelValues("system", "system_group_walk_error").Inc()
-				m.CredentialTrialsTotal.WithLabelValues("failed").Inc()
-				// Issue #20: partition the walk-failure counter by
-				// sub-reason. Timeouts surface via status="timeout"
-				// (reason=n/a — the status is the reason). Non-timeout
-				// failures from this layer are attributed to auth: the
-				// credential-rotation loop in WalkSystemWithCredentials
-				// only returns a non-timeout error when at least one
-				// candidate was rejected non-silently (DeadlineExceeded
-				// is the silent-drop / unreachable case).
-				if errors.Is(err, context.DeadlineExceeded) {
-					m.SNMPWalksTotal.WithLabelValues("timeout", metrics.ReasonNA).Inc()
-					recordFail(metrics.DiscoveryReasonTimeout)
-				} else {
-					m.SNMPWalksTotal.WithLabelValues("error", string(metrics.WalkReasonAuthFailed)).Inc()
-					recordFail(metrics.DiscoveryReasonAuthFailed)
-				}
-				return
-			}
-			// Zeroize the winning credential bytes as soon as this device's
-			// modules are finished, before the goroutine exits and params
-			// becomes unreachable to a sensible cleanup. Issue #5.
-			defer params.Zeroize()
-
-			devCtx, cancel := context.WithTimeout(targetCtx, cfg.Discovery.TimeoutPerDevice)
-			defer cancel()
-			devCtx = snmpwalk.ContextWithDecodeIssueReporter(devCtx, func(issue snmpwalk.DecodeIssue) {
-				m.DiscoveryDecodeIssues.WithLabelValues(issue.Module, string(issue.OID), issue.Reason).Add(float64(issue.Count))
-				m.DiscoveryQuarantinedRowsTotal.WithLabelValues(issue.Module, string(issue.OID), issue.Reason).Add(float64(issue.Count))
-			})
-			// Nil-tolerant panic-reporter seam for the raw SNMP transport
-			// goroutines (snmpwalk.BulkWalk / Walk spawn their own goroutine
-			// stacks for BulkWalkAll/WalkAll/Get; this per-device recover does
-			// not cover them). On a recovered transport panic the walk returns a
-			// normal error and bumps network_topology_panics_total{site="snmp_walk"}
-			// without the discovery package importing the prometheus client.
-			devCtx = snmpwalk.ContextWithPanicReporter(devCtx, func(site string) {
-				m.PanicsRecoveredTotal.WithLabelValues(site).Inc()
-			})
-
-			// Issue #72: per-target SNMP PDU rate limiter. When configured, cap
-			// the steady-state request rate against this single device so a high
-			// parallelism + all-modules run cannot self-DoS its SNMP daemon. One
-			// limiter per device per cycle (per-target isolation — never shared
-			// across devices). Burst is set equal to the rate so a freshly-built
-			// limiter starts with a full 1-second bucket (no artificial stall on
-			// the first walk) while still pacing sustained throughput to the
-			// configured ceiling. Unset/0 injects nothing — zero overhead,
-			// unchanged behaviour.
-			if rps := cfg.Discovery.PerTargetPDURatePerSecond; rps > 0 {
-				lim := rate.NewLimiter(rate.Limit(rps), rps)
-				devCtx = snmpwalk.ContextWithRateLimiter(devCtx, lim)
-				devCtx = snmpwalk.ContextWithRateLimitWaitObserver(devCtx, func(d time.Duration) {
-					m.SNMPRateLimitWaitSeconds.Observe(d.Seconds())
-				})
-			}
-
-			resolver.RecordSuccess(ip.String(), profileName)
-			m.CredentialTrialsTotal.WithLabelValues("ok").Inc()
-			m.SNMPWalksTotal.WithLabelValues("ok", metrics.ReasonNA).Inc()
-
-			dev.Site = target.Site
-			for k, v := range target.Labels {
-				if dev.Labels == nil {
-					dev.Labels = make(map[string]string)
-				}
-				dev.Labels[k] = v
-			}
-
-			var allEdges []discovery.Edge
-			var allOOS []discovery.OutOfScopeNeighbour
-
-			// Propagate module-specific tuning into params. MaxVlans is only
-			// consumed by fdb.Walk; Vendor and UseBGPV2MIB are only consumed
-			// by bgp.Walk; other modules ignore them. UseBGPV2MIB is the
-			// inverse of the operator-facing DisableV2MIB knob (default false
-			// = v2 enabled). WalkerMetrics is read by bgp.Walk via the
-			// recordWalkerOutcome helper; nil is tolerated (drops the
-			// increment) so unit tests that build Params inline don't need
-			// to wire a fake sink unless they care about the counter.
-			params.MaxVlans = cfg.Modules.FDB.MaxVlans
-			params.Vendor = dev.Vendor
-			params.UseBGPV2MIB = !cfg.Modules.BGP.DisableV2MIB
-			params.WalkerMetrics = walkerMetrics
-			params.WarnLimiter = warnLimiter
-			// Nil-tolerant panic-reporter seam (ops hardening): the FDB module
-			// spawns one goroutine per VLAN and recovers a panic locally so one
-			// bad VLAN can't crash discovery; this closure lets it bump
-			// network_topology_panics_total{site} without the discovery package
-			// importing the prometheus client (mirrors the WalkerMetrics seam).
-			params.PanicReporter = func(site string) {
-				m.PanicsRecoveredTotal.WithLabelValues(site).Inc()
-			}
-			// Issue #83: opt-in per-target SNMP session pool. When pool is nil
-			// (the default), params.Pool stays nil and snmpwalk.Acquire uses the
-			// fresh open+close path — byte-identical to pre-#83 behaviour. When a
-			// pool is wired, the (IP, CredentialProfile) key lets a target reuse
-			// one session across its sequential module walks. CredentialProfile
-			// is the winning profile from WalkSystemWithCredentials above; it
-			// must be part of the key so a credential change yields a new entry
-			// and InvalidateProfile can evict a rotated profile's sessions.
-			params.Pool = pool
-			params.CredentialProfile = profileName
-
-			// Issue #153: the per-module walk loop (module list → #74 per-IP
-			// scope intersection → per-module span/metrics → outcome classify)
-			// is shared with /admin/rediscover via walkModules. The cycle
-			// supplies FULL instrumentation (metrics + tracer + logger) so its
-			// behaviour is byte-identical to the pre-extraction inline loop.
-			mEdges, mOOS, modStatus := walkModules(devCtx, cfg, *dev, ip, params, allowedNets,
-				moduleInstrumentation{metrics: m, tracer: tracing.Tracer(), logger: logger, host: target.Host})
-			allEdges = append(allEdges, mEdges...)
-			allOOS = append(allOOS, mOOS...)
-
-			// Walk ARP table for MAC→IP enrichment when modules.arp.enabled
-			// is true (default). The map feeds SynthesizeEdges below as a
-			// fallback for FDB-only edges where LLDP did not provide the
-			// neighbour identity. Failures are non-fatal: LLDP-based
-			// correlation still works without ARP data.
-			if cfg.Modules.ARP.Enabled {
-				arpClient, arpRelease, arpErr := snmpwalk.Acquire(params)
-				if arpErr != nil {
-					logger.Debug("ARP table walk failed; MAC→IP resolution unavailable for this device",
-						"device", dev.ID, "err", arpErr)
-				} else {
-					arpMACToIP, arpErr := snmpwalk.WalkARPTable(devCtx, arpClient)
-					arpRelease()
-					if arpErr != nil {
-						logger.Debug("ARP table walk failed; MAC→IP resolution unavailable for this device",
-							"device", dev.ID, "err", arpErr)
-					} else {
-						mu.Lock()
-						for mac, ip := range arpMACToIP {
-							if existing, exists := allARPMACs[mac]; exists {
-								if existing != ip {
-									logger.Debug("arp: MAC seen with conflicting IPs across devices; keeping first",
-										"mac", mac, "kept_ip", existing, "discarded_ip", ip)
-								}
-								continue
-							}
-							allARPMACs[mac] = ip
-						}
-						mu.Unlock()
-					}
-				}
-			}
-
+			// mu-guarded aggregation (C7/C9). The allARPMACs merge is
+			// performed here, at collection time, first-wins by goroutine
+			// scheduling — NOT in the post-fan-out sorted pass — so which IP
+			// wins a MAC conflict is unchanged.
 			mu.Lock()
-			results = append(results, probeResult{targetIdx: idx, device: dev, edges: allEdges, outOfScope: allOOS, mgmtIP: ip.String(), moduleStatus: modStatus})
-			okCount++
+			if ok {
+				results = append(results, res)
+				okCount++
+			} else {
+				failByReason[failReason]++
+			}
+			for mac, ip := range arp {
+				if existing, exists := allARPMACs[mac]; exists {
+					if existing != ip {
+						logger.Debug("arp: MAC seen with conflicting IPs across devices; keeping first",
+							"mac", mac, "kept_ip", existing, "discarded_ip", ip)
+					}
+					continue
+				}
+				allARPMACs[mac] = ip
+			}
 			mu.Unlock()
 		}()
 	}
