@@ -86,6 +86,16 @@ type File struct {
 	OutOfScope      []discovery.OutOfScopeNeighbour `json:"out_of_scope"`
 	CredentialCache map[string]string               `json:"credential_cache"` // IP string → profile name (LD-12)
 	UnconfirmedAges map[string]int                  `json:"unconfirmed_ages"` // edge-id → consecutive unconfirmed cycles (LD-14)
+
+	// Fence token for native hub HA (#71 §4.4). Holder is the writing hub's
+	// identity (informational); LeaseEpoch derives from the k8s Lease's
+	// monotonic acquire epoch. Both are omitempty so old snapshots (written
+	// before the token existed) and single-hub writers (epoch 0) round-trip
+	// byte-identically — no keys emitted, zero values on load. When a writer
+	// presents LeaseEpoch > 0, Write refuses to overwrite a file carrying a
+	// strictly higher epoch (a resumed stale leader), returning ErrStaleEpoch.
+	Holder     string `json:"holder,omitempty"`
+	LeaseEpoch uint64 `json:"lease_epoch,omitempty"`
 }
 
 // ErrVersionMismatch is reported when the on-disk version is unrecognised.
@@ -93,6 +103,16 @@ type File struct {
 // an empty graph. Falling back is the documented behaviour, not an error
 // the operator should escalate.
 var ErrVersionMismatch = errors.New("snapshot: unrecognised version")
+
+// ErrStaleEpoch is returned by Write when the incoming File.LeaseEpoch is
+// strictly lower than the epoch already on disk — i.e. a resumed stale leader
+// is attempting to overwrite a newer leader's snapshot (#71 §4.4). The fence
+// is best-effort: the read-existing-then-write is NOT atomic across processes
+// (there is no file lock), so a true simultaneous race is still possible.
+// Atomic tmp→fsync→rename guarantees no corruption; this check rejects the
+// common resumed-stale-leader case. A writer with LeaseEpoch 0 (single-hub /
+// fencing-off) is never fenced.
+var ErrStaleEpoch = errors.New("snapshot: refusing write with stale lease epoch")
 
 // Load reads the snapshot at path. Returns (nil, nil) when the file does
 // not exist — first run is not an error. Returns ErrVersionMismatch wrapped
@@ -159,6 +179,18 @@ func quarantine(path string, contents []byte) error {
 // rename so a power loss between write and rename can't promote a partial
 // write to the final path.
 func Write(path string, f File) error {
+	// Fence check (#71 §4.4). Only engages when the caller presents a non-zero
+	// lease epoch; epoch 0 (single-hub / fencing-off) is never fenced, keeping
+	// today's behaviour byte-identical. Best-effort: read the existing file's
+	// epoch, treating not-exist/parse/version errors as "no existing epoch"
+	// (allow). This read-then-write is not atomic across processes — atomic
+	// rename still prevents corruption; this only rejects the resumed-stale
+	// leader overwrite.
+	if f.LeaseEpoch > 0 {
+		if existing, err := Load(path); err == nil && existing != nil && existing.LeaseEpoch > f.LeaseEpoch {
+			return fmt.Errorf("%w: on-disk epoch %d > incoming %d", ErrStaleEpoch, existing.LeaseEpoch, f.LeaseEpoch)
+		}
+	}
 	if f.Version == 0 {
 		f.Version = CurrentVersion
 	}

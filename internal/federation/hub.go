@@ -70,8 +70,9 @@ type Hub struct {
 	logger               *slog.Logger
 	snapshotPath         string
 	snapshotCh           chan discovery.Graph
-	firstLive            atomic.Bool // set to true on the first live publishIfWinner call
-	isLeader             atomic.Bool // single-hub default true; flipped by the LeaderElector in HA mode
+	firstLive            atomic.Bool   // set to true on the first live publishIfWinner call
+	isLeader             atomic.Bool   // single-hub default true; flipped by the LeaderElector in HA mode
+	leaseEpoch           atomic.Uint64 // fence token for shared-snapshot writes (#71 §4.4); 0 = single-hub / never fenced. T6 sets this from the elector.
 	snapshotWriteFn      func(string, snapshot.File) error
 	snapshotWriteTimeout time.Duration
 	publishGen           atomic.Uint64
@@ -1093,6 +1094,10 @@ func (h *Hub) writeSnapshot(g discovery.Graph) {
 	f := snapshot.File{
 		Devices: g.Devices,
 		Edges:   g.Edges,
+		// Fence token (#71 §4.4). leaseEpoch defaults 0 ⇒ single-hub writes are
+		// never fenced (byte-identical to today). T6 wires the elector's epoch
+		// and the real holder identity; for now Holder stays "".
+		LeaseEpoch: h.leaseEpoch.Load(),
 	}
 	if err := h.snapshotWriteFn(h.snapshotPath, f); err != nil {
 		h.logger.Error("hub: snapshot write failed", "error", err)
