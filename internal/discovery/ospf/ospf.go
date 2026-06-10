@@ -131,7 +131,16 @@ func walkOspfNbrTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*nb
 				snmputil.ReportDecodeIssue(ctx, walkerOSPF, oidOspfNbrTable, "nbr_ip_undecodable", 1)
 			}
 		case colNbrState:
-			row.state = snmputil.PDUInt(pdu)
+			// Strict decode (#170): 0 is not a valid ospfNbrState, but a
+			// lenient decode would silently turn a corrupt PDU into "not
+			// Full/TwoWay" and drop the adjacency with no decode-issue
+			// accounting.
+			s, ok := snmputil.PDUIntStrict(pdu)
+			if !ok {
+				snmputil.ReportDecodeIssue(ctx, walkerOSPF, oidOspfNbrTable, "nbr_state_undecodable", 1)
+				continue
+			}
+			row.state = s
 		}
 	}
 	return rows, hadPDUs, nil

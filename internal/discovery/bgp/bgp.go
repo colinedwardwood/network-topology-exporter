@@ -273,10 +273,21 @@ func walkBgpPeerTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*bg
 		}
 		switch col {
 		case colBgpPeerState:
-			peer.state = snmputil.PDUInt(pdu)
+			// Strict decode (#170): 0 is not a valid bgpPeerState, but a
+			// lenient decode would silently turn a corrupt PDU into "not
+			// established" and drop the peer edge with no decode-issue
+			// accounting.
+			s, ok := snmputil.PDUIntStrict(pdu)
+			if !ok {
+				snmputil.ReportDecodeIssue(ctx, "bgp", oidBgpPeerTable, "peer_state_undecodable", 1)
+				continue
+			}
+			peer.state = s
 		case colBgpPeerRemoteAddr:
 			peer.remoteIP = snmputil.PDUIPv4(pdu)
 		case colBgpPeerRemoteAs:
+			// Lenient decode is fine: remoteAs is metadata-only and a 0 is
+			// explicitly omitted by buildPeerEdges.
 			peer.remoteAs = snmputil.PDUInt(pdu)
 		}
 	}

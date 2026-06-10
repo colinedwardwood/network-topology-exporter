@@ -163,7 +163,15 @@ func walkLocPorts(ctx context.Context, client *gsnmp.GoSNMP) (map[int]locPort, e
 		lp := ports[portNum]
 		switch col {
 		case colLocPortIDSubtype:
-			lp.idSubtype = snmputil.PDUInt(pdu)
+			// Strict decode (#170): a corrupt subtype PDU would otherwise
+			// silently become 0, making decodePortID fall back to the port
+			// description/number with no decode-issue accounting.
+			s, ok := snmputil.PDUIntStrict(pdu)
+			if !ok {
+				snmputil.ReportDecodeIssue(ctx, walkerLLDP, oidLocPortTable, "port_subtype_undecodable", 1)
+				continue
+			}
+			lp.idSubtype = s
 		case colLocPortID:
 			lp.id = snmputil.PDUBytes(pdu)
 		case colLocPortDesc:
@@ -215,10 +223,16 @@ func walkRemEntries(ctx context.Context, client *gsnmp.GoSNMP) (map[remKey]*remE
 		}
 		switch col {
 		case colRemChassisIDSubtype:
+			// Lenient decode is deliberate here: a corrupt PDU yields 0,
+			// which fails buildEdges' IEEE 802.1AB 1–7 range gate and is
+			// counted there as chassis_subtype_invalid — switching to strict
+			// decode would double-count the same row (#170).
 			e.chassisSubtype = snmputil.PDUInt(pdu)
 		case colRemChassisID:
 			e.chassisID = snmputil.PDUBytes(pdu)
 		case colRemPortIDSubtype:
+			// Lenient on purpose — see colRemChassisIDSubtype; counted by
+			// buildEdges as port_subtype_invalid.
 			e.portSubtype = snmputil.PDUInt(pdu)
 		case colRemPortID:
 			e.portID = snmputil.PDUBytes(pdu)

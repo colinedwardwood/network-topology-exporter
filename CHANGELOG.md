@@ -9,6 +9,18 @@
   scrape topology. HA is opt-in via `federation.hub.ha.enabled`; single-hub
   deployments are unchanged.
 
+### Fixed
+
+- Corrupt enum-state PDUs are now counted as decode issues instead of silently
+  dropping topology (#170, follow-up to #148): BGP `bgpPeerState`, OSPF
+  `ospfNbrState`, FDB `dot1dTpFdbStatus`/`dot1qTpFdbStatus`, and LLDP
+  `lldpLocPortIdSubtype` decode strictly and report
+  `peer_state_undecodable` / `nbr_state_undecodable` / `status_undecodable` /
+  `port_subtype_undecodable` through the decode-issue reporter on failure. A
+  device emitting malformed integers previously lost edges with zero
+  accounting; zero-guarded numeric sites (port indices, remote-AS) keep the
+  lenient decode.
+
 ### Changed
 
 - Removed the dead `ages` field from the spoke→hub push payload (#165). Spokes

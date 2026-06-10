@@ -255,7 +255,15 @@ func walkFdbTableInto(ctx context.Context, client *gsnmp.GoSNMP, entries map[str
 				e.port = p
 			}
 		case colFdbStatus:
-			e.status = snmputil.PDUInt(pdu)
+			// Strict decode (#170): 0 is not a valid dot1dTpFdbStatus, but a
+			// lenient decode would silently turn a corrupt PDU into "not
+			// learned" and drop the entry with no decode-issue accounting.
+			s, ok := snmputil.PDUIntStrict(pdu)
+			if !ok {
+				snmputil.ReportDecodeIssue(ctx, walkerFDB, oidFdbTable, "status_undecodable", 1)
+				continue
+			}
+			e.status = s
 		}
 	}
 	return hadPDUs, nil
@@ -316,7 +324,14 @@ func walkQBridgeFdbTable(ctx context.Context, client *gsnmp.GoSNMP, entries map[
 				e.port = p
 			}
 		case colQBridgeStatus:
-			e.status = snmputil.PDUInt(pdu)
+			// Strict decode (#170): see the dot1dTpFdbStatus arm in
+			// walkFdbTableInto — same invisible-drop failure mode here.
+			s, ok := snmputil.PDUIntStrict(pdu)
+			if !ok {
+				snmputil.ReportDecodeIssue(ctx, walkerFDB, oidQBridgeFdbTable, "status_undecodable", 1)
+				continue
+			}
+			e.status = s
 		}
 		if e.mac == nil {
 			e.mac = macBytes
