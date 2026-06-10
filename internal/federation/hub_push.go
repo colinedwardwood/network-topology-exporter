@@ -5,9 +5,11 @@ package federation
 // hub.go (#168) — same-package move, no behaviour change.
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -25,10 +27,51 @@ import (
 // internal/limits because they are shared with the snapshot loader; raising
 // them in one place without the other would silently desynchronise wire-format
 // acceptance and on-disk validation. See limits.MaxDeviceIDBytes etc.
+//
+// The count caps and the byte cap are deliberately sized together: a payload
+// at both count limits with realistic field contents serialises to ~19 MiB of
+// JSON (measured), so maxPushPayloadBytes at 32 MiB leaves ~40% headroom and
+// the advertised count limits are actually reachable — even by an
+// uncompressed (compression: none) spoke. Pathologically large per-field
+// values can still hit the byte cap before the count caps; the byte cap is
+// the canonical bound. If you raise the count caps, re-measure and re-size.
 const (
 	maxDevicesPerPush = 10_000
 	maxEdgesPerPush   = 50_000
+
+	// maxPushPayloadBytes caps both the wire bytes read from the request
+	// body (any Content-Encoding) and the decompressed output of a gzip
+	// body. The dual application means a gzip bomb is bounded on both
+	// sides: ≤32 MiB may enter from the network, and inflation stops at
+	// 32 MiB of JSON regardless of the theoretical expansion ratio.
+	maxPushPayloadBytes = 32 << 20
 )
+
+// errDecompressedPayloadTooLarge is the sentinel surfaced by cappedReader
+// when a gzip push inflates past maxPushPayloadBytes. handlePush maps it to
+// 413, distinguishing "your topology is too big" from a generic decode error.
+var errDecompressedPayloadTooLarge = errors.New("decompressed payload exceeds limit")
+
+// cappedReader is io.LimitReader with a loud failure mode: instead of
+// silently truncating at n bytes (which would surface as a confusing JSON
+// "unexpected EOF"), it returns errDecompressedPayloadTooLarge so the
+// handler can answer 413 with an actionable message.
+type cappedReader struct {
+	r io.Reader
+	n int64 // bytes remaining
+}
+
+func (c *cappedReader) Read(p []byte) (int, error) {
+	if c.n <= 0 {
+		return 0, errDecompressedPayloadTooLarge
+	}
+	if int64(len(p)) > c.n {
+		p = p[:c.n]
+	}
+	rn, err := c.r.Read(p)
+	c.n -= int64(rn)
+	return rn, err
+}
 
 // Package-local aliases for the typed metrics.RejectReason constants. The
 // authoritative declarations — including the doc comments on each constant,
@@ -80,13 +123,37 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = r.Body.Close() }()
 
+	// Wire-side cap on raw request bytes regardless of Content-Encoding.
+	body := io.Reader(http.MaxBytesReader(w, r.Body, maxPushPayloadBytes))
+	switch enc := r.Header.Get("Content-Encoding"); enc {
+	case "", "identity":
+		// uncompressed JSON
+	case "gzip":
+		zr, err := gzip.NewReader(body)
+		if err != nil {
+			h.logger.Warn("hub: malformed gzip spoke payload", "error", err)
+			http.Error(w, "malformed gzip body", http.StatusBadRequest)
+			return
+		}
+		defer func() { _ = zr.Close() }()
+		// Decompressed-side cap: bounds inflation of a gzip bomb.
+		body = &cappedReader{r: zr, n: maxPushPayloadBytes}
+	default:
+		http.Error(w, fmt.Sprintf("unsupported Content-Encoding %q (supported: gzip, identity)", enc), http.StatusUnsupportedMediaType)
+		return
+	}
+
 	var payload SpokePayload
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<20)) // 16 MiB
+	dec := json.NewDecoder(body)
 	if err := dec.Decode(&payload); err != nil {
 		h.logger.Warn("hub: malformed spoke payload", "error", err)
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
-			http.Error(w, "request body too large (max 16 MiB)", http.StatusRequestEntityTooLarge)
+			http.Error(w, "request body too large (max 32 MiB on the wire; enable spoke compression or partition the domain)", http.StatusRequestEntityTooLarge)
+			return
+		}
+		if errors.Is(err, errDecompressedPayloadTooLarge) {
+			http.Error(w, "decompressed payload too large (max 32 MiB; partition the domain across more spokes)", http.StatusRequestEntityTooLarge)
 			return
 		}
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -123,7 +190,6 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "spoke_id required", http.StatusBadRequest)
 		return
 	}
-	span.SetAttributes(attribute.String("spoke.id", payload.SpokeID))
 	if len(payload.SpokeID) > 128 {
 		http.Error(w, "spoke_id too long (max 128)", http.StatusBadRequest)
 		return
@@ -134,6 +200,13 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Record spoke.id on the span only AFTER the length and charset checks
+	// above. The OTel SDK does not bound attribute value length by default,
+	// so attaching the raw field first would let any mTLS cert holder inject
+	// up to a body-cap-sized string into the tracing backend (cost
+	// amplification + trace injection). Here the value is guaranteed ≤128
+	// chars from a safe alphabet.
+	span.SetAttributes(attribute.String("spoke.id", payload.SpokeID))
 
 	// LD-21: bind spoke_id to the presenting mTLS client certificate's Common
 	// Name so a spoke holding a valid cert cannot overwrite another spoke's

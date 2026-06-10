@@ -2,6 +2,7 @@ package federation
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
@@ -47,6 +49,12 @@ type Spoke struct {
 	limiter *loglimit.Limiter
 	m       *metrics.Metrics
 	pushURL string
+	// contentEncoding is the Content-Encoding applied to push bodies:
+	// "gzip" or "" (identity). Derived from federation.spoke.compression
+	// in NewSpoke. Topology JSON compresses 10–20×, which keeps large
+	// graphs far below the hub's body cap (the pre-compression worst case
+	// at the per-push count limits is ~19 MiB) and cuts WAN egress.
+	contentEncoding string
 }
 
 // NewSpoke constructs a Spoke with an mTLS-capable HTTP client. Returns an
@@ -75,16 +83,24 @@ func NewSpoke(cfg config.FederationConfig, logger *slog.Logger, limiter *loglimi
 	if err != nil {
 		return nil, fmt.Errorf("spoke: %w", err)
 	}
+	// "" (programmatic construction that bypassed config defaults) gets the
+	// same gzip default as applyDefaults, so compression-on is the only way
+	// to get a Spoke without asking for "none" explicitly.
+	encoding := ""
+	if cfg.Spoke.Compression != "none" {
+		encoding = "gzip"
+	}
 	return &Spoke{
 		cfg: cfg,
 		client: &http.Client{
 			Transport: &http.Transport{TLSClientConfig: tlsCfg},
 			Timeout:   30 * time.Second,
 		},
-		logger:  logger,
-		limiter: limiter,
-		m:       m,
-		pushURL: pushURL,
+		logger:          logger,
+		limiter:         limiter,
+		m:               m,
+		pushURL:         pushURL,
+		contentEncoding: encoding,
 	}, nil
 }
 
@@ -92,12 +108,26 @@ func NewSpoke(cfg config.FederationConfig, logger *slog.Logger, limiter *loglimi
 // to avoid multi-second waits.
 var spokePushBaseBackoff = time.Second
 
+// jitteredBackoff returns a random duration in [d/2, d). Equal-jitter spreads
+// the retry instants of spokes whose pushes failed at the same moment (e.g. a
+// hub restart) so the hub is not hit by synchronised retry waves, while
+// keeping the floor at half the nominal delay so retries still back off.
+func jitteredBackoff(d time.Duration) time.Duration {
+	half := d / 2
+	if half <= 0 {
+		return d
+	}
+	return half + rand.N(half)
+}
+
 // Push serialises payload and POSTs it to the hub. It retries up to five
-// times with exponential backoff starting at spokePushBaseBackoff (1s, 2s, 4s,
-// 8s between the five attempts). A cancelled context aborts immediately without
-// retrying. The 5-attempt window (#71 §7) is sized so a push in flight during
-// an HA hub leader-flip survives until the new leader's push Service is ready,
-// rather than being deferred to the next discovery cycle.
+// times with exponential backoff starting at spokePushBaseBackoff (nominally
+// 1s, 2s, 4s, 8s between the five attempts; each delay is equal-jittered to
+// [d/2, d) so spokes that failed simultaneously do not retry in lockstep).
+// A cancelled context aborts immediately without retrying. The 5-attempt
+// window (#71 §7) is sized so a push in flight during an HA hub leader-flip
+// survives until the new leader's push Service is ready, rather than being
+// deferred to the next discovery cycle.
 func (s *Spoke) Push(ctx context.Context, payload SpokePayload) error {
 	// Issue #68: spoke.push span. The post() helper injects this span's W3C
 	// traceparent into each outbound HTTP request, so the hub's hub.handlePush
@@ -117,6 +147,17 @@ func (s *Spoke) Push(ctx context.Context, payload SpokePayload) error {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "marshal payload failed")
 		return fmt.Errorf("spoke: marshal payload: %w", err)
+	}
+	if s.contentEncoding == "gzip" {
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		if _, err := zw.Write(b); err != nil {
+			return fmt.Errorf("spoke: gzip payload: %w", err)
+		}
+		if err := zw.Close(); err != nil {
+			return fmt.Errorf("spoke: gzip payload: %w", err)
+		}
+		b = buf.Bytes()
 	}
 
 	const maxAttempts = 5
@@ -153,7 +194,7 @@ func (s *Spoke) Push(ctx context.Context, payload SpokePayload) error {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(backoff):
+			case <-time.After(jitteredBackoff(backoff)):
 			}
 			backoff *= 2
 		}
@@ -189,6 +230,9 @@ func (s *Spoke) post(ctx context.Context, body []byte) error {
 		return fmt.Errorf("build push request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if s.contentEncoding != "" {
+		req.Header.Set("Content-Encoding", s.contentEncoding)
+	}
 	// Issue #68: inject the W3C traceparent (and baggage) of the active
 	// spoke.push span into the outbound headers so the hub can continue the
 	// trace. When tracing is disabled the active span is the OTel no-op whose

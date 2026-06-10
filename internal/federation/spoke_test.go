@@ -1,12 +1,14 @@
 package federation
 
 import (
+	"compress/gzip"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"io"
 	"log/slog"
@@ -428,5 +430,64 @@ func TestSpokePushContextCancelledDuringRetry(t *testing.T) {
 	err := s.Push(ctx, SpokePayload{SpokeID: "dc-test", CycleAt: time.Now()})
 	if err == nil {
 		t.Fatal("Push returned nil, want error from context cancellation")
+	}
+}
+
+// TestJitteredBackoff pins the equal-jitter contract: results stay in
+// [d/2, d) so retries spread out without collapsing the backoff floor.
+func TestJitteredBackoff(t *testing.T) {
+	const d = 8 * time.Second
+	for i := 0; i < 1000; i++ {
+		got := jitteredBackoff(d)
+		if got < d/2 || got >= d {
+			t.Fatalf("jitteredBackoff(%v) = %v, want in [%v, %v)", d, got, d/2, d)
+		}
+	}
+	// Sub-divisible durations degrade gracefully to the nominal delay.
+	if got := jitteredBackoff(time.Nanosecond); got != time.Nanosecond {
+		t.Fatalf("jitteredBackoff(1ns) = %v, want 1ns", got)
+	}
+}
+
+// TestSpokePushGzipContentEncoding verifies that a Spoke with gzip
+// compression (the NewSpoke default) sends a gzip body with the matching
+// Content-Encoding header, and that the body round-trips to the payload.
+func TestSpokePushGzipContentEncoding(t *testing.T) {
+	var gotEncoding atomic.Value
+	var decoded atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotEncoding.Store(r.Header.Get("Content-Encoding"))
+		zr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			t.Errorf("gzip.NewReader: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		var p SpokePayload
+		if err := json.NewDecoder(zr).Decode(&p); err != nil {
+			t.Errorf("decode gzip body: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		decoded.Store(p.SpokeID)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	s := newTestSpokeFor(t, srv.URL)
+	s.contentEncoding = "gzip"
+	err := s.Push(context.Background(), SpokePayload{
+		SpokeID: "dc-gzip",
+		CycleAt: time.Now(),
+		Devices: []discovery.Device{{ID: "sw-1"}},
+	})
+	if err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	if got, _ := gotEncoding.Load().(string); got != "gzip" {
+		t.Errorf("Content-Encoding = %q, want gzip", got)
+	}
+	if got, _ := decoded.Load().(string); got != "dc-gzip" {
+		t.Errorf("decoded spoke_id = %q, want dc-gzip", got)
 	}
 }

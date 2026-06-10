@@ -3,6 +3,7 @@ package federation
 // Tests split from hub_test.go (#168); see hub_push.go.
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -807,5 +808,103 @@ func TestHubHandlePushRejectsStructuralInvalid(t *testing.T) {
 				t.Errorf("GraphUpdatesRejectedTotal{reason=%s} delta = %v, want 1", rejectReasonStructuralInvalid, after-before)
 			}
 		})
+	}
+}
+
+// gzipBytes compresses b for the Content-Encoding wire tests below.
+func gzipBytes(t *testing.T, b []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(b); err != nil {
+		t.Fatalf("gzip write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// TestHubHandlePushAcceptsGzipBody verifies the hub decompresses and accepts
+// a gzip-encoded push (the spoke default since the compression change).
+func TestHubHandlePushAcceptsGzipBody(t *testing.T) {
+	h := newTestHub(nil)
+	payload := SpokePayload{
+		SpokeID: "dc-gzip",
+		CycleAt: time.Now(),
+		Devices: []discovery.Device{{ID: "sw-1"}},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(gzipBytes(t, body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+
+	h.handlePush(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body: %s", rec.Code, rec.Body.String())
+	}
+	h.mu.Lock()
+	_, ok := h.spokes["dc-gzip"]
+	h.mu.Unlock()
+	if !ok {
+		t.Fatal("spoke dc-gzip not stored after gzip push")
+	}
+}
+
+// TestHubHandlePushRejectsMalformedGzip verifies that a body advertising gzip
+// but containing garbage returns 400, not a 500 or hang.
+func TestHubHandlePushRejectsMalformedGzip(t *testing.T) {
+	h := newTestHub(nil)
+	req := httptest.NewRequest(http.MethodPost, "/spoke/push", strings.NewReader("definitely not gzip"))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+
+	h.handlePush(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for malformed gzip", rec.Code)
+	}
+}
+
+// TestHubHandlePushRejectsUnsupportedEncoding verifies that an unknown
+// Content-Encoding returns 415 rather than feeding compressed bytes to the
+// JSON decoder.
+func TestHubHandlePushRejectsUnsupportedEncoding(t *testing.T) {
+	h := newTestHub(nil)
+	req := httptest.NewRequest(http.MethodPost, "/spoke/push", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "br")
+	rec := httptest.NewRecorder()
+
+	h.handlePush(rec, req)
+
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Errorf("status = %d, want 415 for unsupported encoding", rec.Code)
+	}
+}
+
+// TestHubHandlePushRejectsGzipBomb verifies the decompressed-side cap: a
+// small wire body that inflates past maxPushPayloadBytes must 413, not OOM
+// the hub. ~33 MiB of repeated spaces compresses to ~33 KiB on the wire.
+func TestHubHandlePushRejectsGzipBomb(t *testing.T) {
+	h := newTestHub(nil)
+	// Leading whitespace is consumed by the JSON decoder before any token,
+	// so inflation is driven past the cap without allocating a giant value.
+	bomb := append(bytes.Repeat([]byte{' '}, maxPushPayloadBytes+1024), []byte(`{"spoke_id":"dc-bomb"}`)...)
+	req := httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(gzipBytes(t, bomb)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+
+	h.handlePush(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413 for gzip bomb; body: %s", rec.Code, rec.Body.String())
 	}
 }

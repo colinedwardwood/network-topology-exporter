@@ -33,6 +33,13 @@ func (h *Hub) publishMetrics(g discovery.Graph, clearStale bool) {
 //
 // Removing the old CAS loop is safe: publishGen.Add(1) is performed under h.mu
 // at the single call site, so two callers can never hold equal generations.
+//
+// HA note: leadership is NOT re-verified here. A hub demoted mid-request can
+// commit a push the new leader never sees. That is acceptable only because
+// every spoke push is a full snapshot, never a delta — the spoke re-sends its
+// entire graph next cycle, bounding new-leader staleness at one
+// discovery.interval (see docs/operator/federation.md "Leader-flip acceptance
+// window"). If pushes ever become incremental, add an isLeader re-check here.
 func (h *Hub) publishIfWinner(gen uint64, g discovery.Graph, unmatched int, accepted *acceptedPush) (bool, metrics.RejectReason) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

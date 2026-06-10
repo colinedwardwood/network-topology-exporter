@@ -340,6 +340,11 @@ func (c *Config) validateFederation() error {
 				return fmt.Errorf("%s: %w", pair.field, err)
 			}
 		}
+		switch c.Federation.Spoke.Compression {
+		case "gzip", "none": // "" is normalised to "gzip" in applyDefaults
+		default:
+			return fmt.Errorf("federation.spoke.compression must be \"gzip\" or \"none\"; got %q", c.Federation.Spoke.Compression)
+		}
 	case RoleHub:
 		if c.Federation.Hub.HA.Enabled {
 			ha := c.Federation.Hub.HA

@@ -180,6 +180,15 @@ type FederationSpokeConfig struct {
 	TLSCACert string `yaml:"tls_ca_cert"` // path to PEM CA certificate for hub server verification
 	TLSCert   string `yaml:"tls_cert"`    // path to PEM spoke client certificate
 	TLSKey    string `yaml:"tls_key"`     // path to PEM spoke client private key
+
+	// Compression selects the Content-Encoding applied to push request
+	// bodies. "gzip" (the default) compresses the JSON payload — topology
+	// JSON is highly repetitive and typically shrinks 10–20×, keeping large
+	// graphs far below the hub's body cap and cutting WAN egress. "none"
+	// sends the body uncompressed. The value set mirrors Grafana Alloy's
+	// otelcol exporter `compression` argument so operators see familiar
+	// semantics; additional algorithms may be added later.
+	Compression string `yaml:"compression"` // "" (= gzip) | "gzip" | "none"
 }
 
 // InterDomainLink is one LD-19 static boundary-link override. LocalDevice,

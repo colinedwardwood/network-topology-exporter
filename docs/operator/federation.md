@@ -96,7 +96,15 @@ federation:
     tls_ca_cert: /etc/topo-exporter/pki/ca.pem
     tls_cert: /etc/topo-exporter/pki/spoke-dc-a.crt
     tls_key: /etc/topo-exporter/pki/spoke-dc-a.key
+    compression: gzip         # default; "none" disables push-body compression
 ```
+
+Push bodies are gzip-compressed by default. Topology JSON is highly
+repetitive and typically shrinks 10–20×, which keeps even maximum-size
+payloads (10 000 devices / 50 000 edges ≈ 19 MiB of JSON) far below the
+hub's 32 MiB body cap and cuts WAN egress between sites. Set
+`compression: none` only when a middlebox cannot pass `Content-Encoding:
+gzip`; uncompressed pushes are still accepted up to the same 32 MiB cap.
 
 `spoke_id` must be unique across all spokes. Choose something stable — changing it later will cause the hub to treat the old and new IDs as separate spokes until the old one is evicted.
 
@@ -127,7 +135,7 @@ The hub's `POST /spoke/push` returns one of the following status codes. Tools an
 | `400 Bad Request` | Malformed payload: JSON parse error, missing required field, invalid `spoke_id` characters/length, `cycle_at` missing or set more than 5 minutes in the future. Semantic validation failures (empty device ID, non-UTF-8, duplicate IDs, oversize port name, self-edge) return 400 with a JSON body and `reason: "structural_invalid"`. Label-injection rejects (`invalid_label_key`, `invalid_label_value`) also return 400 with a JSON body matching the schema below. | Fatal — spoke aborts retries; same payload cannot succeed. |
 | `403 Forbidden` | `spoke_id` does not match the presenting mTLS client certificate's `CN`. | Fatal — operator must reconcile `spoke_id` with the cert subject. |
 | `409 Conflict` | Push processed by the transport but **not applied**: a genuinely newer push (a higher publish generation) has already published a graph that supersedes this payload. JSON body present (see below); `reason` is `stale_generation`. | Fatal-for-this-cycle — the next discovery cycle produces a newer payload that will not collide. |
-| `413 Payload Too Large` | Either the raw request body exceeded 16 MiB, OR the combined hub graph would exceed `federation.hub.max_graph_edges` / `max_graph_devices`. When rejected for size budget, JSON body present; `reason` is `size_budget_exceeded`. | Fatal-for-this-cycle — retrying the same payload will fail identically. Operator must increase the hub's `max_graph_*` budgets or shrink the spoke's footprint. |
+| `413 Payload Too Large` | Either the raw request body exceeded 32 MiB (or its gzip-decompressed form did), OR the combined hub graph would exceed `federation.hub.max_graph_edges` / `max_graph_devices`. When rejected for size budget, JSON body present; `reason` is `size_budget_exceeded`. | Fatal-for-this-cycle — retrying the same payload will fail identically. Operator must increase the hub's `max_graph_*` budgets or shrink the spoke's footprint. |
 | `429 Too Many Requests` | Push arrived sooner than `federation.hub.min_push_interval` after this spoke's last accepted push. `Retry-After` header set to seconds. | Retried with the spoke's own exponential backoff (3 attempts, base 1s). |
 | `503 Service Unavailable` | Reserved for transient internal failures the spoke can resolve by retrying (e.g. snapshot back-pressure). No current code path emits this; documented so spokes implement the retry semantics defensively. | Retried with the spoke's own exponential backoff. |
 
@@ -454,6 +462,18 @@ Two honest numbers (design §7):
 
 **Zero data loss:** spokes replay their current graph on the first successful
 push to the new leader.
+
+**Leader-flip acceptance window:** leadership is checked once, at the start of
+each push request. A hub that loses the Lease while a push is in flight can
+still accept and store that push, and the new leader will not see it — its
+spoke store starts empty (or from the shared snapshot). This is safe, not
+lossy, because every push is a **full snapshot** of the spoke's current graph,
+never a delta: the data a demoted leader absorbed is re-sent in its entirety
+on the spoke's next cycle, so the staleness window on the new leader is
+bounded by one `discovery.interval`. This full-snapshot property is
+load-bearing for HA correctness — if pushes ever become incremental, the
+acceptance window above becomes a real data-loss path and leadership must be
+re-verified at publish time instead.
 
 ### Failure modes
 

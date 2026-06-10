@@ -46,7 +46,7 @@ func validateLabelKey(k string) error {
 	if k == "" {
 		return newValidationError(rejectReasonInvalidLabelKey, "label key must not be empty")
 	}
-	// Size cap runs before the regex match so a 16 MiB key cannot force the
+	// Size cap runs before the regex match so a multi-MiB key cannot force the
 	// regex engine (or any future per-rune check) to walk the whole string.
 	if len(k) > limits.MaxLabelKeyBytes {
 		return newValidationError(rejectReasonInvalidLabelKey,
@@ -71,7 +71,7 @@ func validateLabelKey(k string) error {
 // correctly on emission) is allowed. The caller has already checked that the
 // string is valid UTF-8 and within length bounds.
 func validateLabelValue(v string) error {
-	// Size cap runs before per-rune iteration so a 16 MiB value cannot force
+	// Size cap runs before per-rune iteration so a multi-MiB value cannot force
 	// ~4M iterations of the control-char check. Prometheus / OpenMetrics
 	// impose no formal max on label value length (docs/remediation.md §3), but
 	// client_golang defaults and Grafana Cloud Mimir limits operate well

@@ -69,6 +69,9 @@ func (c *Config) applyDefaults() {
 	if c.Federation.Hub.ListenAddr == "" {
 		c.Federation.Hub.ListenAddr = ":9101"
 	}
+	if c.Federation.Spoke.Compression == "" {
+		c.Federation.Spoke.Compression = "gzip"
+	}
 	if c.Federation.Hub.HA.Enabled {
 		if c.Federation.Hub.HA.LeaseName == "" {
 			c.Federation.Hub.HA.LeaseName = "topology-exporter-hub"

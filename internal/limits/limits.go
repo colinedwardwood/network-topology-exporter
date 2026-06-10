@@ -26,8 +26,8 @@ const MaxPortNameBytes = 256
 
 // MaxLabelKeyBytes and MaxLabelValueBytes cap individual spoke-supplied
 // label inputs before per-rune validation iterates the string. The
-// http.MaxBytesReader on the push body bounds total payload size at 16 MiB,
-// but a single 16 MiB label value would still force ~4M rune iterations in
+// http.MaxBytesReader on the push body bounds total payload size at 32 MiB,
+// but a single multi-MiB label value would still force ~4M rune iterations in
 // validateLabelValue — a CPU-DoS vector even against an mTLS-authenticated
 // spoke. Prometheus / OpenMetrics impose no formal max on label values
 // (docs/remediation.md §3), but client_golang defaults and Grafana Cloud Mimir
