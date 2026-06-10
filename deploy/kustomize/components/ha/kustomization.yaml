@@ -1,0 +1,57 @@
+# Opt-in native hub HA component (#71).
+#
+# Mirrors the Helm chart's `federation.hub.ha.enabled: true` path. Including
+# this component turns a single hub into a leader-elected HA hub:
+#
+#   - Role + RoleBinding grant the hub ServiceAccount get/create/update on
+#     coordination.k8s.io/leases (the minimal verbs client-go leaderelection
+#     needs for the Lease that elects one leader).
+#   - A headless metrics Service (clusterIP: None, publishNotReadyAddresses:
+#     true, all-pods selector) keeps every replica scrapeable, because the
+#     primary push Service is readiness-gated to the leader only.
+#   - A Deployment patch adds the POD_NAME/POD_NAMESPACE downward-API env (the
+#     election identity + Lease namespace) and a ServiceAccount patch flips
+#     automountServiceAccountToken to true so client-go can read the token.
+#   - A ConfigMap patch re-writes config.yaml with the federation.hub.ha block
+#     enabled (lease settings). This REQUIRES the hub overlay (it patches the
+#     hub config) — enable this component only from overlays/hub.
+#
+# This is ADDITIVE and OPT-IN: the base + standalone/hub/spoke overlays render
+# unchanged unless an overlay references this component. Enable it ONLY from the
+# hub overlay (HA is a hub-mode feature):
+#
+#   # in overlays/hub/kustomization.yaml
+#   components:
+#     - ../../components/ha
+#
+# IMPORTANT: this does NOT bump replicas. HA needs replicaCount >= 2 for
+# failover — set it in your overlay (e.g. a replicas: patch on the Deployment).
+# See deploy/kustomize/README.md "HA (#71)".
+#
+# Helm users get the equivalent via federation.hub.ha.enabled=true.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - role.yaml
+  - rolebinding.yaml
+  - service-metrics.yaml
+
+patches:
+  # POD_NAME / POD_NAMESPACE downward-API env on the hub container.
+  - path: patch-deployment.yaml
+    target:
+      kind: Deployment
+      name: topology-exporter
+  # Mount the SA token so client-go leaderelection can reach the API server.
+  - path: patch-serviceaccount.yaml
+    target:
+      kind: ServiceAccount
+      name: topology-exporter
+  # Re-write config.yaml with federation.hub.ha.enabled + lease settings. A
+  # strategic-merge patch on data.config.yaml replaces the whole string (same
+  # mechanism the hub overlay's configmap.yaml uses to set the hub config).
+  - path: configmap.yaml
+    target:
+      kind: ConfigMap
+      name: topology-exporter

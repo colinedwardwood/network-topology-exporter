@@ -1,0 +1,24 @@
+# Native hub HA (#71): headless metrics Service so Prometheus scrapes EVERY
+# replica. The primary push Service (base service.yaml) is readiness-gated to
+# the leader only; that gate would hide follower /metrics, so HA adds this
+# headless Service with publishNotReadyAddresses: true and the all-pods
+# selector. Mirrors deploy/helm/topology-exporter/templates/service-metrics.yaml.
+apiVersion: v1
+kind: Service
+metadata:
+  name: topology-exporter-metrics
+  labels:
+    # Distinguishes this Service from the push Service for ServiceMonitor
+    # selection (only this all-pods, publishNotReadyAddresses metrics Service).
+    topology-exporter.grafana.com/service: metrics
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - name: metrics
+      port: 9100
+      targetPort: metrics
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: topology-exporter

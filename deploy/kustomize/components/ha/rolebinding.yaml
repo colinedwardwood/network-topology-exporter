@@ -1,0 +1,15 @@
+# Binds the hub ServiceAccount to the leases Role (#71).
+# Mirrors deploy/helm/topology-exporter/templates/rolebinding.yaml.
+# namespace is intentionally omitted: kustomize injects the overlay's
+# namespace, and a RoleBinding's subject namespace defaults to the binding's.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: topology-exporter
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: topology-exporter
+subjects:
+  - kind: ServiceAccount
+    name: topology-exporter

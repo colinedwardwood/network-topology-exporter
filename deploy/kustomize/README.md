@@ -25,6 +25,7 @@ deploy/kustomize/
     spoke/                    # config.federation.role: spoke
   components/
     egress-networkpolicy/     # opt-in: lock down egress (DNS/SNMP/OTLP/hub)
+    ha/                       # opt-in: native hub high-availability (#71)
 ```
 
 ## Hardening: opt-in egress NetworkPolicy
@@ -48,6 +49,56 @@ real traffic — so applying this component **unedited DENIES all SNMP/OTLP/hub
 egress** until you replace each `0.0.0.0/32` with your real CIDRs (and adjust
 ports). The DNS rule is scoped to the `kube-system` namespace; change it if your
 cluster DNS lives elsewhere. (Helm users set `networkPolicy.egress.*`.)
+
+## HA (#71): opt-in native hub high-availability
+
+By default the hub runs as a single replica. The `components/ha` component
+turns it into a leader-elected HA hub — mirroring the Helm chart's
+`federation.hub.ha.enabled=true` path. **It is opt-in and only valid for the
+`hub` overlay.** Enable it by adding the component to the hub overlay's
+`components:` list:
+
+```yaml
+# in overlays/hub/kustomization.yaml
+components:
+  - ../../components/ha
+```
+
+What the component adds/patches:
+
+- **`Role` + `RoleBinding`** granting the `topology-exporter` ServiceAccount
+  `get,create,update` on `coordination.k8s.io/leases` — the minimal verbs
+  client-go leader election needs for the Lease that elects one leader.
+- **A headless metrics `Service`** (`topology-exporter-metrics`, `clusterIP:
+  None`, `publishNotReadyAddresses: true`, port 9100, all-pods selector). The
+  primary push Service is readiness-gated to the leader only; that gate would
+  otherwise hide follower `/metrics`, so Prometheus scrapes every replica via
+  this Service.
+- **Deployment env** `POD_NAME`/`POD_NAMESPACE` (downward API) — the election
+  identity and Lease namespace.
+- **`automountServiceAccountToken: true`** on the ServiceAccount (the base sets
+  it `false` because the non-HA exporter never calls the API server).
+- **Config:** re-writes `config.yaml` with `federation.hub.ha.enabled: true`
+  plus the lease settings (`lease_name`, `lease_duration: 15s`,
+  `renew_deadline: 10s`, `retry_period: 2s`). Because the component replaces the
+  whole hub config, **keep `components/ha/configmap.yaml` in sync with
+  `overlays/hub/configmap.yaml`** if the hub config changes.
+
+### Caveats (mirror the Helm chart NOTES)
+
+- **Set `replicaCount >= 2`.** The component does **not** bump replicas — HA
+  needs at least 2 for failover; a single replica is degraded (no standby). Add
+  a `replicas:` patch on the Deployment in your overlay.
+- **Shared snapshot is opt-in and needs ReadWriteMany.** The default HA path
+  uses **no** shared volume — a new leader cold-starts and rebuilds the graph
+  from the spokes' next push (within one `discovery.interval`); zero data loss.
+  To warm-start from the previous leader's snapshot, set
+  `federation.hub.snapshot.shared: true` in the config **and** provide a
+  `ReadWriteMany` (NFS/CephFS/EFS/Filestore) volume. **Most default
+  StorageClasses are RWO** and will fail to attach to multiple replicas — do not
+  enable `snapshot.shared` on an RWO volume.
+- **RBAC is required** and is provided by this component (`Role`/`RoleBinding`);
+  do not enable HA config without it or election will fail.
 
 ## Federation modes
 
