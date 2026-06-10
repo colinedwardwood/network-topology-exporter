@@ -1084,6 +1084,13 @@ func (h *Hub) IsLeader() bool { return h.isLeader.Load() }
 // SetLeader is invoked by the LeaderElector callbacks (HA mode only).
 func (h *Hub) SetLeader(v bool) { h.isLeader.Store(v) }
 
+// SetLeaseEpoch records the fence token (#71 §4.4) for shared-snapshot writes.
+// Invoked by the LeaderElector wiring on OnStartedLeading with the Lease's
+// monotonic LeaderTransitions count, so a resumed stale leader carrying a lower
+// epoch has its snapshot write refused (snapshot.ErrStaleEpoch). A no-op-safe
+// store: single-hub mode never calls it, leaving leaseEpoch 0 (unfenced).
+func (h *Hub) SetLeaseEpoch(epoch uint64) { h.leaseEpoch.Store(epoch) }
+
 // writeSnapshot persists the hub's current graph to disk (LD-13). A no-op
 // when snapshotPath is empty. Hub snapshots omit credential cache and
 // unconfirmed-age counters; those are spoke-side concerns.

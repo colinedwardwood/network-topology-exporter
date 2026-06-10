@@ -226,7 +226,7 @@ type Metrics struct {
 	// goroutines, partitioned by a low-cardinality `site` label (a closed set
 	// of short stable strings: discovery_loop, snapshot_writer, spoke_pusher,
 	// otlp_push, hub_serve, hub_rebuild, hub_eviction, hub_snapshot_writer,
-	// fdb_vlan_walk, stale_watchdog). Each recovered panic logs the stack at
+	// hub_elector, fdb_vlan_walk, stale_watchdog). Each recovered panic logs the stack at
 	// Error level and bumps this counter so the bug is never hidden silently.
 	// Any non-zero value indicates a bug — alert on increase.
 	PanicsRecoveredTotal *prometheus.CounterVec
