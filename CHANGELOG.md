@@ -9,7 +9,37 @@
   scrape topology. HA is opt-in via `federation.hub.ha.enabled`; single-hub
   deployments are unchanged.
 
+- Spoke→hub pushes are now gzip-compressed by default. Topology JSON is highly
+  repetitive and typically shrinks 10–20×, keeping large graphs far below the
+  hub's body cap and cutting WAN egress. New `federation.spoke.compression`
+  config (`gzip`, the default, or `none`) mirrors Grafana Alloy's otelcol
+  exporter `compression` semantics. The hub accepts `Content-Encoding: gzip`
+  (or identity) and rejects other encodings with 415.
+
+- SNMPv3 walk-level e2e coverage (#174). The e2e test node now provisions a
+  USM authPriv user (SHA/AES) alongside the v2c community, and
+  `tests/e2e/snmpv3_test.go` exercises a live system-group walk, an LLDP
+  module walk, and a wrong-credentials negative case over SNMPv3. Previously
+  v3 was covered only at the config/credential unit level.
+
 ### Fixed
+
+- Hub push body cap raised from 16 MiB to 32 MiB, fixing an internal
+  inconsistency: the documented per-push limits (10k devices / 50k edges)
+  produce a worst-case uncompressed payload of ~19 MiB, which the old wire cap
+  rejected with 413 before validation ever saw it. The cap now applies twice —
+  ≤32 MiB on the wire (any encoding) and ≤32 MiB of decompressed output for
+  gzip bodies — so a gzip bomb is bounded on both sides, and each 413 message
+  says which limit was hit.
+
+- Spoke push retry backoff is now equal-jittered (`[d/2, d)`). Previously all
+  spokes whose pushes failed at the same instant (e.g. a hub restart) retried
+  in synchronised waves at exactly 1s/2s/4s.
+
+- The hub records the `spoke.id` span attribute only after length and charset
+  validation. The OTel SDK does not bound attribute value length by default,
+  so attaching the raw field first let any mTLS cert holder inject a
+  body-cap-sized string into the tracing backend.
 
 - The SNMP session pool now actually evicts dead sessions on connection-level
   walk errors (#164, residual from #148). `Acquire`'s release func takes the
@@ -77,6 +107,28 @@
   inside each spoke and survives restarts via the spoke's local snapshot, not
   the hub. The hub ignores unknown JSON fields, so pushes from older spokes
   that still send `ages` remain accepted; newer spokes simply stop sending it.
+
+- The discovery loop's per-cycle carry-over (previous graph, LD-14 ages, warn
+  bookkeeping) now lives in a single `cycleState` struct threaded through
+  `publish` instead of a three-value tuple re-assigned at every call site. No
+  behaviour change.
+
+- CI gains a build-tag-agnostic `gofmt -s -l .` gate. golangci-lint's
+  formatter pass only analyses packages loaded under the default tag set, so
+  files behind `//go:build e2e` had silently drifted out of format; they are
+  re-formatted and now covered.
+
+- Bumped `github.com/prometheus/common` to v0.68.1. The remaining unmaintained
+  indirect dependencies (`jpillora/backoff`, `mwitkow/go-conntrack`) come in
+  via `prometheus/exporter-toolkit` and are tracked by dependabot/govulncheck
+  until their direct dependents migrate off them.
+
+- Documented the HA leader-flip acceptance window
+  (`docs/operator/federation.md`): a hub demoted mid-request can commit a push
+  the new leader never sees, which is acceptable only because every spoke push
+  is a full snapshot — staleness is bounded at one `discovery.interval`. The
+  code now carries a matching comment requiring an `isLeader` re-check if
+  pushes ever become incremental.
 
 ## Unreleased — planned as v1.4.0-rc.1
 
