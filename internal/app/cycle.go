@@ -18,13 +18,6 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/bgp"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/cdp"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/fdb"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/isis"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/lldp"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/mpls"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/ospf"
 	snmpwalk "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
 	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
@@ -291,100 +284,15 @@ func RunCycle(
 			params.Pool = pool
 			params.CredentialProfile = profileName
 
-			mods := []Module{
-				{"lldp", cfg.Modules.LLDP.Enabled, lldp.Walk},
-				{"cdp", cfg.Modules.CDP.Enabled, cdp.Walk},
-				{"fdb", cfg.Modules.FDB.Enabled, fdb.Walk},
-				{"ospf", cfg.Modules.OSPF.Enabled, ospf.Walk},
-				{"bgp", cfg.Modules.BGP.Enabled, bgp.Walk},
-				{"isis", cfg.Modules.ISIS.Enabled, isis.Walk},
-				{"mpls_te", cfg.Modules.MPLSTE.Enabled, mpls.Walk},
-			}
-			// Issue #74: resolve this target's per-protocol scope once. When an
-			// override matches, only the listed modules run (intersected with
-			// the global mod.Enabled gate below); when none matches, allowed is
-			// nil/overrideMatched=false and ALL enabled modules run — today's
-			// unchanged default. The headline case: bgp.Walk only fires where
-			// bgp is in the override's module set, so the walker outcome
-			// counters partition naturally.
-			allowedMods, overrideMatched := cfg.ModulesForIP(ip)
-			modStatus := map[string]int{}
-			for _, mod := range mods {
-				if !mod.Enabled {
-					continue
-				}
-				// Per-target protocol scoping: an override never widens beyond
-				// mod.Enabled (intersection), it only narrows.
-				if overrideMatched && !allowedMods[mod.Proto] {
-					continue
-				}
-				modStart := time.Now()
-				// Issue #68: per-module span, child of target.poll. Span name
-				// is "<proto>.walk" (e.g. lldp.walk, bgp.walk; the MPLS module
-				// uses its mpls_te proto identifier → mpls_te.walk). No-op when
-				// tracing is disabled.
-				modCtx, modSpan := tracing.Tracer().Start(devCtx, mod.Proto+".walk")
-				var modCancel context.CancelFunc = func() {}
-				if cfg.Discovery.TimeoutPerModule > 0 {
-					modCtx, modCancel = context.WithTimeout(modCtx, cfg.Discovery.TimeoutPerModule)
-				}
-				edges, oos, err := mod.Walk(modCtx, params, dev.ID, allowedNets)
-				modCancel()
-				m.DiscoveryModuleDuration.WithLabelValues(mod.Proto).Observe(time.Since(modStart).Seconds())
-				modSpan.SetAttributes(attribute.Int("walk.pdu_count", len(edges)))
-				if err != nil {
-					logger.Debug(mod.Proto+" walk failed", "target", target.Host, "error", err)
-					modSpan.SetAttributes(attribute.String("walk.outcome", "failed"))
-					modSpan.RecordError(err)
-					modSpan.SetStatus(codes.Error, "module walk failed")
-					modSpan.End()
-					reason := "module_walk_error"
-					var policyErr *discovery.PolicyError
-					if errors.As(err, &policyErr) && policyErr.Reason != "" {
-						reason = policyErr.Reason
-					}
-					m.DiscoveryHardFailTotal.WithLabelValues(mod.Proto, reason).Inc()
-					// Issue #20: partition by walk sub-reason. Timeouts
-					// keep reason=n/a; module-level non-timeout errors
-					// are tagged WalkReasonModuleError. Per-module richer
-					// breakdowns (auth_failed at the module layer is
-					// already excluded — credentials succeeded for the
-					// system walk above) would require module-walker
-					// changes and are not in #20's scope.
-					if errors.Is(err, context.DeadlineExceeded) {
-						m.SNMPWalksTotal.WithLabelValues("timeout", metrics.ReasonNA).Inc()
-					} else {
-						m.SNMPWalksTotal.WithLabelValues("error", string(metrics.WalkReasonModuleError)).Inc()
-					}
-					modStatus[mod.Proto] = 2
-					continue
-				}
-				m.SNMPWalksTotal.WithLabelValues("ok", metrics.ReasonNA).Inc()
-				degradedReasons := CollectDegradedReasons(edges)
-				for _, reason := range degradedReasons {
-					m.DiscoveryDegradedTotal.WithLabelValues(mod.Proto, reason).Inc()
-				}
-				if len(degradedReasons) > 0 {
-					modSpan.SetAttributes(attribute.String("walk.outcome", "degraded"))
-					if _, ok := modStatus[mod.Proto]; !ok {
-						modStatus[mod.Proto] = 1
-					}
-				} else {
-					modSpan.SetAttributes(attribute.String("walk.outcome", "ok"))
-					if _, ok := modStatus[mod.Proto]; !ok {
-						modStatus[mod.Proto] = 0
-					}
-				}
-				modSpan.End()
-				allEdges = append(allEdges, edges...)
-				// Tag each OOS entry with the protocol that reported it so the
-				// boundary_observation_info metric and hub OOS matching have a
-				// proto label.
-				for i := range oos {
-					oos[i].Proto = mod.Proto
-				}
-				allOOS = append(allOOS, oos...)
-			}
+			// Issue #153: the per-module walk loop (module list → #74 per-IP
+			// scope intersection → per-module span/metrics → outcome classify)
+			// is shared with /admin/rediscover via walkModules. The cycle
+			// supplies FULL instrumentation (metrics + tracer + logger) so its
+			// behaviour is byte-identical to the pre-extraction inline loop.
+			mEdges, mOOS, modStatus := walkModules(devCtx, cfg, *dev, ip, params, allowedNets,
+				moduleInstrumentation{metrics: m, tracer: tracing.Tracer(), logger: logger})
+			allEdges = append(allEdges, mEdges...)
+			allOOS = append(allOOS, mOOS...)
 
 			// Walk ARP table for MAC→IP enrichment when modules.arp.enabled
 			// is true (default). The map feeds SynthesizeEdges below as a
