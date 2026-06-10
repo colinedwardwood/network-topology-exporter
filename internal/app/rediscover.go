@@ -13,13 +13,6 @@ import (
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
 	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/bgp"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/cdp"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/fdb"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/isis"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/lldp"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/mpls"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/ospf"
 	snmpwalk "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
 )
@@ -275,42 +268,21 @@ func (rd *Rediscoverer) walkOne(ctx context.Context, ip net.IP) (RediscoverOutco
 	params.Vendor = dev.Vendor
 	params.UseBGPV2MIB = !rd.cfg.Modules.BGP.DisableV2MIB
 
-	mods := []Module{
-		{"lldp", rd.cfg.Modules.LLDP.Enabled, lldp.Walk},
-		{"cdp", rd.cfg.Modules.CDP.Enabled, cdp.Walk},
-		{"fdb", rd.cfg.Modules.FDB.Enabled, fdb.Walk},
-		{"ospf", rd.cfg.Modules.OSPF.Enabled, ospf.Walk},
-		{"bgp", rd.cfg.Modules.BGP.Enabled, bgp.Walk},
-		{"isis", rd.cfg.Modules.ISIS.Enabled, isis.Walk},
-		{"mpls_te", rd.cfg.Modules.MPLSTE.Enabled, mpls.Walk},
-	}
-
-	// Issue #74: honour the same per-target protocol scope as the regular
-	// cycle so a forced rediscover does not walk a module (e.g. bgp) against a
-	// target an override has scoped it out of.
-	allowedMods, overrideMatched := rd.cfg.ModulesForIP(ip)
-
-	var edgeCount int
-	for _, mod := range mods {
-		if !mod.Enabled {
-			continue
-		}
-		if overrideMatched && !allowedMods[mod.Proto] {
-			continue
-		}
-		modCtx := devCtx
-		var modCancel context.CancelFunc = func() {}
-		if rd.cfg.Discovery.TimeoutPerModule > 0 {
-			modCtx, modCancel = context.WithTimeout(devCtx, rd.cfg.Discovery.TimeoutPerModule)
-		}
-		edges, _, werr := mod.Walk(modCtx, params, dev.ID, rd.allowedNets)
-		modCancel()
-		if werr != nil {
-			rd.logger.Debug("rediscover module walk failed", "module", mod.Proto, "ip", ip, "error", werr)
-			continue
-		}
-		edgeCount += len(edges)
-	}
+	// Route the per-module walk through the shared walkModules helper (issue
+	// #153) so the rediscover and regular-cycle module sets can no longer
+	// drift. walkModules applies the same #74 cfg.ModulesForIP(ip) per-target
+	// scope intersection the inline loop used to, so behaviour is unchanged.
+	//
+	// Intentionally minimal instrumentation (issue #153 / spec C2): the admin
+	// rediscover path passes nil metrics+tracer and leaves params.WalkerMetrics
+	// unset, so it emits no per-cycle walker/decode/module-duration metrics
+	// (feeding them would corrupt the per-cycle series) and installs no #72
+	// rate limiter (keeps the forced diagnostic walk fast). This is deliberate
+	// isolation, not drift. The returned oos/moduleStatus are ignored: a forced
+	// walk only reports its edge count and outcome, it does not publish.
+	edges, _, _ := walkModules(devCtx, rd.cfg, *dev, ip, params, rd.allowedNets,
+		moduleInstrumentation{logger: rd.logger, host: ip.String()})
+	edgeCount := len(edges)
 	return RediscoverSuccess, edgeCount, nil
 }
 

@@ -136,6 +136,140 @@ func RunStaleWatchdog(ctx context.Context, status *atomic.Pointer[httpx.CycleSta
 	}
 }
 
+// publishState carries the large-topology warning bookkeeping (issue #9)
+// across cycles. publish reads it, may advance it via MaybeWarnLargeTopology,
+// and returns the updated value the caller stores for the next cycle. On the
+// size-budget reject path it is returned unchanged (no warn evaluation).
+type publishState struct {
+	prevAboveThreshold bool
+	lastWarnCycle      int
+}
+
+// publish runs the post-reconcile side-effects for one cycle and returns the
+// prevGraph + ages the caller MUST assign on BOTH the size-budget-reject path
+// and the happy path. The diff is computed against the passed prevGraph BEFORE
+// any reassignment (condition C8). On size-budget reject it returns
+// (prevGraph unchanged, newAges, ps unchanged) — ages still advance so
+// unconfirmed edges can expire — and publishes nothing. On the happy path it
+// returns (newGraph, newAges, advanced warn-state).
+//
+// The publish ordering is load-bearing and preserved verbatim: Diff against the
+// OLD prevGraph → change events + per-proto counters → OTLP push-changes →
+// conflict events + counters → prevGraph reassignment → OTLP push-graph →
+// GraphStale.Set(0) → Topology.Update → Ready CAS → MaybeWarnLargeTopology →
+// cycle-duration metric → snapshot enqueue → spoke enqueue.
+func (lc LoopConfig) publish(
+	ctx, cycleCtx context.Context,
+	evLogger *events.Logger,
+	resolver *credentials.Resolver,
+	snapshotCh chan snapshot.File,
+	pusher *spokePusher,
+	prevGraph, newGraph discovery.Graph,
+	newAges map[graph.EdgeKey]int,
+	conflicts []graph.Conflict,
+	cycleNum int,
+	start time.Time,
+	ps publishState,
+) (nextPrev discovery.Graph, nextAges map[graph.EdgeKey]int, nextPS publishState) {
+	// Admission control: reject local graph updates that exceed the
+	// configured size budget (mirrors hub-mode MaxGraph* enforcement).
+	maxDevices := lc.Cfg.Discovery.MaxGraphDevices
+	maxEdges := lc.Cfg.Discovery.MaxGraphEdges
+	if (maxDevices > 0 && len(newGraph.Devices) > maxDevices) ||
+		(maxEdges > 0 && len(newGraph.Edges) > maxEdges) {
+		lc.Logger.Warn("local graph update rejected: exceeds size budget",
+			"devices", len(newGraph.Devices), "max_devices", maxDevices,
+			"edges", len(newGraph.Edges), "max_edges", maxEdges)
+		lc.M.GraphUpdatesRejectedTotal.WithLabelValues(string(metrics.RejectReasonSizeBudgetExceeded)).Inc()
+		// Keep prevGraph as the published graph; advance ages so unconfirmed
+		// edges can still expire; skip all downstream updates.
+		return prevGraph, newAges, ps
+	}
+
+	changes := graph.Diff(prevGraph.Edges, newGraph.Edges)
+	if len(changes) > 0 {
+		evLogger.Emit(ctx, changes)
+		for _, c := range changes {
+			var proto discovery.DiscoveryProtocol
+			if c.After != nil {
+				proto = c.After.DiscoveryProto
+			} else if c.Before != nil {
+				proto = c.Before.DiscoveryProto
+			}
+			lc.M.TopologyChangeTotal.WithLabelValues(string(c.Kind), string(proto)).Inc()
+		}
+		ch := changes
+		lc.Otlp.Push(func(ctx context.Context) error {
+			return lc.Otlp.exp.PushChanges(ctx, ch)
+		}, "otlp push changes failed")
+	}
+	if len(conflicts) > 0 {
+		evLogger.EmitConflicts(ctx, conflicts)
+		for _, c := range conflicts {
+			lc.M.TopologyConflictTotal.WithLabelValues(string(c.Kind)).Inc()
+		}
+	}
+	prevGraph = newGraph
+	ages := newAges
+	if lc.Otlp.Enabled() && (len(changes) > 0 || cycleNum%lc.Cfg.Output.OTLP.HeartbeatCycles == 0) {
+		g := newGraph
+		lc.Otlp.Push(func(ctx context.Context) error {
+			return lc.Otlp.exp.PushGraph(ctx, g)
+		}, "otlp push failed")
+	}
+	lc.M.GraphStale.Set(0)
+	lc.M.Topology.Update(newGraph)
+	if lc.Ready != nil {
+		lc.Ready.CompareAndSwap(false, true)
+	}
+	ps.prevAboveThreshold, ps.lastWarnCycle = MaybeWarnLargeTopology(
+		lc.Logger, len(newGraph.Edges), len(newGraph.Devices),
+		ps.prevAboveThreshold, cycleNum, ps.lastWarnCycle)
+	lc.M.DiscoveryCycleDuration.Observe(time.Since(start).Seconds())
+
+	// LD-13: write snapshot via the bounded writer channel so an NFS stall
+	// cannot accumulate goroutines across cycles. f is passed by value so the
+	// next cycle cannot mutate the data while the write is in progress.
+	ageMap := graph.EdgeKeysToAges(ages)
+	credCache := resolver.SnapshotCache()
+	f := snapshot.File{
+		Devices:         newGraph.Devices,
+		Edges:           newGraph.Edges,
+		OutOfScope:      newGraph.OutOfScope,
+		CredentialCache: credCache,
+		UnconfirmedAges: ageMap,
+	}
+	if snapshotCh != nil {
+		select {
+		case snapshotCh <- f:
+			lc.M.SnapshotQueueDepth.Set(float64(len(snapshotCh)))
+		default:
+			// Rate-limit per path (issue #16): queue-full is the upstream
+			// symptom of the same chronic-NFS stall as the two branches
+			// in the writer goroutine. Keys are distinct so each path
+			// surfaces independently on first occurrence.
+			lc.M.SnapshotDropsTotal.WithLabelValues(string(metrics.SnapshotDropReasonQueueFull)).Inc()
+			lc.WarnSnapshot(ctx, "snapshot_queue_full",
+				"snapshot write queue full; dropping (previous write still in flight)")
+		}
+	}
+
+	// LD-16/LD-17: spoke mode — hand the pre-reconciled graph to the async
+	// pusher (#6). Enqueue never blocks; cycleCtx is captured so the eventual
+	// push still propagates the cycle's W3C traceparent to the hub (#68).
+	if pusher != nil {
+		pusher.Enqueue(cycleCtx, federation.SpokePayload{
+			SpokeID:    lc.Cfg.Federation.Spoke.SpokeID,
+			CycleAt:    time.Now(),
+			Devices:    newGraph.Devices,
+			Edges:      newGraph.Edges,
+			OutOfScope: newGraph.OutOfScope,
+			Ages:       ageMap,
+		})
+	}
+	return prevGraph, ages, ps
+}
+
 // RunDiscoveryLoop is the main discovery scheduler. It loads the LD-13
 // snapshot on startup, starts the credential resolver, and then runs
 // periodic cycles. Each cycle probes all configured targets concurrently
@@ -324,102 +458,10 @@ func RunDiscoveryLoop(ctx context.Context, lc LoopConfig) {
 			DeviceErrors: int64(deviceErrors),
 		})
 
-		// Admission control: reject local graph updates that exceed the
-		// configured size budget (mirrors hub-mode MaxGraph* enforcement).
-		maxDevices := lc.Cfg.Discovery.MaxGraphDevices
-		maxEdges := lc.Cfg.Discovery.MaxGraphEdges
-		if (maxDevices > 0 && len(newGraph.Devices) > maxDevices) ||
-			(maxEdges > 0 && len(newGraph.Edges) > maxEdges) {
-			lc.Logger.Warn("local graph update rejected: exceeds size budget",
-				"devices", len(newGraph.Devices), "max_devices", maxDevices,
-				"edges", len(newGraph.Edges), "max_edges", maxEdges)
-			ages = newAges // advance counters so unconfirmed edges can still expire
-			lc.M.GraphUpdatesRejectedTotal.WithLabelValues(string(metrics.RejectReasonSizeBudgetExceeded)).Inc()
-			// Keep prevGraph as the published graph; skip all downstream updates.
-			return
-		}
-
-		changes := graph.Diff(prevGraph.Edges, newGraph.Edges)
-		if len(changes) > 0 {
-			evLogger.Emit(ctx, changes)
-			for _, c := range changes {
-				var proto discovery.DiscoveryProtocol
-				if c.After != nil {
-					proto = c.After.DiscoveryProto
-				} else if c.Before != nil {
-					proto = c.Before.DiscoveryProto
-				}
-				lc.M.TopologyChangeTotal.WithLabelValues(string(c.Kind), string(proto)).Inc()
-			}
-			ch := changes
-			lc.Otlp.Push(func(ctx context.Context) error {
-				return lc.Otlp.exp.PushChanges(ctx, ch)
-			}, "otlp push changes failed")
-		}
-		if len(conflicts) > 0 {
-			evLogger.EmitConflicts(ctx, conflicts)
-			for _, c := range conflicts {
-				lc.M.TopologyConflictTotal.WithLabelValues(string(c.Kind)).Inc()
-			}
-		}
-		prevGraph = newGraph
-		ages = newAges
-		if lc.Otlp.Enabled() && (len(changes) > 0 || cycleNum%lc.Cfg.Output.OTLP.HeartbeatCycles == 0) {
-			g := newGraph
-			lc.Otlp.Push(func(ctx context.Context) error {
-				return lc.Otlp.exp.PushGraph(ctx, g)
-			}, "otlp push failed")
-		}
-		lc.M.GraphStale.Set(0)
-		lc.M.Topology.Update(newGraph)
-		if lc.Ready != nil {
-			lc.Ready.CompareAndSwap(false, true)
-		}
-		prevAboveThreshold, lastWarnCycle = MaybeWarnLargeTopology(
-			lc.Logger, len(newGraph.Edges), len(newGraph.Devices),
-			prevAboveThreshold, cycleNum, lastWarnCycle)
-		lc.M.DiscoveryCycleDuration.Observe(time.Since(start).Seconds())
-
-		// LD-13: write snapshot via the bounded writer channel so an NFS stall
-		// cannot accumulate goroutines across cycles. f is passed by value so the
-		// next cycle cannot mutate the data while the write is in progress.
-		ageMap := graph.EdgeKeysToAges(ages)
-		credCache := resolver.SnapshotCache()
-		f := snapshot.File{
-			Devices:         newGraph.Devices,
-			Edges:           newGraph.Edges,
-			OutOfScope:      newGraph.OutOfScope,
-			CredentialCache: credCache,
-			UnconfirmedAges: ageMap,
-		}
-		if snapshotCh != nil {
-			select {
-			case snapshotCh <- f:
-				lc.M.SnapshotQueueDepth.Set(float64(len(snapshotCh)))
-			default:
-				// Rate-limit per path (issue #16): queue-full is the upstream
-				// symptom of the same chronic-NFS stall as the two branches
-				// in the writer goroutine. Keys are distinct so each path
-				// surfaces independently on first occurrence.
-				lc.M.SnapshotDropsTotal.WithLabelValues(string(metrics.SnapshotDropReasonQueueFull)).Inc()
-				lc.WarnSnapshot(ctx, "snapshot_queue_full",
-					"snapshot write queue full; dropping (previous write still in flight)")
-			}
-		}
-
-		// LD-16/LD-17: spoke mode — hand the pre-reconciled graph to the async
-		// pusher (#6). Enqueue never blocks; cycleCtx is captured so the eventual
-		// push still propagates the cycle's W3C traceparent to the hub (#68).
-		if pusher != nil {
-			pusher.Enqueue(cycleCtx, federation.SpokePayload{
-				SpokeID:    lc.Cfg.Federation.Spoke.SpokeID,
-				CycleAt:    time.Now(),
-				Devices:    newGraph.Devices,
-				Edges:      newGraph.Edges,
-				OutOfScope: newGraph.OutOfScope,
-				Ages:       ageMap,
-			})
-		}
+		ps := publishState{prevAboveThreshold: prevAboveThreshold, lastWarnCycle: lastWarnCycle}
+		prevGraph, ages, ps = lc.publish(ctx, cycleCtx, evLogger, resolver, snapshotCh, pusher,
+			prevGraph, newGraph, newAges, conflicts, cycleNum, start, ps)
+		prevAboveThreshold, lastWarnCycle = ps.prevAboveThreshold, ps.lastWarnCycle
 	}
 
 	cycle()

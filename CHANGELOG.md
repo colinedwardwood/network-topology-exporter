@@ -36,6 +36,9 @@ v1.3.1 lands under this milestone instead, renamed to
 
 ### Internal
 
+- Decomposed RunCycle (probeTarget + shared walkModules) and de-duplicated the
+  cycle/rediscover module-walk; extracted loop publish(). No behavior change;
+  rediscover's minimal instrumentation is intentional and now explicit (#153).
 - File decomposition along responsibility (#151). `internal/config/config.go`
   is split into `types.go` (struct/type definitions), `defaults.go`
   (`applyDefaults`), `validate.go` (the validation family), and
