@@ -275,10 +275,8 @@ func walkBgpPeerTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*bg
 		}
 		switch col {
 		case colBgpPeerState:
-			// Strict decode (#170): 0 is not a valid bgpPeerState, but a
-			// lenient decode would silently turn a corrupt PDU into "not
-			// established" and drop the peer edge with no decode-issue
-			// accounting.
+			// Strict decode (#170, see PDUIntStrict doc): silent 0 here would
+			// mean "not established" → peer edge dropped unaccounted.
 			s, ok := snmputil.PDUIntStrict(pdu)
 			if !ok {
 				snmputil.ReportDecodeIssue(ctx, "bgp", oidBgpPeerTable, "peer_state_undecodable", 1)

@@ -325,6 +325,12 @@ func PDUInt(pdu g.SnmpPDU) int {
 
 // PDUIntStrict extracts an integer value from a PDU and reports whether
 // extraction succeeded.
+//
+// Use this (paired with ReportDecodeIssue) instead of PDUInt at every site
+// that decodes an enum-state column (#170): a lenient decode maps a corrupt
+// or mistyped PDU to 0, which most MIB enums treat as "absent/down", so the
+// row is silently dropped with no decode-issue accounting. Call sites only
+// need a one-line comment naming what the silent 0 would have meant locally.
 func PDUIntStrict(pdu g.SnmpPDU) (int, bool) {
 	switch v := pdu.Value.(type) {
 	case int:

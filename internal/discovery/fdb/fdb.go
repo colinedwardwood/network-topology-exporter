@@ -257,9 +257,8 @@ func walkFdbTableInto(ctx context.Context, client *gsnmp.GoSNMP, entries map[str
 				e.port = p
 			}
 		case colFdbStatus:
-			// Strict decode (#170): 0 is not a valid dot1dTpFdbStatus, but a
-			// lenient decode would silently turn a corrupt PDU into "not
-			// learned" and drop the entry with no decode-issue accounting.
+			// Strict decode (#170, see PDUIntStrict doc): silent 0 here would
+			// mean "not learned" → entry dropped unaccounted.
 			s, ok := snmputil.PDUIntStrict(pdu)
 			if !ok {
 				snmputil.ReportDecodeIssue(ctx, walkerFDB, oidFdbTable, "status_undecodable", 1)

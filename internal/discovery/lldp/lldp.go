@@ -165,9 +165,8 @@ func walkLocPorts(ctx context.Context, client *gsnmp.GoSNMP) (map[int]locPort, e
 		lp := ports[portNum]
 		switch col {
 		case colLocPortIDSubtype:
-			// Strict decode (#170): a corrupt subtype PDU would otherwise
-			// silently become 0, making decodePortID fall back to the port
-			// description/number with no decode-issue accounting.
+			// Strict decode (#170, see PDUIntStrict doc): silent 0 here would
+			// make decodePortID fall back to port description unaccounted.
 			s, ok := snmputil.PDUIntStrict(pdu)
 			if !ok {
 				snmputil.ReportDecodeIssue(ctx, walkerLLDP, oidLocPortTable, "port_subtype_undecodable", 1)
