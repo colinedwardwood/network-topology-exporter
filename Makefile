@@ -80,7 +80,7 @@ test-e2e: ## Run e2e tests against a live containerlab topology (requires Docker
 	CLAB_DOCKER=1 go test ./tests/e2e/... -tags e2e -v -count=1 -timeout 15m
 
 .PHONY: test-e2e-srl
-test-e2e-srl: ## Run SR Linux e2e tests (requires Docker + containerlab + x86)
+test-e2e-srl: ## Run SR Linux e2e tests (requires Docker + containerlab + x86; 26.3.2+ for LLDP SNMP)
 	CLAB_SUDO=1 go test ./tests/e2e/srl/... -tags e2e_srl -v -count=1 -timeout 20m
 
 .PHONY: lint-scripts

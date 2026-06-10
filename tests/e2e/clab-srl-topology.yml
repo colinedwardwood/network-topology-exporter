@@ -4,13 +4,13 @@ topology:
   nodes:
     spine1:
       kind: srl
-      image: ghcr.io/nokia/srlinux:24.7.2
+      image: ghcr.io/nokia/srlinux:26.3.2
     leaf1:
       kind: srl
-      image: ghcr.io/nokia/srlinux:24.7.2
+      image: ghcr.io/nokia/srlinux:26.3.2
     leaf2:
       kind: srl
-      image: ghcr.io/nokia/srlinux:24.7.2
+      image: ghcr.io/nokia/srlinux:26.3.2
 
   links:
     # spine1 e1-1 ↔ leaf1 e1-1

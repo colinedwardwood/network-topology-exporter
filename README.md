@@ -308,7 +308,7 @@ End-to-end tests require Docker and [containerlab](https://containerlab.dev/inst
 ```bash
 make e2e-image          # build the lightweight Alpine test node image (once)
 make test-e2e           # e2e tests: lldp + snmp + binary exporter + federation spoke/hub
-make test-e2e-srl       # e2e tests against Nokia SR Linux (x86-64, pulls srlinux:24.7.2)
+make test-e2e-srl       # e2e tests against Nokia SR Linux (x86-64, pulls srlinux:26.3.2)
 ```
 
 ## Test environments
