@@ -36,12 +36,14 @@ const (
 // Walk returns MPLS-TE tunnel edges for the device at p.IP. Only tunnels with
 // operStatus up(1) produce edges. Egress LSR IPs outside allowedNets go to the
 // OutOfScopeNeighbour slice; pass nil to skip scope enforcement.
-func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
+func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) (_ []discovery.Edge, _ []discovery.OutOfScopeNeighbour, retErr error) {
 	client, release, err := snmputil.Acquire(p)
 	if err != nil {
 		return nil, nil, fmt.Errorf("mpls_te %s: %w", p.IP, err)
 	}
-	defer release()
+	// release sees the walk's final error so the pool can evict the session on
+	// connection-level failures (#164).
+	defer func() { release(retErr) }()
 
 	operStatuses, operStats, err := snmputil.WalkToIntMapStrict(ctx, client, "mpls_te", oidMplsTunnelOperStatus)
 	if err != nil {

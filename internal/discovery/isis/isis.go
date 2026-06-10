@@ -42,12 +42,14 @@ const (
 // Walk returns IS-IS adjacency edges for the device at p.IP. Only adjacencies
 // in state up(3) produce edges. Neighbours outside allowedNets go to the
 // OutOfScopeNeighbour slice; pass nil to skip scope enforcement.
-func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
+func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) (_ []discovery.Edge, _ []discovery.OutOfScopeNeighbour, retErr error) {
 	client, release, err := snmputil.Acquire(p)
 	if err != nil {
 		return nil, nil, fmt.Errorf("isis %s: %w", p.IP, err)
 	}
-	defer release()
+	// release sees the walk's final error so the pool can evict the session on
+	// connection-level failures (#164).
+	defer func() { release(retErr) }()
 
 	states, stateDegraded, err := walkAdjStates(ctx, client)
 	if err != nil {

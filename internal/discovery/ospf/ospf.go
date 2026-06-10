@@ -79,13 +79,15 @@ type nbrRow struct {
 // Walk returns OSPF neighbour edges for the device at p.IP. Only neighbours
 // in state full(8) or twoWay(4) produce edges. Neighbours outside allowedNets
 // go to the OutOfScopeNeighbour slice; pass nil to skip scope enforcement.
-func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
+func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) (_ []discovery.Edge, _ []discovery.OutOfScopeNeighbour, retErr error) {
 	client, release, err := snmputil.Acquire(p)
 	if err != nil {
 		snmputil.RecordProtocolWalkerOutcome(&p, walkerOSPF, snmputil.OutcomeError)
 		return nil, nil, fmt.Errorf("ospf %s: %w", p.IP, err)
 	}
-	defer release()
+	// release sees the walk's final error so the pool can evict the session on
+	// connection-level failures (#164).
+	defer func() { release(retErr) }()
 
 	// ospfNbrTable is the base table for the outcome accounting: hadPDUs
 	// distinguishes "MIB unimplemented" (zero PDUs — common on modern OS that

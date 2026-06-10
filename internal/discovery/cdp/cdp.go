@@ -60,13 +60,15 @@ type cacheEntry struct {
 
 // Walk returns CDP-discovered edges for the device at p.IP. localDevice is
 // the sysName from the SNMP SYSTEM walk.
-func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
+func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) (_ []discovery.Edge, _ []discovery.OutOfScopeNeighbour, retErr error) {
 	client, release, err := snmputil.Acquire(p)
 	if err != nil {
 		snmputil.RecordProtocolWalkerOutcome(&p, walkerCDP, snmputil.OutcomeError)
 		return nil, nil, fmt.Errorf("cdp %s: %w", p.IP, err)
 	}
-	defer release()
+	// release sees the walk's final error so the pool can evict the session on
+	// connection-level failures (#164).
+	defer func() { release(retErr) }()
 
 	ifNames, err := snmputil.WalkIfNamesWithFallback(ctx, client)
 	if err != nil {

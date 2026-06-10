@@ -11,6 +11,18 @@
 
 ### Fixed
 
+- The SNMP session pool now actually evicts dead sessions on connection-level
+  walk errors (#164, residual from #148). `Acquire`'s release func takes the
+  walk's final error; a transport-level (net-layer) failure closes and evicts
+  the pooled session with reason `connection_error` so the next acquire dials
+  fresh. Previously the unhealthy-eviction path (`Return(..., false)`) existed
+  but was never invoked outside tests — every production walker checked a
+  just-failed session straight back in — while operator docs claimed eviction
+  happened. The never-called `Return` method is deleted, leaving exactly one
+  release path. SNMP-protocol failures (e.g. per-request timeouts) and context
+  cancellation deliberately do not evict: UDP is connectionless, so they do
+  not imply a broken socket.
+
 - Corrupt enum-state PDUs are now counted as decode issues instead of silently
   dropping topology (#170, follow-up to #148): BGP `bgpPeerState`, OSPF
   `ospfNbrState`, FDB `dot1dTpFdbStatus`/`dot1qTpFdbStatus`, and LLDP

@@ -252,32 +252,45 @@ var openCount atomic.Int64
 func OpenCount() int64 { return openCount.Load() }
 
 // Acquire returns an SNMP session for p plus a release func the caller MUST
-// defer. It is the single seam every walker uses to obtain a session (issue
-// #83), replacing the historical `client, err := Open(p); defer
-// client.Conn.Close()` pair.
+// defer, passing the walk's final error (nil on success). It is the single
+// seam every walker uses to obtain a session (issue #83), replacing the
+// historical `client, err := Open(p); defer client.Conn.Close()` pair.
 //
 // When p carries no pool (p.Pool == nil, the default), Acquire opens a fresh
-// session via Open and the returned release closes its connection — this path
-// is byte-identical to the pre-#83 Open + Conn.Close behaviour, which is the
-// single most important property of this change and is protected by a test.
+// session via Open and the returned release closes its connection regardless
+// of the error passed — this path is byte-identical to the pre-#83
+// Open + Conn.Close behaviour, which is the single most important property of
+// this change and is protected by a test.
 //
 // When a pool is present, Acquire checks out a session reused across this
-// target's sequential module walks, keyed by (p.IP, p.CredentialProfile), and
-// release returns it to the pool WITHOUT closing it. release is always
-// non-nil; on the error path it is a no-op so callers may `defer release()`
-// unconditionally after the error check.
+// target's sequential module walks, keyed by (p.IP, p.CredentialProfile).
+// release inspects the walk error (#164): a connection-level error closes and
+// evicts the session (reason connection_error) so the next acquire dials
+// fresh; any other outcome returns it to the pool WITHOUT closing it. release
+// is always non-nil; on the error path it is a no-op so callers may
+// `defer release(...)` unconditionally after the error check.
+//
+// The idiomatic call shape uses a named return so the deferred release sees
+// the final error:
+//
+//	func Walk(...) (_ []discovery.Edge, retErr error) {
+//		client, release, err := snmputil.Acquire(p)
+//		if err != nil { return nil, err }
+//		defer func() { release(retErr) }()
+//		...
+//	}
 //
 // gosnmp is not goroutine-safe, but a pooled session is only ever handed to
-// one caller at a time (checkout/return), and a target's modules run
+// one caller at a time (checkout/release), and a target's modules run
 // sequentially within its per-device goroutine (see internal/app/cycle.go), so
 // reuse across that target's modules within a cycle is safe.
-func Acquire(p Params) (*g.GoSNMP, func(), error) {
+func Acquire(p Params) (*g.GoSNMP, func(error), error) {
 	if p.Pool == nil {
 		client, err := Open(p)
 		if err != nil {
-			return nil, func() {}, err
+			return nil, func(error) {}, err
 		}
-		return client, func() { _ = client.Conn.Close() }, nil
+		return client, func(error) { _ = client.Conn.Close() }, nil
 	}
 	return p.Pool.acquire(p)
 }

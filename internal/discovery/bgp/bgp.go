@@ -170,12 +170,14 @@ type bgpPeer struct {
 // removed it after real-device captures showed no vendor implements the
 // draft at that OID; each vendor publishes under its enterprise OID
 // instead. See plans/bgp4v2-ipv6.md for the design history.
-func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
+func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) (_ []discovery.Edge, _ []discovery.OutOfScopeNeighbour, retErr error) {
 	client, release, err := snmputil.Acquire(p)
 	if err != nil {
 		return nil, nil, fmt.Errorf("bgp %s: %w", p.IP, err)
 	}
-	defer release()
+	// release sees the walk's final error so the pool can evict the session on
+	// connection-level failures (#164).
+	defer func() { release(retErr) }()
 
 	// vendorErr / vendorSpec capture a vendor-walk error so we can promote
 	// it to Warn iff RFC 4273 succeeds afterwards. Per issue #8: a silently

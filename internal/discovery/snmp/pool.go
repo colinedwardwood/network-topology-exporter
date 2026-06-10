@@ -1,6 +1,9 @@
 package snmp
 
 import (
+	"context"
+	"errors"
+	"net"
 	"sync"
 	"time"
 
@@ -131,8 +134,10 @@ func NewSessionPool(opts SessionPoolOptions) *SessionPool {
 
 // acquire is the pool-backed branch of Acquire. It returns a session and a
 // release func that returns the session to the pool (or closes a transient
-// fallback session). The error path returns a no-op release.
-func (pl *SessionPool) acquire(p Params) (*g.GoSNMP, func(), error) {
+// fallback session). The release func takes the walk error so it can evict the
+// session when the error is connection-level (#164); see releaseFunc. The
+// error path returns a no-op release.
+func (pl *SessionPool) acquire(p Params) (*g.GoSNMP, func(error), error) {
 	key := poolKey{ip: p.IP.String(), profile: p.CredentialProfile}
 
 	pl.mu.Lock()
@@ -166,7 +171,7 @@ func (pl *SessionPool) acquire(p Params) (*g.GoSNMP, func(), error) {
 	client, err := Open(p)
 	if err != nil {
 		pl.recordMiss()
-		return nil, func() {}, err
+		return nil, func(error) {}, err
 	}
 	pl.mu.Lock()
 	if pl.closed {
@@ -174,7 +179,7 @@ func (pl *SessionPool) acquire(p Params) (*g.GoSNMP, func(), error) {
 		// closing release so the connection is not leaked.
 		pl.mu.Unlock()
 		pl.recordMiss()
-		return client, func() { _ = client.Conn.Close() }, nil
+		return client, func(error) { _ = client.Conn.Close() }, nil
 	}
 	// Re-check: another goroutine for the same key may have stored an entry
 	// while we dialed (only possible across targets sharing an IP+profile, which
@@ -193,7 +198,7 @@ func (pl *SessionPool) acquire(p Params) (*g.GoSNMP, func(), error) {
 		// Existing entry is in use; keep our fresh one transient.
 		pl.mu.Unlock()
 		pl.recordMiss()
-		return client, func() { _ = client.Conn.Close() }, nil
+		return client, func(error) { _ = client.Conn.Close() }, nil
 	}
 	pl.sessions[key] = &poolEntry{session: client, lastUsed: time.Now(), inUse: true}
 	pl.setSizeLocked()
@@ -204,22 +209,35 @@ func (pl *SessionPool) acquire(p Params) (*g.GoSNMP, func(), error) {
 
 // openTransient opens a fresh, non-pooled session whose release closes it.
 // Used for the shutdown and defensive-in-use fallback paths. Counted as a miss.
-func (pl *SessionPool) openTransient(p Params) (*g.GoSNMP, func(), error) {
+func (pl *SessionPool) openTransient(p Params) (*g.GoSNMP, func(error), error) {
 	client, err := Open(p)
 	if err != nil {
 		pl.recordMiss()
-		return nil, func() {}, err
+		return nil, func(error) {}, err
 	}
 	pl.recordMiss()
-	return client, func() { _ = client.Conn.Close() }, nil
+	return client, func(error) { _ = client.Conn.Close() }, nil
 }
 
-// releaseFunc returns the release closure for a pooled key. The closure marks
-// the entry not-in-use and refreshes lastUsed; the gosnmp session is NOT closed
-// (it stays in the pool for reuse). It tolerates the entry having been removed
-// in the meantime (e.g. by InvalidateProfile mid-walk).
-func (pl *SessionPool) releaseFunc(key poolKey) func() {
-	return func() { pl.returnKey(key) }
+// releaseFunc returns the release closure for a pooled key — the SINGLE
+// production release path (#164; the former unconditional returnKey-only
+// closure plus the never-called Return method were the two halves of the bug).
+//
+// The closure receives the walk error. When it is connection-level (see
+// isConnectionError) the session is closed and evicted with reason
+// connection_error so the next acquire dials fresh rather than reusing a dead
+// socket. Otherwise the entry is marked not-in-use and its idle clock reset;
+// the gosnmp session is NOT closed (it stays pooled for reuse). Both paths
+// tolerate the entry having been removed in the meantime (e.g. by
+// InvalidateProfile mid-walk).
+func (pl *SessionPool) releaseFunc(key poolKey) func(error) {
+	return func(walkErr error) {
+		if isConnectionError(walkErr) {
+			pl.evictKey(key)
+			return
+		}
+		pl.returnKey(key)
+	}
 }
 
 func (pl *SessionPool) returnKey(key poolKey) {
@@ -231,31 +249,44 @@ func (pl *SessionPool) returnKey(key poolKey) {
 	}
 }
 
-// Return hands a session back to the pool. When healthy is false (the walk hit
-// a connection-level error), the session is closed and evicted with reason
-// connection_error so the next acquire dials fresh rather than reusing a dead
-// socket. When healthy, the entry is marked available and its idle clock reset.
-func (pl *SessionPool) Return(p Params, s *g.GoSNMP, healthy bool) {
-	key := poolKey{ip: p.IP.String(), profile: p.CredentialProfile}
+// evictKey closes and removes a pooled session after a connection-level walk
+// error, recording a connection_error eviction. No-op if the entry was already
+// removed (rotation/idle/Close racing with the walk).
+func (pl *SessionPool) evictKey(key poolKey) {
 	pl.mu.Lock()
 	defer pl.mu.Unlock()
 	e, ok := pl.sessions[key]
-	if !ok || e.session != s {
-		// Not a pooled session (e.g. a transient fallback). If unhealthy, close it.
-		if !healthy {
-			closeSession(s)
-		}
+	if !ok {
 		return
 	}
-	if !healthy {
-		closeSession(e.session)
-		delete(pl.sessions, key)
-		pl.setSizeLocked()
-		pl.recordEviction(evictionReasonConnectionError)
-		return
+	closeSession(e.session)
+	delete(pl.sessions, key)
+	pl.setSizeLocked()
+	pl.recordEviction(evictionReasonConnectionError)
+}
+
+// isConnectionError reports whether a walk error indicates the session's
+// underlying transport is suspect (a net-layer failure such as a socket read/
+// write error), as opposed to an SNMP-protocol failure or a caller-driven
+// context stop. Only transport failures evict (#164).
+//
+// Deliberately NOT classified as connection errors:
+//   - context.Canceled / context.DeadlineExceeded: caller decisions, and
+//     context.DeadlineExceeded would otherwise match net.Error (it implements
+//     Timeout()/Temporary()).
+//   - gosnmp's plain "request timeout (after N retries)" error: SNMP over UDP
+//     is connectionless, so a per-request timeout usually means a slow or
+//     filtered device, not a broken local socket; evicting on it would churn
+//     sessions on every flaky poll and defeat the pool's purpose.
+func isConnectionError(err error) bool {
+	if err == nil {
+		return false
 	}
-	e.inUse = false
-	e.lastUsed = time.Now()
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var ne net.Error
+	return errors.As(err, &ne)
 }
 
 // InvalidateProfile closes and removes every pooled session whose key carries

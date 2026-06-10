@@ -1,6 +1,10 @@
 package snmp
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -69,7 +73,7 @@ func startAgent(t *testing.T, community, profile string) Params {
 // exercise exactly one acquisition path.
 // NOTE: pool_test.go imports gosnmp as `gsnmp` (not `g`), so the return type is
 // *gsnmp.GoSNMP, not *g.GoSNMP.
-func checkout(t *testing.T, pl *SessionPool, p Params) (*gsnmp.GoSNMP, func()) {
+func checkout(t *testing.T, pl *SessionPool, p Params) (*gsnmp.GoSNMP, func(error)) {
 	t.Helper()
 	s, release, err := pl.acquire(p)
 	if err != nil {
@@ -86,13 +90,13 @@ func TestSessionPoolCheckoutReuseSameKey(t *testing.T) {
 	p := startAgent(t, "public", "profA")
 
 	s1, release1 := checkout(t, pl, p)
-	release1()
+	release1(nil)
 
 	s2, release2 := checkout(t, pl, p)
 	if s1 != s2 {
 		t.Fatalf("expected same session reused on repeat checkout, got different instances")
 	}
-	release2()
+	release2(nil)
 
 	hits, misses, _, _ := fm.snapshot()
 	if misses != 1 {
@@ -118,8 +122,8 @@ func TestSessionPoolDifferentProfileIsDifferentSession(t *testing.T) {
 	if sA == sB {
 		t.Fatalf("expected distinct sessions for distinct profiles")
 	}
-	releaseA()
-	releaseB()
+	releaseA(nil)
+	releaseB(nil)
 
 	_, misses, size, _ := fm.snapshot()
 	if misses != 2 {
@@ -137,7 +141,7 @@ func TestSessionPoolInvalidateProfile(t *testing.T) {
 
 	p := startAgent(t, "public", "rotateme")
 	s1, release1 := checkout(t, pl, p)
-	release1()
+	release1(nil)
 
 	pl.InvalidateProfile("rotateme")
 
@@ -154,7 +158,7 @@ func TestSessionPoolInvalidateProfile(t *testing.T) {
 	if s2 == s1 {
 		t.Fatalf("expected a fresh session after InvalidateProfile")
 	}
-	release2()
+	release2(nil)
 }
 
 func TestSessionPoolIdleEviction(t *testing.T) {
@@ -164,7 +168,7 @@ func TestSessionPoolIdleEviction(t *testing.T) {
 
 	p := startAgent(t, "public", "idle")
 	_, release := checkout(t, pl, p)
-	release()
+	release(nil)
 
 	// Force the entry's lastUsed far into the past, then run the evictor.
 	key := poolKey{ip: p.IP.String(), profile: p.CredentialProfile}
@@ -183,21 +187,71 @@ func TestSessionPoolIdleEviction(t *testing.T) {
 	}
 }
 
-func TestSessionPoolReturnUnhealthyEvicts(t *testing.T) {
+// TestSessionPoolReleaseConnectionErrorEvicts (#164): releasing with a
+// transport-level walk error must close and evict the session (reason
+// connection_error) so the next acquire dials fresh rather than reusing a
+// dead socket. This is the production path — every walker defers
+// release(retErr) — unlike the former Return(p, s, false) method, which no
+// production code ever called.
+func TestSessionPoolReleaseConnectionErrorEvicts(t *testing.T) {
 	fm := newFakeSessionPoolMetrics()
 	pl := NewSessionPool(SessionPoolOptions{MaxIdle: time.Hour, Metrics: fm})
 	defer pl.Close()
 
 	p := startAgent(t, "public", "conn")
-	s, _ := checkout(t, pl, p)
-	pl.Return(p, s, false) // unhealthy
+	s1, release := checkout(t, pl, p)
+	// Walkers wrap errors with fmt.Errorf("...: %w", err); eviction must
+	// classify through the chain.
+	release(fmt.Errorf("bgp walk: %w", &net.OpError{Op: "read", Net: "udp", Err: errors.New("connection refused")}))
 
 	_, _, size, ev := fm.snapshot()
 	if ev[evictionReasonConnectionError] != 1 {
 		t.Errorf("connection_error evictions = %d, want 1", ev[evictionReasonConnectionError])
 	}
 	if size != 0 {
-		t.Errorf("size after unhealthy return = %d, want 0", size)
+		t.Errorf("size after connection-error release = %d, want 0", size)
+	}
+
+	// Next checkout dials fresh.
+	s2, release2 := checkout(t, pl, p)
+	if s2 == s1 {
+		t.Fatalf("expected a fresh session after connection-error eviction")
+	}
+	release2(nil)
+}
+
+// TestSessionPoolReleaseNonConnectionErrorKeepsSession (#164): SNMP-protocol
+// failures and caller-driven context stops must NOT evict — SNMP/UDP is
+// connectionless, so only transport-level errors imply a bad socket.
+func TestSessionPoolReleaseNonConnectionErrorKeepsSession(t *testing.T) {
+	for name, walkErr := range map[string]error{
+		"protocol_error":   errors.New("request timeout (after 3 retries)"),
+		"context_canceled": fmt.Errorf("walk: %w", context.Canceled),
+		"context_deadline": fmt.Errorf("walk: %w", context.DeadlineExceeded),
+	} {
+		t.Run(name, func(t *testing.T) {
+			fm := newFakeSessionPoolMetrics()
+			pl := NewSessionPool(SessionPoolOptions{MaxIdle: time.Hour, Metrics: fm})
+			defer pl.Close()
+
+			p := startAgent(t, "public", "keep")
+			s1, release := checkout(t, pl, p)
+			release(walkErr)
+
+			_, _, size, ev := fm.snapshot()
+			if ev[evictionReasonConnectionError] != 0 {
+				t.Errorf("connection_error evictions = %d, want 0", ev[evictionReasonConnectionError])
+			}
+			if size != 1 {
+				t.Errorf("size after non-connection-error release = %d, want 1", size)
+			}
+
+			s2, release2 := checkout(t, pl, p)
+			if s2 != s1 {
+				t.Fatalf("expected the session to be reused after a non-connection error")
+			}
+			release2(nil)
+		})
 	}
 }
 
@@ -208,7 +262,7 @@ func TestSessionPoolCloseClosesAll(t *testing.T) {
 	for _, prof := range []string{"a", "b", "c"} {
 		p := startAgent(t, "public", prof)
 		_, release := checkout(t, pl, p)
-		release()
+		release(nil)
 	}
 	_, _, size, _ := fm.snapshot()
 	if size != 3 {
@@ -248,7 +302,7 @@ func TestSessionPoolConcurrentDistinctKeys(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < iters; j++ {
 				_, release := checkout(t, pl, p)
-				release()
+				release(nil)
 			}
 		}(params[i])
 	}
@@ -275,9 +329,9 @@ func TestAcquireFreshPathByteIdentical(t *testing.T) {
 	if client.Conn == nil {
 		t.Fatalf("expected a live connection from fresh Acquire")
 	}
-	release()
-	// A double release must not panic (defer release() in walkers is unconditional).
-	release()
+	release(nil)
+	// A double release must not panic (deferred release in walkers is unconditional).
+	release(nil)
 }
 
 // TestAcquirePooledPathReuses asserts that with a pool, repeated Acquire on the
@@ -294,12 +348,12 @@ func TestAcquirePooledPathReuses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire 1: %v", err)
 	}
-	r1() // return to pool (does NOT close)
+	r1(nil) // clean return to pool (does NOT close)
 	c2, r2, err := Acquire(p)
 	if err != nil {
 		t.Fatalf("acquire 2: %v", err)
 	}
-	r2()
+	r2(nil)
 	if c1 != c2 {
 		t.Fatalf("pooled Acquire did not reuse the session")
 	}
@@ -341,7 +395,7 @@ func TestPoolOpenReduction(t *testing.T) {
 					if err != nil {
 						t.Fatalf("acquire: %v", err)
 					}
-					release()
+					release(nil)
 				}
 			}
 		}

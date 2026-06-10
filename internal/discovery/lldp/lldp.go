@@ -101,13 +101,15 @@ type remEntry struct {
 
 // Walk returns LLDP-discovered edges for the device at p.IP. localDevice is
 // the sysName from the SNMP SYSTEM walk; it becomes SrcDevice in all edges.
-func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour, error) {
+func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNets []*net.IPNet) (_ []discovery.Edge, _ []discovery.OutOfScopeNeighbour, retErr error) {
 	client, release, err := snmputil.Acquire(p)
 	if err != nil {
 		snmputil.RecordProtocolWalkerOutcome(&p, walkerLLDP, snmputil.OutcomeError)
 		return nil, nil, fmt.Errorf("lldp %s: %w", p.IP, err)
 	}
-	defer release()
+	// release sees the walk's final error so the pool can evict the session on
+	// connection-level failures (#164).
+	defer func() { release(retErr) }()
 
 	locPorts, err := walkLocPorts(ctx, client)
 	if err != nil {

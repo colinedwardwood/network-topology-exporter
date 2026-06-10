@@ -232,7 +232,9 @@ func probeTarget(cycleCtx context.Context, deps probeDeps, target config.TargetC
 				"device", dev.ID, "err", arpErr)
 		} else {
 			arpMACToIP, arpErr := snmpwalk.WalkARPTable(devCtx, arpClient)
-			arpRelease()
+			// Pass the walk error so the pool can evict the session on a
+			// connection-level failure (#164).
+			arpRelease(arpErr)
 			if arpErr != nil {
 				logger.Debug("ARP table walk failed; MAC→IP resolution unavailable for this device",
 					"device", dev.ID, "err", arpErr)
