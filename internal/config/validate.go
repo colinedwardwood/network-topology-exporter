@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -413,10 +414,10 @@ func (c *Config) validateFDB() error {
 }
 
 // scopableModules is the canonical set of per-target-scopable module names,
-// matching the module dispatch table in internal/app/cycle.go and the toggles
-// on ModulesConfig. snmp/arp are intentionally excluded: snmp is the transport
-// (always required to reach a device) and arp is enrichment driven by fdb, not
-// an independently dispatched edge source.
+// matching the module dispatch table in internal/app/device_walk.go and the
+// toggles on ModulesConfig. snmp/arp are intentionally excluded: snmp is the
+// transport (always required to reach a device) and arp is enrichment driven
+// by fdb, not an independently dispatched edge source.
 var scopableModules = map[string]struct{}{
 	"lldp":    {},
 	"cdp":     {},
@@ -425,6 +426,26 @@ var scopableModules = map[string]struct{}{
 	"bgp":     {},
 	"isis":    {},
 	"mpls_te": {},
+}
+
+// ScopableModuleNames returns the canonical per-target-scopable module names,
+// sorted. It exists so the walker dispatch table in internal/app can assert it
+// stays in lockstep with this set (and with moduleGloballyEnabled) — adding a
+// protocol to one site but not the others fails a unit test instead of
+// silently making the module un-scopable or un-overridable.
+func ScopableModuleNames() []string {
+	names := make([]string, 0, len(scopableModules))
+	for m := range scopableModules {
+		names = append(names, m)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// scopableModulesList is the comma-joined sorted name list used in validation
+// error messages, derived from scopableModules so it cannot drift from the map.
+func scopableModulesList() string {
+	return strings.Join(ScopableModuleNames(), ", ")
 }
 
 // validateTargetOverrides enforces the issue #74 invariants: every cidr parses,
@@ -457,7 +478,7 @@ func (c *Config) validateTargetOverrides() error {
 		seenMod := make(map[string]struct{}, len(o.Modules))
 		for _, m := range o.Modules {
 			if _, ok := scopableModules[m]; !ok {
-				return fmt.Errorf("discovery.target_overrides[%d] (cidr %q): unknown module %q (allowed: bgp, cdp, fdb, isis, lldp, mpls_te, ospf)", i, o.CIDR, m)
+				return fmt.Errorf("discovery.target_overrides[%d] (cidr %q): unknown module %q (allowed: %s)", i, o.CIDR, m, scopableModulesList())
 			}
 			if _, dup := seenMod[m]; dup {
 				return fmt.Errorf("discovery.target_overrides[%d] (cidr %q): duplicate module %q", i, o.CIDR, m)

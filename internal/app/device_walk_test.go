@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"net"
+	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -12,6 +14,24 @@ import (
 	snmpwalk "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
 	"github.com/colinedwardwood/network-topology-exporter/internal/snmptest"
 )
+
+// TestEnabledModulesMatchScopableModuleNames pins the walker dispatch table to
+// config's canonical scopable-module registry. The module-name set lives in
+// three coordinated places (enabledModules here, scopableModules and the
+// moduleGloballyEnabled switch in internal/config); without this guard a
+// protocol added to one site but not the others silently becomes either
+// un-walkable or un-scopable per target.
+func TestEnabledModulesMatchScopableModuleNames(t *testing.T) {
+	var got []string
+	for _, m := range enabledModules(&config.Config{}) {
+		got = append(got, m.Proto)
+	}
+	sort.Strings(got)
+	want := config.ScopableModuleNames()
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("enabledModules protos = %v, want config.ScopableModuleNames() = %v — the walker table and the config registry have drifted", got, want)
+	}
+}
 
 // walkModulesTestSetup walks the credential ladder against an in-process agent
 // and returns the resolved device + mutated params ready for walkModules, the
