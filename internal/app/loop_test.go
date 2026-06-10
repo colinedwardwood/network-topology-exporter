@@ -177,15 +177,15 @@ func TestPublishAdvancesAgesAndDiffsAgainstOldPrev(t *testing.T) {
 		newG := discovery.Graph{Edges: []discovery.Edge{edge("a", "b"), edge("c", "d")}} // 2 > budget 1
 		newAges := map[graph.EdgeKey]int{keyA: 7}
 
-		nextPrev, nextAges, _ := lc.publish(ctx, ctx, ev, resolver, nil, nil,
-			prev, newG, newAges, nil, 1, time.Now(), publishState{})
+		next := lc.publish(ctx, ctx, ev, resolver, nil, nil,
+			cycleState{prevGraph: prev}, newG, newAges, nil, 1, time.Now())
 
-		if nextAges[keyA] != 7 {
-			t.Fatalf("ages not advanced on reject path: got %v", nextAges)
+		if next.ages[keyA] != 7 {
+			t.Fatalf("ages not advanced on reject path: got %v", next.ages)
 		}
 		// prevGraph must be unchanged (the rejected newG is not published).
-		if len(nextPrev.Edges) != 1 {
-			t.Fatalf("prevGraph changed on reject path: got %d edges, want 1", len(nextPrev.Edges))
+		if len(next.prevGraph.Edges) != 1 {
+			t.Fatalf("prevGraph changed on reject path: got %d edges, want 1", len(next.prevGraph.Edges))
 		}
 		if got := testutil.ToFloat64(m.GraphUpdatesRejectedTotal.WithLabelValues(string(metrics.RejectReasonSizeBudgetExceeded))); got != 1 {
 			t.Fatalf("reject metric = %v, want 1", got)
@@ -205,14 +205,14 @@ func TestPublishAdvancesAgesAndDiffsAgainstOldPrev(t *testing.T) {
 		newG := discovery.Graph{Edges: []discovery.Edge{edge("a", "b"), edge("c", "d")}}
 		newAges := map[graph.EdgeKey]int{keyA: 7}
 
-		nextPrev, nextAges, _ := lc.publish(ctx, ctx, ev, resolver, nil, nil,
-			prev, newG, newAges, nil, 1, time.Now(), publishState{})
+		next := lc.publish(ctx, ctx, ev, resolver, nil, nil,
+			cycleState{prevGraph: prev}, newG, newAges, nil, 1, time.Now())
 
-		if nextAges[keyA] != 7 {
-			t.Fatalf("ages not advanced on happy path: got %v", nextAges)
+		if next.ages[keyA] != 7 {
+			t.Fatalf("ages not advanced on happy path: got %v", next.ages)
 		}
-		if len(nextPrev.Edges) != 2 {
-			t.Fatalf("prevGraph not reassigned to newGraph: got %d edges, want 2", len(nextPrev.Edges))
+		if len(next.prevGraph.Edges) != 2 {
+			t.Fatalf("prevGraph not reassigned to newGraph: got %d edges, want 2", len(next.prevGraph.Edges))
 		}
 		firstChanges := testutil.ToFloat64(m.TopologyChangeTotal.WithLabelValues("added", lldp))
 		if firstChanges == 0 {
@@ -225,8 +225,8 @@ func TestPublishAdvancesAgesAndDiffsAgainstOldPrev(t *testing.T) {
 		// Second publish against the returned prevGraph with an identical
 		// newGraph must produce NO further 'added' change — proving the diff
 		// ran against the OLD prevGraph, and the caller-owned reassignment took.
-		_, _, _ = lc.publish(ctx, ctx, ev, resolver, nil, nil,
-			nextPrev, newG, newAges, nil, 2, time.Now(), publishState{})
+		_ = lc.publish(ctx, ctx, ev, resolver, nil, nil,
+			cycleState{prevGraph: next.prevGraph}, newG, newAges, nil, 2, time.Now())
 		if got := testutil.ToFloat64(m.TopologyChangeTotal.WithLabelValues("added", lldp)); got != firstChanges {
 			t.Fatalf("second publish recorded extra changes: got %v, want %v", got, firstChanges)
 		}

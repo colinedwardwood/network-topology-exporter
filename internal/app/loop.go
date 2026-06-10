@@ -153,11 +153,22 @@ type publishState struct {
 	lastWarnCycle      int
 }
 
+// cycleState is the loop-carried state publish consumes and advances each
+// cycle: the last published graph, the unconfirmed-edge ages, and the
+// large-topology warn bookkeeping. Threading one value through the loop
+// (instead of the former parallel prevGraph/ages/publishState locals) keeps
+// the condition-C8 assignment discipline in a single place.
+type cycleState struct {
+	prevGraph discovery.Graph
+	ages      map[graph.EdgeKey]int
+	warn      publishState
+}
+
 // publish runs the post-reconcile side-effects for one cycle and returns the
-// prevGraph + ages the caller MUST assign on BOTH the size-budget-reject path
-// and the happy path. The diff is computed against the passed prevGraph BEFORE
+// advanced cycleState the caller MUST store on BOTH the size-budget-reject
+// path and the happy path. The diff is computed against st.prevGraph BEFORE
 // any reassignment (condition C8). On size-budget reject it returns
-// (prevGraph unchanged, newAges, ps unchanged) — ages still advance so
+// (prevGraph unchanged, newAges, warn unchanged) — ages still advance so
 // unconfirmed edges can expire — and publishes nothing. On the happy path it
 // returns (newGraph, newAges, advanced warn-state).
 //
@@ -172,13 +183,13 @@ func (lc LoopConfig) publish(
 	resolver *credentials.Resolver,
 	snapshotCh chan snapshot.File,
 	pusher *spokePusher,
-	prevGraph, newGraph discovery.Graph,
+	st cycleState,
+	newGraph discovery.Graph,
 	newAges map[graph.EdgeKey]int,
 	conflicts []graph.Conflict,
 	cycleNum int,
 	start time.Time,
-	ps publishState,
-) (nextPrev discovery.Graph, nextAges map[graph.EdgeKey]int, nextPS publishState) {
+) cycleState {
 	// Admission control: reject local graph updates that exceed the
 	// configured size budget (mirrors hub-mode MaxGraph* enforcement).
 	maxDevices := lc.Cfg.Discovery.MaxGraphDevices
@@ -191,10 +202,11 @@ func (lc LoopConfig) publish(
 		lc.M.GraphUpdatesRejectedTotal.WithLabelValues(string(metrics.RejectReasonSizeBudgetExceeded)).Inc()
 		// Keep prevGraph as the published graph; advance ages so unconfirmed
 		// edges can still expire; skip all downstream updates.
-		return prevGraph, newAges, ps
+		st.ages = newAges
+		return st
 	}
 
-	changes := graph.Diff(prevGraph.Edges, newGraph.Edges)
+	changes := graph.Diff(st.prevGraph.Edges, newGraph.Edges)
 	if len(changes) > 0 {
 		evLogger.Emit(ctx, changes)
 		for _, c := range changes {
@@ -217,8 +229,8 @@ func (lc LoopConfig) publish(
 			lc.M.TopologyConflictTotal.WithLabelValues(string(c.Kind)).Inc()
 		}
 	}
-	prevGraph = newGraph
-	ages := newAges
+	st.prevGraph = newGraph
+	st.ages = newAges
 	if lc.Otlp.Enabled() && (len(changes) > 0 || cycleNum%lc.Cfg.Output.OTLP.HeartbeatCycles == 0) {
 		g := newGraph
 		lc.Otlp.Push(func(ctx context.Context) error {
@@ -230,15 +242,15 @@ func (lc LoopConfig) publish(
 	if lc.Ready != nil {
 		lc.Ready.CompareAndSwap(false, true)
 	}
-	ps.prevAboveThreshold, ps.lastWarnCycle = MaybeWarnLargeTopology(
+	st.warn.prevAboveThreshold, st.warn.lastWarnCycle = MaybeWarnLargeTopology(
 		lc.Logger, len(newGraph.Edges), len(newGraph.Devices),
-		ps.prevAboveThreshold, cycleNum, ps.lastWarnCycle)
+		st.warn.prevAboveThreshold, cycleNum, st.warn.lastWarnCycle)
 	lc.M.DiscoveryCycleDuration.Observe(time.Since(start).Seconds())
 
 	// LD-13: write snapshot via the bounded writer channel so an NFS stall
 	// cannot accumulate goroutines across cycles. f is passed by value so the
 	// next cycle cannot mutate the data while the write is in progress.
-	ageMap := graph.EdgeKeysToAges(ages)
+	ageMap := graph.EdgeKeysToAges(st.ages)
 	credCache := resolver.SnapshotCache()
 	f := snapshot.File{
 		Devices:         newGraph.Devices,
@@ -274,7 +286,7 @@ func (lc LoopConfig) publish(
 			OutOfScope: newGraph.OutOfScope,
 		})
 	}
-	return prevGraph, ages, ps
+	return st
 }
 
 // RunDiscoveryLoop is the main discovery scheduler. It loads the LD-13
@@ -298,22 +310,21 @@ func RunDiscoveryLoop(ctx context.Context, lc LoopConfig) {
 		}
 	}
 
-	var prevGraph discovery.Graph
-	ages := make(map[graph.EdgeKey]int)
+	st := cycleState{ages: make(map[graph.EdgeKey]int)}
 
 	if snap != nil {
-		prevGraph = discovery.Graph{
+		st.prevGraph = discovery.Graph{
 			Devices:    snap.Devices,
 			Edges:      snap.Edges,
 			OutOfScope: snap.OutOfScope,
 		}
-		ages = graph.AgesToEdgeKeys(snap.UnconfirmedAges)
+		st.ages = graph.AgesToEdgeKeys(snap.UnconfirmedAges)
 		lc.Logger.Info("snapshot loaded",
 			"devices", len(snap.Devices),
 			"edges", len(snap.Edges),
 		)
 		lc.M.SnapshotLoadedDevicesTotal.Set(float64(len(snap.Devices)))
-		lc.M.Topology.Update(prevGraph)
+		lc.M.Topology.Update(st.prevGraph)
 	}
 
 	// LD-12: credential resolver — the instance shared with the admin
@@ -426,8 +437,7 @@ func RunDiscoveryLoop(ctx context.Context, lc LoopConfig) {
 	// previous cycle was above the threshold so we only emit on upward
 	// crossings, and remember the cycle of the last warning so an
 	// oscillating topology cannot flood the log.
-	prevAboveThreshold := false
-	lastWarnCycle := -LargeTopologyWarnCooldownCycles
+	st.warn = publishState{prevAboveThreshold: false, lastWarnCycle: -LargeTopologyWarnCooldownCycles}
 	cycle := func() {
 		// Per-cycle panic recovery (ops hardening): the discovery loop is
 		// long-lived, so a panic in one cycle's reconcile/diff/publish path
@@ -456,7 +466,7 @@ func RunDiscoveryLoop(ctx context.Context, lc LoopConfig) {
 		if lc.CycleMu != nil {
 			lc.CycleMu.Lock()
 		}
-		newGraph, newAges, conflicts, deviceErrors := RunCycle(cycleCtx, lc.Logger, lc.Cfg, lc.M, lc.WalkerMetrics, lc.WarnLimiter, resolver, allowedNets, ages, lc.Pool)
+		newGraph, newAges, conflicts, deviceErrors := RunCycle(cycleCtx, lc.Logger, lc.Cfg, lc.M, lc.WalkerMetrics, lc.WarnLimiter, resolver, allowedNets, st.ages, lc.Pool)
 		if lc.CycleMu != nil {
 			lc.CycleMu.Unlock()
 		}
@@ -468,16 +478,14 @@ func RunDiscoveryLoop(ctx context.Context, lc LoopConfig) {
 		if ctx.Err() != nil {
 			return
 		}
-		newGraph.OutOfScope = MergeOOSFirstSeen(newGraph.OutOfScope, prevGraph.OutOfScope)
+		newGraph.OutOfScope = MergeOOSFirstSeen(newGraph.OutOfScope, st.prevGraph.OutOfScope)
 		lc.Status.Store(&httpx.CycleStatus{
 			LastCycleAt:  time.Now(),
 			DeviceErrors: int64(deviceErrors),
 		})
 
-		ps := publishState{prevAboveThreshold: prevAboveThreshold, lastWarnCycle: lastWarnCycle}
-		prevGraph, ages, ps = lc.publish(ctx, cycleCtx, evLogger, resolver, snapshotCh, pusher,
-			prevGraph, newGraph, newAges, conflicts, cycleNum, start, ps)
-		prevAboveThreshold, lastWarnCycle = ps.prevAboveThreshold, ps.lastWarnCycle
+		st = lc.publish(ctx, cycleCtx, evLogger, resolver, snapshotCh, pusher,
+			st, newGraph, newAges, conflicts, cycleNum, start)
 	}
 
 	cycle()
