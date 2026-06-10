@@ -13,6 +13,7 @@ import (
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
+	"github.com/colinedwardwood/network-topology-exporter/internal/otelx"
 )
 
 // collectMetrics drains the ManualReader and returns metric name → slice of
@@ -228,8 +229,8 @@ func TestServiceResourceAttributes(t *testing.T) {
 	}
 
 	attrs := resourceAttrs(t, reader)
-	if attrs["service.name"] != serviceName {
-		t.Errorf("service.name = %q, want %q", attrs["service.name"], serviceName)
+	if attrs["service.name"] != otelx.ServiceName {
+		t.Errorf("service.name = %q, want %q", attrs["service.name"], otelx.ServiceName)
 	}
 	if _, ok := attrs["service.version"]; !ok {
 		t.Error("service.version attribute missing from resource")
@@ -492,7 +493,7 @@ func TestNewRejectsUnknownProtocol(t *testing.T) {
 // TestNewGRPCConstructs proves the gRPC protocol path builds (no live
 // collector is contacted at construction time).
 func TestNewGRPCConstructs(t *testing.T) {
-	exp, err := New(context.Background(), Config{Endpoint: "localhost:4317", Protocol: ProtocolGRPC})
+	exp, err := New(context.Background(), Config{Endpoint: "localhost:4317", Protocol: otelx.ProtocolGRPC})
 	if err != nil {
 		t.Fatalf("New gRPC: %v", err)
 	}

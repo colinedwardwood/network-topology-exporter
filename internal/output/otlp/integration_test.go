@@ -8,6 +8,7 @@ import (
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
+	"github.com/colinedwardwood/network-topology-exporter/internal/otelx"
 	"github.com/colinedwardwood/network-topology-exporter/internal/output/otlp"
 )
 
@@ -31,7 +32,7 @@ func TestOTLPIntegration(t *testing.T) {
 	if endpoint == "" {
 		t.Skip("set OTLP_INTEGRATION_ENDPOINT to run the live-collector integration test")
 	}
-	protocol := otlp.Protocol(os.Getenv("OTLP_INTEGRATION_PROTOCOL"))
+	protocol := otelx.Protocol(os.Getenv("OTLP_INTEGRATION_PROTOCOL"))
 
 	ctx := context.Background()
 	exp, err := otlp.New(ctx, otlp.Config{

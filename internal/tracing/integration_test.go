@@ -8,6 +8,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 
+	"github.com/colinedwardwood/network-topology-exporter/internal/otelx"
 	"github.com/colinedwardwood/network-topology-exporter/internal/tracing"
 )
 
@@ -31,7 +32,7 @@ func TestTracingIntegration(t *testing.T) {
 	if endpoint == "" {
 		t.Skip("set TRACING_INTEGRATION_ENDPOINT to run the live-receiver integration test")
 	}
-	protocol := tracing.Protocol(os.Getenv("TRACING_INTEGRATION_PROTOCOL"))
+	protocol := otelx.Protocol(os.Getenv("TRACING_INTEGRATION_PROTOCOL"))
 
 	ctx := context.Background()
 	p, err := tracing.New(ctx, tracing.Config{

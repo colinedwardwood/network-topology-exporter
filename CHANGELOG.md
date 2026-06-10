@@ -23,6 +23,15 @@
 
 ### Changed
 
+- Extracted `internal/otelx` (#172): the OTLP transport protocol enum, endpoint
+  normalisation (HTTP `WithEndpointURL` base + insecure flag, gRPC bare
+  authority), and the shared service resource (`service.name`,
+  `service.version`, `service.instance.id` with hostname fallback) now live in
+  one package consumed by both `internal/output/otlp` (metrics/logs) and
+  `internal/tracing`. The two packages previously carried verbatim mirror
+  copies kept in sync only by comments, and only the tracing copy was tested;
+  the single implementation is now the tested one. No behaviour change.
+
 - Removed the dead `ages` field from the spoke→hub push payload (#165). Spokes
   populated it every cycle but the hub never read it — LD-14 age lifecycle runs
   inside each spoke and survives restarts via the spoke's local snapshot, not

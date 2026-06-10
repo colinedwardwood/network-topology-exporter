@@ -26,6 +26,7 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/federation"
 	"github.com/colinedwardwood/network-topology-exporter/internal/loglimit"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/colinedwardwood/network-topology-exporter/internal/otelx"
 	"github.com/colinedwardwood/network-topology-exporter/internal/output/otlp"
 	yangout "github.com/colinedwardwood/network-topology-exporter/internal/output/yang"
 	"github.com/colinedwardwood/network-topology-exporter/internal/snapshot"
@@ -203,7 +204,7 @@ func Run(ctx context.Context, args []string) int {
 		traceProvider, err = tracing.New(ctx, tracing.Config{
 			Endpoint:   cfg.Output.OTLP.Endpoint,
 			Timeout:    cfg.Output.OTLP.Timeout,
-			Protocol:   tracing.Protocol(cfg.Output.OTLP.Protocol),
+			Protocol:   otelx.Protocol(cfg.Output.OTLP.Protocol),
 			InstanceID: cfg.Federation.Spoke.SpokeID, // empty in non-spoke roles → falls back to hostname
 			SampleRate: sampleRate,
 		})
@@ -390,7 +391,7 @@ func Run(ctx context.Context, args []string) int {
 				Endpoint:   cfg.Output.OTLP.Endpoint,
 				Timeout:    cfg.Output.OTLP.Timeout,
 				InstanceID: cfg.Federation.Spoke.SpokeID, // empty in non-spoke roles → falls back to hostname
-				Protocol:   otlp.Protocol(cfg.Output.OTLP.Protocol),
+				Protocol:   otelx.Protocol(cfg.Output.OTLP.Protocol),
 			})
 			if err != nil {
 				logger.Error("building OTLP exporter", "error", err)

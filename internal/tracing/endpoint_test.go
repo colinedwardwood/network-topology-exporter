@@ -5,68 +5,19 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/otel"
+
+	"github.com/colinedwardwood/network-topology-exporter/internal/otelx"
 )
 
-// TestEndpointURL covers empty, plain-http (insecure), and https endpoints.
-func TestEndpointURL(t *testing.T) {
-	tests := []struct {
-		name         string
-		endpoint     string
-		wantOK       bool
-		wantInsecure bool
-	}{
-		{"empty", "", false, false},
-		{"http insecure", "http://collector:4318", true, true},
-		{"https secure", "https://collector:4318", true, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			raw, insecure, ok := endpointURL(tt.endpoint)
-			if ok != tt.wantOK {
-				t.Errorf("ok = %v, want %v", ok, tt.wantOK)
-			}
-			if insecure != tt.wantInsecure {
-				t.Errorf("insecure = %v, want %v", insecure, tt.wantInsecure)
-			}
-			if ok && raw != tt.endpoint {
-				t.Errorf("rawURL = %q, want %q", raw, tt.endpoint)
-			}
-		})
-	}
-}
-
-// TestEndpointHostInsecure extracts host:port and the insecure flag for the gRPC
-// exporter, including the empty and bare-host fallbacks.
-func TestEndpointHostInsecure(t *testing.T) {
-	tests := []struct {
-		name         string
-		endpoint     string
-		wantHost     string
-		wantInsecure bool
-	}{
-		{"empty", "", "", false},
-		{"http authority", "http://collector:4317", "collector:4317", true},
-		{"https authority", "https://collector:4317", "collector:4317", false},
-		{"bare host no scheme", "collector:4317", "collector:4317", true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			host, insecure := endpointHostInsecure(tt.endpoint)
-			if host != tt.wantHost {
-				t.Errorf("host = %q, want %q", host, tt.wantHost)
-			}
-			if insecure != tt.wantInsecure {
-				t.Errorf("insecure = %v, want %v", insecure, tt.wantInsecure)
-			}
-		})
-	}
-}
+// Endpoint parsing tests (TestEndpointURL / TestEndpointHostInsecure) live in
+// internal/otelx with the shared implementation (#172); this file keeps only
+// the trace-exporter-specific coverage.
 
 // TestNewTraceExporterGRPC builds the gRPC exporter (it connects lazily, so no
 // live receiver is needed) for an insecure endpoint.
 func TestNewTraceExporterGRPC(t *testing.T) {
 	exp, err := newTraceExporter(context.Background(), Config{
-		Protocol: ProtocolGRPC,
+		Protocol: otelx.ProtocolGRPC,
 		Endpoint: "http://127.0.0.1:4317",
 	})
 	if err != nil {
@@ -85,7 +36,7 @@ func TestNewTraceExporterGRPC(t *testing.T) {
 func TestNewGRPCProviderAndShutdown(t *testing.T) {
 	p, err := New(context.Background(), Config{
 		Endpoint:   "http://127.0.0.1:4317",
-		Protocol:   ProtocolGRPC,
+		Protocol:   otelx.ProtocolGRPC,
 		SampleRate: 1.0,
 		InstanceID: "test-instance",
 	})

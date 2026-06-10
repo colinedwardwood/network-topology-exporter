@@ -6,10 +6,8 @@ import (
 
 	"go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/version"
+	"github.com/colinedwardwood/network-topology-exporter/internal/otelx"
 )
 
 // newTestExporter builds an Exporter wired to in-memory SDK plumbing instead of
@@ -18,13 +16,7 @@ import (
 // assert the SEMANTIC content (metric names, attributes, log bodies) that the
 // SDK would otherwise marshal to the wire.
 func newTestExporter(instanceID string) (*Exporter, *sdkmetric.ManualReader, *memLogExporter) {
-	res, err := resource.New(context.Background(),
-		resource.WithAttributes(
-			semconv.ServiceName(serviceName),
-			semconv.ServiceVersion(version.Version),
-			semconv.ServiceInstanceID(instanceID),
-		),
-	)
+	res, err := otelx.NewResource(context.Background(), instanceID)
 	if err != nil {
 		panic(err)
 	}

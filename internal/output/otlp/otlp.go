@@ -14,9 +14,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
-	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -29,7 +26,6 @@ import (
 	"go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
@@ -39,17 +35,7 @@ import (
 	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
-	"github.com/colinedwardwood/network-topology-exporter/internal/version"
-)
-
-// Protocol selects the OTLP transport.
-type Protocol string
-
-// Protocol values. ProtocolHTTP (OTLP/HTTP) is the default and matches the
-// pre-SDK behaviour of POSTing to {endpoint}/v1/metrics and /v1/logs.
-const (
-	ProtocolHTTP Protocol = "http"
-	ProtocolGRPC Protocol = "grpc"
+	"github.com/colinedwardwood/network-topology-exporter/internal/otelx"
 )
 
 // Config holds the settings for the OTLP exporter.
@@ -68,8 +54,8 @@ type Config struct {
 	// configured spoke_id here so the instance identity is stable.
 	InstanceID string
 
-	// Protocol selects the OTLP transport: ProtocolHTTP (default) or
-	// ProtocolGRPC. The empty value is treated as ProtocolHTTP for backward
+	// Protocol selects the OTLP transport: otelx.ProtocolHTTP (default) or
+	// otelx.ProtocolGRPC. The empty value is treated as HTTP for backward
 	// compatibility with deployments that only set Endpoint.
 	//
 	// The payload encoding is always protobuf: the OpenTelemetry Go SDK's OTLP
@@ -77,7 +63,7 @@ type Config struct {
 	// for HTTP, protobuf framing for gRPC); there is no OTLP/JSON exporter
 	// upstream. This is a wire-format change from the pre-v1.5.0 hand-rolled
 	// OTLP/JSON path — receivers must accept protobuf (the OTLP default).
-	Protocol Protocol
+	Protocol otelx.Protocol
 }
 
 // Exporter pushes topology data to an OTLP endpoint via the OpenTelemetry SDK.
@@ -137,11 +123,7 @@ func deviceAttrs(dev discovery.Device) []attribute.KeyValue {
 	return attrs
 }
 
-const (
-	serviceName        = "network-topology-exporter"
-	scopeName          = "github.com/colinedwardwood/network-topology-exporter"
-	metadataAttrPrefix = "network.topology."
-)
+const metadataAttrPrefix = "network.topology."
 
 // New constructs an Exporter from cfg, wiring an OTLP metric exporter into a
 // MeterProvider and an OTLP log exporter into a LoggerProvider. A zero Timeout
@@ -155,33 +137,13 @@ func New(ctx context.Context, cfg Config) (*Exporter, error) {
 		cfg.Timeout = 10 * time.Second
 	}
 	if cfg.Protocol == "" {
-		cfg.Protocol = ProtocolHTTP
+		cfg.Protocol = otelx.ProtocolHTTP
 	}
-
-	switch cfg.Protocol {
-	case ProtocolHTTP, ProtocolGRPC:
-	default:
+	if !cfg.Protocol.Valid() {
 		return nil, fmt.Errorf("otlp: unsupported protocol %q (want http or grpc)", cfg.Protocol)
 	}
 
-	instanceID := cfg.InstanceID
-	if instanceID == "" {
-		hostname, err := os.Hostname()
-		if err != nil {
-			slog.Warn("otlp: os.Hostname() failed; service.instance.id will be empty",
-				"error", err,
-				"recommendation", "set InstanceID explicitly (e.g. federation.spoke.spoke_id)")
-		}
-		instanceID = hostname
-	}
-
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			semconv.ServiceName(serviceName),
-			semconv.ServiceVersion(version.Version),
-			semconv.ServiceInstanceID(instanceID),
-		),
-	)
+	res, err := otelx.NewResource(ctx, cfg.InstanceID)
 	if err != nil {
 		return nil, fmt.Errorf("otlp: build resource: %w", err)
 	}
@@ -221,10 +183,10 @@ func assemble(res *resource.Resource, reader sdkmetric.Reader, proc log.Processo
 	e := &Exporter{
 		meterProvider:  mp,
 		loggerProvider: lp,
-		logger:         lp.Logger(scopeName),
+		logger:         lp.Logger(otelx.ScopeName),
 	}
 
-	meter := mp.Meter(scopeName)
+	meter := mp.Meter(otelx.ScopeName)
 	// Observable gauges: the callback reports exactly the current graph on each
 	// collection, so removed edges/devices vanish at the receiver instead of
 	// lingering as phantom topology under cumulative temporality.
@@ -263,9 +225,9 @@ func assemble(res *resource.Resource, reader sdkmetric.Reader, proc log.Processo
 // OTel Go SDK exporters implement).
 func newMetricExporter(ctx context.Context, cfg Config) (sdkmetric.Exporter, error) {
 	switch cfg.Protocol {
-	case ProtocolGRPC:
+	case otelx.ProtocolGRPC:
 		opts := []otlpmetricgrpc.Option{otlpmetricgrpc.WithTimeout(cfg.Timeout)}
-		host, insecure := endpointHostInsecure(cfg.Endpoint)
+		host, insecure := otelx.EndpointHostInsecure(cfg.Endpoint)
 		if host != "" {
 			opts = append(opts, otlpmetricgrpc.WithEndpoint(host))
 		}
@@ -273,9 +235,9 @@ func newMetricExporter(ctx context.Context, cfg Config) (sdkmetric.Exporter, err
 			opts = append(opts, otlpmetricgrpc.WithInsecure())
 		}
 		return otlpmetricgrpc.New(ctx, opts...)
-	default: // ProtocolHTTP
+	default: // otelx.ProtocolHTTP
 		opts := []otlpmetrichttp.Option{otlpmetrichttp.WithTimeout(cfg.Timeout)}
-		if u, insecure, ok := endpointURL(cfg.Endpoint); ok {
+		if u, insecure, ok := otelx.EndpointURL(cfg.Endpoint); ok {
 			opts = append(opts, otlpmetrichttp.WithEndpointURL(u))
 			if insecure {
 				opts = append(opts, otlpmetrichttp.WithInsecure())
@@ -288,9 +250,9 @@ func newMetricExporter(ctx context.Context, cfg Config) (sdkmetric.Exporter, err
 // newLogExporter builds the OTLP log exporter for the configured protocol.
 func newLogExporter(ctx context.Context, cfg Config) (log.Exporter, error) {
 	switch cfg.Protocol {
-	case ProtocolGRPC:
+	case otelx.ProtocolGRPC:
 		opts := []otlploggrpc.Option{otlploggrpc.WithTimeout(cfg.Timeout)}
-		host, insecure := endpointHostInsecure(cfg.Endpoint)
+		host, insecure := otelx.EndpointHostInsecure(cfg.Endpoint)
 		if host != "" {
 			opts = append(opts, otlploggrpc.WithEndpoint(host))
 		}
@@ -298,9 +260,9 @@ func newLogExporter(ctx context.Context, cfg Config) (log.Exporter, error) {
 			opts = append(opts, otlploggrpc.WithInsecure())
 		}
 		return otlploggrpc.New(ctx, opts...)
-	default: // ProtocolHTTP
+	default: // otelx.ProtocolHTTP
 		opts := []otlploghttp.Option{otlploghttp.WithTimeout(cfg.Timeout)}
-		if u, insecure, ok := endpointURL(cfg.Endpoint); ok {
+		if u, insecure, ok := otelx.EndpointURL(cfg.Endpoint); ok {
 			opts = append(opts, otlploghttp.WithEndpointURL(u))
 			if insecure {
 				opts = append(opts, otlploghttp.WithInsecure())
@@ -308,36 +270,6 @@ func newLogExporter(ctx context.Context, cfg Config) (log.Exporter, error) {
 		}
 		return otlploghttp.New(ctx, opts...)
 	}
-}
-
-// endpointURL normalises an HTTP base endpoint (e.g. "http://alloy:4318") into
-// the per-signal URL the SDK's WithEndpointURL expects. The SDK appends the
-// signal path itself when WithEndpoint is used, but WithEndpointURL takes the
-// full base; we pass the base verbatim and report whether the scheme is plain
-// http so the caller can add WithInsecure. ok is false when endpoint is empty.
-func endpointURL(endpoint string) (rawURL string, insecure bool, ok bool) {
-	if endpoint == "" {
-		return "", false, false
-	}
-	u, err := url.Parse(endpoint)
-	if err != nil {
-		return endpoint, false, true
-	}
-	return endpoint, u.Scheme == "http", true
-}
-
-// endpointHostInsecure extracts host:port and the insecure flag for the gRPC
-// exporters, which take a bare authority rather than a URL.
-func endpointHostInsecure(endpoint string) (host string, insecure bool) {
-	if endpoint == "" {
-		return "", false
-	}
-	u, err := url.Parse(endpoint)
-	if err != nil || u.Host == "" {
-		// Treat as a bare host:port; assume plaintext (no scheme to imply TLS).
-		return endpoint, true
-	}
-	return u.Host, u.Scheme == "http"
 }
 
 // sanitizeUTF8 replaces sequences of invalid UTF-8 bytes with the Unicode

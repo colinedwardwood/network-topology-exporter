@@ -3,6 +3,8 @@ package tracing
 import (
 	"context"
 	"testing"
+
+	"github.com/colinedwardwood/network-topology-exporter/internal/otelx"
 )
 
 // TestNewRejectsBadProtocol verifies New rejects an unsupported protocol.
@@ -28,7 +30,7 @@ func TestNewRejectsOutOfRangeSampleRate(t *testing.T) {
 func TestNewInstallsProviderAndShutdown(t *testing.T) {
 	p, err := New(context.Background(), Config{
 		Endpoint:   "http://127.0.0.1:4318",
-		Protocol:   ProtocolHTTP,
+		Protocol:   otelx.ProtocolHTTP,
 		SampleRate: 0.5,
 	})
 	if err != nil {
