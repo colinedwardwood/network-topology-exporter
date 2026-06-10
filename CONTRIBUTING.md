@@ -105,6 +105,21 @@ The test `TestExampleConfigLoadsCleanly` in `internal/config/config_test.go` loa
 
 `gofmt` / `goimports` and `golangci-lint` (config in `.golangci.yml`) are enforced in CI. Tests live next to the code they test as `internal/discovery/<module>/<module>_test.go`. Integration tests under `tests/integration/` use containerlab or simulated SNMP targets.
 
+### SNMPv3 test coverage boundary
+
+The in-process test agent (`internal/snmptest`) speaks **SNMPv2c only**. Every walker
+integration test, outcome test, and fixture-replay test therefore exercises the v2c
+path exclusively. SNMPv3 coverage stops at client construction
+(`buildClient` unit tests in `internal/discovery/snmp/snmp_test.go`): the USM
+auth/priv handshake, v3-specific error surfaces, and walk-level v3 behaviour are
+**not** exercised by the suite.
+
+Practical consequence: a change that can affect the v3 path — a gosnmp upgrade, any
+edit to `buildClient`'s v3 branch, or credential-ladder changes touching v3
+profiles — passes CI without proving v3 still works. Verify such changes against a
+real v3-enabled device (or note that you could not) and say so in the PR
+description; the `needs-real-device` issue label exists for exactly this category.
+
 ## License
 
 By contributing you agree your contributions are licensed under the GNU Affero General Public License v3.0 (AGPL-3.0), the same license as the project.

@@ -5,6 +5,13 @@
 // exercise code paths in the snmp, lldp, and cdp packages without requiring
 // a real network device.
 //
+// Coverage boundary: the agent is SNMPv2c-only — it implements no USM, so it
+// cannot exercise SNMPv3 auth/priv handshakes or v3 error surfaces. Walk-level
+// SNMPv3 behaviour is consequently untested by the suite; v3 coverage stops at
+// the buildClient unit tests in internal/discovery/snmp. Changes that can
+// affect the v3 path require verification against a real v3-enabled device —
+// see "SNMPv3 test coverage boundary" in CONTRIBUTING.md.
+//
 // Usage:
 //
 //	addr := snmptest.Start(t, "public", []gsnmp.SnmpPDU{...})
