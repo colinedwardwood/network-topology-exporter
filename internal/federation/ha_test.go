@@ -1,10 +1,16 @@
 package federation
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/colinedwardwood/network-topology-exporter/internal/config"
+	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
 	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
 )
 
@@ -59,5 +65,26 @@ func TestFakeElectorDrivesCallbacks(t *testing.T) {
 	cancel()
 	if err := <-done; err == nil {
 		t.Fatal("Run should return ctx.Err() after cancel")
+	}
+}
+
+func TestHandlePush503WhenNotLeader(t *testing.T) {
+	h := NewHub(config.FederationConfig{SpokeTimeout: time.Hour}, metrics.New(false), nil, "")
+	h.SetLeader(false)
+	body, _ := json.Marshal(SpokePayload{SpokeID: "dc-x", CycleAt: time.Now(), Devices: []discovery.Device{{ID: "d1"}}})
+	rec := httptest.NewRecorder()
+	h.handlePush(rec, httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body)))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("non-leader push: got %d, want 503", rec.Code)
+	}
+	if got := rec.Header().Get("Connection"); got != "close" {
+		t.Fatalf("expected Connection: close, got %q", got)
+	}
+	// Leader accepts (does not 503).
+	h.SetLeader(true)
+	rec = httptest.NewRecorder()
+	h.handlePush(rec, httptest.NewRequest(http.MethodPost, "/spoke/push", bytes.NewReader(body)))
+	if rec.Code == http.StatusServiceUnavailable {
+		t.Fatal("leader push wrongly 503'd")
 	}
 }

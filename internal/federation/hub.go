@@ -481,6 +481,16 @@ func (h *Hub) handlePush(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !h.isLeader.Load() {
+		// HA: only the leader hub accepts pushes; followers 503 (retryable
+		// spoke-side, see spoke.go). The Connection:close header makes a spoke
+		// pinned via keep-alive to a just-demoted leader re-resolve to the new
+		// leader on its next attempt (design §4.3). Single-hub mode is always
+		// leader (isLeader defaults true), so this never fires there.
+		w.Header().Set("Connection", "close")
+		http.Error(w, "not the leader hub", http.StatusServiceUnavailable)
+		return
+	}
 	defer func() { _ = r.Body.Close() }()
 
 	var payload SpokePayload
