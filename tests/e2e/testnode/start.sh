@@ -11,9 +11,15 @@ SYSNAME=$(echo "$RAW" | sed 's/^clab-[A-Za-z0-9_-]*-//')
 # name (e.g. "spine1") as the LLDP system name TLV, not the full container ID.
 hostname "$SYSNAME"
 
-# Write a minimal snmpd config: SNMPv2c community "public", AgentX master.
+# Write a minimal snmpd config: SNMPv2c community "public", an SNMPv3
+# authPriv USM user (SHA auth / AES privacy) so the exporter's v3 walk path
+# gets live-agent coverage, and AgentX master. createUser is consumed by
+# snmpd at startup and converted to localised keys; the container is
+# ephemeral so no persistent-store handling is needed.
 cat > /tmp/snmpd.conf << EOF
 rocommunity public
+createUser nte-e2e-v3 SHA nte-auth-pass AES nte-priv-pass
+rouser nte-e2e-v3 priv
 sysName $SYSNAME
 master agentx
 agentaddress udp:0.0.0.0:161
