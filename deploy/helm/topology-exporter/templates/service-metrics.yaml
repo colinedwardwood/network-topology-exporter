@@ -1,0 +1,30 @@
+{{- if .Values.federation.hub.ha.enabled }}
+{{- /*
+  Native hub HA (#71): the primary Service (service.yaml) routes the spoke-push
+  port to Ready endpoints only — and only the leader reports Ready — so pushes
+  reach the leader. That same readiness gate would hide follower /metrics from
+  Prometheus, so HA adds this headless metrics Service with
+  publishNotReadyAddresses: true and the all-pods selector. The ServiceMonitor
+  targets this Service when HA is enabled so every replica is scraped.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "topology-exporter.fullname" . }}-metrics
+  labels:
+    {{- include "topology-exporter.labels" . | nindent 4 }}
+    # Distinguishes this Service from the push Service so the ServiceMonitor
+    # selects only this all-pods, publishNotReadyAddresses metrics Service.
+    topology-exporter.grafana.com/service: metrics
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - name: metrics
+      port: {{ .Values.service.port }}
+      targetPort: metrics
+      protocol: TCP
+  selector:
+    {{- include "topology-exporter.selectorLabels" . | nindent 4 }}
+{{- end }}

@@ -55,7 +55,23 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           env:
+            {{- if .Values.federation.hub.ha.enabled }}
+            # Downward-API pod identity for the leader elector (#71): POD_NAME is
+            # the election identity, POD_NAMESPACE the Lease namespace.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- else }}
             {{- toYaml .Values.extraEnv | nindent 12 }}
+            {{- end }}
           volumeMounts:
             - name: config
               mountPath: /etc/topology-exporter

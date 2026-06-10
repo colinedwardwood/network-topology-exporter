@@ -13,6 +13,12 @@ spec:
   selector:
     matchLabels:
       {{- include "topology-exporter.selectorLabels" . | nindent 6 }}
+      {{- if .Values.federation.hub.ha.enabled }}
+      {{- /* HA exposes two Services sharing selectorLabels; target only the
+             headless metrics Service so every replica is scraped (the push
+             Service is readiness-gated to the leader). */}}
+      topology-exporter.grafana.com/service: metrics
+      {{- end }}
   endpoints:
     - port: metrics
       interval: {{ .Values.serviceMonitor.interval }}

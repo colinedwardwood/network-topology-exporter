@@ -107,6 +107,33 @@ persistence:
 # /etc/topology-exporter/pki/. Required for spoke and hub modes.
 federation:
   tlsSecret: ""
+  # Native hub high-availability (issue #71). Opt-in; OFF by default keeps the
+  # single-hub behaviour byte-identical to a non-HA deploy. When enabled, run
+  # replicaCount >= 2 hub replicas: they elect one leader via a Kubernetes Lease
+  # (coordination.k8s.io), and only the leader accepts spoke pushes and serves
+  # authoritative /metrics. Enabling this renders the leader-election RBAC
+  # (Role + RoleBinding), a headless metrics Service that scrapes all replicas,
+  # the downward-API pod identity env vars, and mounts the ServiceAccount token.
+  hub:
+    ha:
+      enabled: false
+      # Name of the coordination.k8s.io Lease used for election. All hub
+      # replicas of one release must share this name.
+      leaseName: topology-exporter-hub
+      # How long a non-leader waits before it may acquire an unrenewed Lease.
+      leaseDuration: 15s
+      # The leader must renew within this window or it steps down. Must be
+      # strictly less than leaseDuration.
+      renewDeadline: 10s
+      # How often a non-leader retries acquiring the Lease. Must be > 0 and
+      # less than renewDeadline.
+      retryPeriod: 2s
+      # When true the snapshot volume is treated as shared (RWX) so a freshly
+      # elected leader warm-starts from the previous leader's snapshot. Optional
+      # — the default HA path cold-starts and rebuilds within one discovery
+      # interval. REQUIRES a ReadWriteMany PVC (NFS/CephFS/EFS/Filestore); most
+      # default StorageClasses are RWO and will NOT work with replicaCount > 1.
+      snapshotShared: false
 
 # config is the full topology-exporter configuration document.
 # Override individual keys or replace the whole block.

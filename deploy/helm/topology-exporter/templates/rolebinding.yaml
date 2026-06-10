@@ -1,0 +1,16 @@
+{{- if .Values.federation.hub.ha.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "topology-exporter.fullname" . }}
+  labels:
+    {{- include "topology-exporter.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "topology-exporter.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "topology-exporter.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
