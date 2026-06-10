@@ -70,7 +70,7 @@ type LeaderCallbacks struct {
     OnNewLeader      func(identity string)     // informational
 }
 ```
-Default impl `k8sLeaseElector` wraps `leaderelection.RunOrDie` with a `LeaseLock`. The interface keeps the hub decoupled from k8s and lets a Raft/standalone backend land later (§10).
+Default impl `k8sLeaseElector` drives `leaderelection.NewLeaderElector` + `le.Run` (not `RunOrDie`, which calls `klog.Fatal` on apiserver loss — we want to surface a returned error and fail closed instead) with a `LeaseLock`. The interface keeps the hub decoupled from k8s and lets a Raft/standalone backend land later (§10).
 
 ### 4.2 Leadership state + the accept/publish gate
 A single `atomic.Bool isLeader`, flipped by the callbacks. The hub:
