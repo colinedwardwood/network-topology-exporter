@@ -1062,12 +1062,18 @@ func (h *Hub) publishIfWinner(gen uint64, g discovery.Graph, unmatched int, acce
 	return true, ""
 }
 
-// IsReady reports whether the hub has received at least one live spoke push.
-// Use this as the readiness signal for Kubernetes readiness probes: the hub
-// can serve /metrics from the startup snapshot immediately, but it is only
-// "ready" once at least one spoke has confirmed its topology.
+// IsReady reports whether this hub should receive spoke pushes: it must have
+// live data (firstLive) AND be the leader. This gates the leader-only push
+// Service, so spokes route only to the leader (HA). Followers report
+// NotReady-for-push but stay scrapeable via the separate metrics Service
+// (publishNotReadyAddresses), so /metrics is never removed from a follower.
+//
+// In single-hub mode isLeader defaults true (NewHub stores true), so this is
+// identical to the previous firstLive-only semantics: the hub can serve
+// /metrics from the startup snapshot immediately, but is only "ready" once at
+// least one spoke has confirmed its topology.
 func (h *Hub) IsReady() bool {
-	return h.firstLive.Load()
+	return h.firstLive.Load() && h.isLeader.Load()
 }
 
 // IsLeader reports whether this hub currently accepts pushes and publishes.

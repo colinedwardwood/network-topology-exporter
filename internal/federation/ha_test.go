@@ -68,6 +68,19 @@ func TestFakeElectorDrivesCallbacks(t *testing.T) {
 	}
 }
 
+func TestIsReadyRequiresLeadership(t *testing.T) {
+	h := NewHub(config.FederationConfig{}, metrics.New(false), nil, "")
+	h.firstLive.Store(true)
+	h.SetLeader(true)
+	if !h.IsReady() {
+		t.Fatal("leader with firstLive must be ready")
+	}
+	h.SetLeader(false)
+	if h.IsReady() {
+		t.Fatal("non-leader must not be ready (push Service gate)")
+	}
+}
+
 func TestHandlePush503WhenNotLeader(t *testing.T) {
 	h := NewHub(config.FederationConfig{SpokeTimeout: time.Hour}, metrics.New(false), nil, "")
 	h.SetLeader(false)
