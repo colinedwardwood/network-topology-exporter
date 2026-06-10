@@ -217,9 +217,9 @@ func snmpAlive(ip net.IP) bool {
 
 func snmpParams(node string) snmpwalk.Params {
 	return snmpwalk.Params{
-		IP:        nodeIPs[node],
-		Port:      161,
-		Timeout:   10 * time.Second,
+		IP:      nodeIPs[node],
+		Port:    161,
+		Timeout: 10 * time.Second,
 		// snmpwalk.Params.Community is []byte (issue #5: zeroization).
 		// gsnmp.GoSNMP.Community above stays a plain string because gosnmp's
 		// own struct hasn't moved to []byte upstream.
