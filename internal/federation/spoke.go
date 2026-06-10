@@ -117,7 +117,7 @@ func jitteredBackoff(d time.Duration) time.Duration {
 	if half <= 0 {
 		return d
 	}
-	return half + rand.N(half)
+	return half + rand.N(half) //nolint:gosec // G404: retry-timing jitter, not a security boundary; crypto/rand would be waste
 }
 
 // Push serialises payload and POSTs it to the hub. It retries up to five
