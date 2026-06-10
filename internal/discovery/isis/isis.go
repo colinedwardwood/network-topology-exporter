@@ -188,15 +188,8 @@ func walkAdjIPAddrs(ctx context.Context, client *gsnmp.GoSNMP, localDevice strin
 		if edgeDegradedReason == "" && (circKey == "" || ifName == "") {
 			edgeDegradedReason = discovery.DegradedReasonMissingSrcPortMapping
 		}
-		if len(allowedNets) > 0 && !snmputil.IPInNets(ip, allowedNets) {
-			oos = append(oos, discovery.OutOfScopeNeighbour{
-				Proto:           "isis",
-				ReportingDevice: localDevice,
-				ReportingPort:   ifName,
-				NeighbourHint:   ip.String(),
-				FirstSeen:       now,
-				LastSeen:        now,
-			})
+		if snmputil.OutOfScope(ip, allowedNets) {
+			oos = append(oos, snmputil.NewOutOfScopeNeighbour("isis", localDevice, ifName, ip.String(), now))
 			continue
 		}
 		edges = append(edges, discovery.Edge{

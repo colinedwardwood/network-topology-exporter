@@ -165,14 +165,8 @@ func buildEdges(localDevice string, rows map[string]*nbrRow, allowedNets []*net.
 		if row.state != stateFull && row.state != stateTwoWay {
 			continue
 		}
-		if len(allowedNets) > 0 && !snmputil.IPInNets(row.nbrIP, allowedNets) {
-			oos = append(oos, discovery.OutOfScopeNeighbour{
-				Proto:           "ospf",
-				ReportingDevice: localDevice,
-				NeighbourHint:   row.nbrIP.String(),
-				FirstSeen:       now,
-				LastSeen:        now,
-			})
+		if snmputil.OutOfScope(row.nbrIP, allowedNets) {
+			oos = append(oos, snmputil.NewOutOfScopeNeighbour("ospf", localDevice, "", row.nbrIP.String(), now))
 			continue
 		}
 		edges = append(edges, discovery.Edge{

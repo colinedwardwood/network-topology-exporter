@@ -94,15 +94,9 @@ func Walk(ctx context.Context, p snmputil.Params, localDevice string, allowedNet
 		if egressIP.IsUnspecified() || egressIP.IsLinkLocalUnicast() {
 			continue
 		}
-		if len(allowedNets) > 0 && !snmputil.IPInNets(egressIP, allowedNets) {
-			oos = append(oos, discovery.OutOfScopeNeighbour{
-				Proto:           "mpls_te",
-				ReportingDevice: localDevice,
-				ReportingPort:   fmt.Sprintf("te-tunnel%d", tunnelIdx),
-				NeighbourHint:   egressIP.String(),
-				FirstSeen:       now,
-				LastSeen:        now,
-			})
+		if snmputil.OutOfScope(egressIP, allowedNets) {
+			oos = append(oos, snmputil.NewOutOfScopeNeighbour(
+				"mpls_te", localDevice, fmt.Sprintf("te-tunnel%d", tunnelIdx), egressIP.String(), now))
 			continue
 		}
 		adminStatus := adminStatuses[suffix] // 0 if absent or decode-filtered

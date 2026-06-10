@@ -191,15 +191,9 @@ func buildEdges(ctx context.Context, localDevice string, ifNames map[int]string,
 				"device", localDevice, "neighbor", e.deviceID)
 			continue
 		}
-		if remIP != nil && len(allowedNets) > 0 && !snmputil.IPInNets(remIP, allowedNets) {
-			oos = append(oos, discovery.OutOfScopeNeighbour{
-				Proto:           string(discovery.DiscoveryProtocolCDP),
-				ReportingDevice: localDevice,
-				ReportingPort:   localPort,
-				NeighbourHint:   e.deviceID,
-				FirstSeen:       now,
-				LastSeen:        now,
-			})
+		if remIP != nil && snmputil.OutOfScope(remIP, allowedNets) {
+			oos = append(oos, snmputil.NewOutOfScopeNeighbour(
+				string(discovery.DiscoveryProtocolCDP), localDevice, localPort, e.deviceID, now))
 			continue
 		}
 
