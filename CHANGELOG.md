@@ -36,6 +36,16 @@ v1.3.1 lands under this milestone instead, renamed to
 
 ### Internal
 
+- File decomposition along responsibility (#151). `internal/config/config.go`
+  is split into `types.go` (struct/type definitions), `defaults.go`
+  (`applyDefaults`), `validate.go` (the validation family), and
+  `target_override.go` (the issue #74 LD-overrides resolver), leaving
+  `config.go` as the package doc plus `Load`. The IOS VLAN-community FDB
+  sub-engine (`walkVlanCommunityFdbs`, `discoverVlanIDs`, and their
+  exclusive consts) moves out of `internal/discovery/fdb/fdb.go` into
+  `vlan_community.go`. Pure declaration moves within each package — no
+  behavior change; every symbol, signature, and test is unchanged.
+
 - Config & boundary type cleanliness (#152). The four stringly-typed config
   enums — `federation.role`, `output.otlp.protocol`, `modules.snmp.version`, and
   the credential-profile `type` — are now named string types (`Role`,
