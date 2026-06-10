@@ -154,13 +154,12 @@ type bgpPeer struct {
 //
 // Walker selection (when p.UseBGPV2MIB is true, which is the default):
 //
-//  1. bgp4V2PeerTable (IETF draft form) — covers Arista natively and any
-//     other vendor that implements the draft. If non-empty, used exclusively.
-//  2. Vendor-specific peer table (Cisco cbgpPeer2Table, Juniper
-//     jnxBgpM2PeerTable, Nokia tBgpPeerTable, Arista enterprise BGP4V2)
-//     selected by p.Vendor. If non-empty, used exclusively. Surfaces IPv6
-//     sessions that RFC 4273 cannot represent.
-//  2. RFC 4273 bgpPeerTable — final fallback, IPv4-only.
+//  1. Vendor-specific peer table (Cisco cbgpPeer2Table, Juniper
+//     jnxBgpM2PeerTable, Nokia tBgpPeerNgTable, Arista enterprise BGP4V2)
+//     selected by p.Vendor. If it yields peers, used exclusively. Surfaces
+//     IPv6 sessions that RFC 4273 cannot represent.
+//  2. RFC 4273 bgpPeerTable — final fallback, IPv4-only. Also runs when the
+//     vendor walk errors or returns no usable rows.
 //
 // When p.UseBGPV2MIB is false, only step 2 runs. This kill-switch exists so
 // operators who hit a vendor regression in the vendor walker can revert
@@ -284,28 +283,56 @@ func walkBgpPeerTable(ctx context.Context, client *gsnmp.GoSNMP) (map[string]*bg
 	return peers, hadPDUs, nil
 }
 
+// peerRecord is the normalized form both peer-table walkers reduce to before
+// edge construction: the table index (debug logging only), the peer IP, the
+// session state, and the remote AS. buildPeerEdges is the single edge builder
+// for every BGP source — the RFC 4273 path and each vendor enterprise table —
+// so precedence, confidence, scope filtering, and metadata conventions cannot
+// drift between them.
+type peerRecord struct {
+	key      string // map index, used in debug logs only
+	ip       net.IP
+	state    int
+	remoteAs int
+}
+
 func buildEdges(localDevice string, peers map[string]*bgpPeer, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour) {
+	recs := make([]peerRecord, 0, len(peers))
+	for ipKey, peer := range peers {
+		recs = append(recs, peerRecord{key: ipKey, ip: peer.remoteIP, state: peer.state, remoteAs: peer.remoteAs})
+	}
+	return buildPeerEdges(localDevice, recs, allowedNets,
+		"bgp: peer missing remote address, skipping", "peer_key")
+}
+
+// buildPeerEdges converts normalized peer records into edges + LD-11
+// out-of-scope observations. Only established(6) peers produce edges;
+// unspecified and link-local peer addresses are skipped. missingIPMsg and
+// keyAttr parameterize the nil-IP debug log so each walker keeps its
+// historical message ("peer missing remote address" with peer_key vs "index
+// decoder returned nil" with index).
+func buildPeerEdges(localDevice string, peers []peerRecord, allowedNets []*net.IPNet, missingIPMsg, keyAttr string) ([]discovery.Edge, []discovery.OutOfScopeNeighbour) {
 	now := time.Now()
 	var edges []discovery.Edge
 	var oos []discovery.OutOfScopeNeighbour
 
-	for ipKey, peer := range peers {
+	for _, peer := range peers {
 		if peer.state != bgpStateEstablished {
 			continue
 		}
-		if peer.remoteIP == nil {
-			slog.Debug("bgp: peer missing remote address, skipping", "local_device", localDevice, "peer_key", ipKey)
+		if peer.ip == nil {
+			slog.Debug(missingIPMsg, "local_device", localDevice, keyAttr, peer.key)
 			continue
 		}
-		if peer.remoteIP.IsUnspecified() || peer.remoteIP.IsLinkLocalUnicast() {
+		if peer.ip.IsUnspecified() || peer.ip.IsLinkLocalUnicast() {
 			continue
 		}
 
-		if len(allowedNets) > 0 && !snmputil.IPInNets(peer.remoteIP, allowedNets) {
+		if len(allowedNets) > 0 && !snmputil.IPInNets(peer.ip, allowedNets) {
 			oos = append(oos, discovery.OutOfScopeNeighbour{
 				Proto:           "bgp",
 				ReportingDevice: localDevice,
-				NeighbourHint:   peer.remoteIP.String(),
+				NeighbourHint:   peer.ip.String(),
 				FirstSeen:       now,
 				LastSeen:        now,
 			})
@@ -318,7 +345,7 @@ func buildEdges(localDevice string, peers map[string]*bgpPeer, allowedNets []*ne
 		}
 		edges = append(edges, discovery.Edge{
 			SrcDevice:      localDevice,
-			DstDevice:      peer.remoteIP.String(),
+			DstDevice:      peer.ip.String(),
 			DiscoveryProto: discovery.DiscoveryProtocolBGP,
 			Direction:      discovery.DirectionUnidirectional,
 			Confidence:     discovery.ConfidenceLow,

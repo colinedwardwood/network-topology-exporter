@@ -42,8 +42,6 @@ import (
 	"context"
 	"log/slog"
 	"net"
-	"strconv"
-	"time"
 
 	gsnmp "github.com/gosnmp/gosnmp"
 
@@ -407,58 +405,18 @@ func walkAndBuildVendorEdges(
 	return edges, oos, true, nil
 }
 
-// buildVendorEdges converts a vendorPeer map into edges + OOS observations
-// using the same precedence, confidence, and metadata conventions as the
-// RFC 4273 path. Every vendor walker uses this — the peer IP comes from
-// the index decoder (no separate column), so this is simpler than the
-// retired buildV2Edges helper.
+// buildVendorEdges converts a vendorPeer map into edges + OOS observations by
+// normalizing to peerRecord and delegating to buildPeerEdges — the single
+// edge builder shared with the RFC 4273 path, so precedence, confidence, and
+// metadata conventions cannot drift between the two walkers. The peer IP
+// comes from the index decoder (no separate column).
 func buildVendorEdges(localDevice string, peers map[string]*vendorPeer, allowedNets []*net.IPNet) ([]discovery.Edge, []discovery.OutOfScopeNeighbour) {
-	now := time.Now()
-	var edges []discovery.Edge
-	var oos []discovery.OutOfScopeNeighbour
-
+	recs := make([]peerRecord, 0, len(peers))
 	for idx, peer := range peers {
-		if peer.state != bgpStateEstablished {
-			continue
-		}
-		if peer.peerIP == nil {
-			slog.Debug("bgp vendor: peer missing IP (index decoder returned nil), skipping",
-				"local_device", localDevice, "index", idx)
-			continue
-		}
-		if peer.peerIP.IsUnspecified() || peer.peerIP.IsLinkLocalUnicast() {
-			continue
-		}
-
-		if len(allowedNets) > 0 && !snmputil.IPInNets(peer.peerIP, allowedNets) {
-			oos = append(oos, discovery.OutOfScopeNeighbour{
-				Proto:           "bgp",
-				ReportingDevice: localDevice,
-				NeighbourHint:   peer.peerIP.String(),
-				FirstSeen:       now,
-				LastSeen:        now,
-			})
-			continue
-		}
-
-		var metadata map[string]string
-		if peer.remoteAs > 0 {
-			metadata = map[string]string{metaKeyRemoteAs: strconv.Itoa(peer.remoteAs)}
-		}
-		edges = append(edges, discovery.Edge{
-			SrcDevice:      localDevice,
-			DstDevice:      peer.peerIP.String(),
-			DiscoveryProto: discovery.DiscoveryProtocolBGP,
-			Direction:      discovery.DirectionUnidirectional,
-			Confidence:     discovery.ConfidenceLow,
-			Adjacency:      discovery.AdjacencyUnknown,
-			PrecedenceRank: precedenceRank,
-			LinkKind:       discovery.LinkKindIP,
-			ObservedAt:     now,
-			Metadata:       metadata,
-		})
+		recs = append(recs, peerRecord{key: idx, ip: peer.peerIP, state: peer.state, remoteAs: peer.remoteAs})
 	}
-	return edges, oos
+	return buildPeerEdges(localDevice, recs, allowedNets,
+		"bgp vendor: peer missing IP (index decoder returned nil), skipping", "index")
 }
 
 // resolveVendor returns the canonical vendor string for the SNMP target,
