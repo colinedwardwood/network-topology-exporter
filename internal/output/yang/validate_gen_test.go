@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
 )
 
 // TestGenerateValidationDoc writes a YANG-JSON instance to YANG_VALIDATE_OUT

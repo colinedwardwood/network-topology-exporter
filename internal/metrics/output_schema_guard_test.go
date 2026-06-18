@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
 )
 
 // The Prometheus edge_info / device_info label schemas are deliberately MINIMAL

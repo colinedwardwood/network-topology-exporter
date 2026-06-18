@@ -10,13 +10,13 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/config"
-	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
-	snmpwalk "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
-	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
-	"github.com/colinedwardwood/network-topology-exporter/internal/snmptest"
-	"github.com/colinedwardwood/network-topology-exporter/internal/tracing"
+	"github.com/grafana/network-topology-exporter/internal/config"
+	"github.com/grafana/network-topology-exporter/internal/credentials"
+	snmpwalk "github.com/grafana/network-topology-exporter/internal/discovery/snmp"
+	"github.com/grafana/network-topology-exporter/internal/graph"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/snmptest"
+	"github.com/grafana/network-topology-exporter/internal/tracing"
 )
 
 // installRecorder installs an always-sample SDK TracerProvider backed by an

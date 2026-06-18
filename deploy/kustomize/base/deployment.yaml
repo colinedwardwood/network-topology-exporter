@@ -24,7 +24,7 @@ spec:
       containers:
         - name: topology-exporter
           # Image (repository:tag) is set by kustomization.yaml `images:`.
-          image: ghcr.io/colinedwardwood/network-topology-exporter:latest
+          image: ghcr.io/grafana/network-topology-exporter:latest
           imagePullPolicy: IfNotPresent
           securityContext:
             readOnlyRootFilesystem: true

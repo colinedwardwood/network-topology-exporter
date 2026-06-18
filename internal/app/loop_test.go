@@ -12,17 +12,17 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/app/httpx"
-	"github.com/colinedwardwood/network-topology-exporter/internal/config"
-	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
-	"github.com/colinedwardwood/network-topology-exporter/internal/events"
-	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
-	"github.com/colinedwardwood/network-topology-exporter/internal/loglimit"
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
-	"github.com/colinedwardwood/network-topology-exporter/internal/output/otlp"
-	"github.com/colinedwardwood/network-topology-exporter/internal/snapshot"
-	"github.com/colinedwardwood/network-topology-exporter/internal/snmptest"
+	"github.com/grafana/network-topology-exporter/internal/app/httpx"
+	"github.com/grafana/network-topology-exporter/internal/config"
+	"github.com/grafana/network-topology-exporter/internal/credentials"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/events"
+	"github.com/grafana/network-topology-exporter/internal/graph"
+	"github.com/grafana/network-topology-exporter/internal/loglimit"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/output/otlp"
+	"github.com/grafana/network-topology-exporter/internal/snapshot"
+	"github.com/grafana/network-topology-exporter/internal/snmptest"
 )
 
 // TestNewLogger maps level strings to slog levels and never returns nil.

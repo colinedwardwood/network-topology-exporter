@@ -11,9 +11,9 @@ import (
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
-	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
-	"github.com/colinedwardwood/network-topology-exporter/internal/otelx"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/graph"
+	"github.com/grafana/network-topology-exporter/internal/otelx"
 )
 
 // collectMetrics drains the ManualReader and returns metric name → slice of

@@ -7,7 +7,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/otelx"
+	"github.com/grafana/network-topology-exporter/internal/otelx"
 )
 
 // newTestExporter builds an Exporter wired to in-memory SDK plumbing instead of

@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/config"
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/config"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
 )
 
 // waitForAddr polls addr with TCP dials until the server is accepting connections

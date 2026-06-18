@@ -93,7 +93,7 @@ Changes to config keys, metric names and label sets, CLI flags, the snapshot sch
 
 ### Config schema sync
 
-`config/example.yaml` is the authoritative schema document (ROADMAP v1.5.0). Every change to a `yaml:"..."` struct tag in `internal/config/config.go` — adding, renaming, or removing a field — **requires a corresponding edit to `config/example.yaml`**:
+`config/example.yaml` is the authoritative schema document. Every change to a `yaml:"..."` struct tag in `internal/config/config.go` — adding, renaming, or removing a field — **requires a corresponding edit to `config/example.yaml`**:
 
 - **Added field**: add the key to the example (commented-out if optional) with a one-line comment naming its default and valid range/values.
 - **Renamed field**: update the key name in the example.

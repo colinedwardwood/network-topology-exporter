@@ -5,7 +5,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
 )
 
 // runRecovered calls fn inside a function whose only deferred call is

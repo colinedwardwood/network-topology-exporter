@@ -11,7 +11,7 @@ import (
 
 	gsnmp "github.com/gosnmp/gosnmp"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/snmptest"
+	"github.com/grafana/network-topology-exporter/internal/snmptest"
 )
 
 // fakeSessionPoolMetrics is a thread-safe SessionPoolMetrics test double.

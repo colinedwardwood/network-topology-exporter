@@ -18,8 +18,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
-	"github.com/colinedwardwood/network-topology-exporter/internal/limits"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/limits"
 )
 
 // tmpFile is the subset of *os.File used by Write. Defined as an interface so

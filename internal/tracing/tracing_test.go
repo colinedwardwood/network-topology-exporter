@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/otelx"
+	"github.com/grafana/network-topology-exporter/internal/otelx"
 )
 
 // TestNewRejectsBadProtocol verifies New rejects an unsupported protocol.

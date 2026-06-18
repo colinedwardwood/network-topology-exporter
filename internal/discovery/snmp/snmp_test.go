@@ -12,7 +12,7 @@ import (
 	gsnmp "github.com/gosnmp/gosnmp"
 	"golang.org/x/time/rate"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/snmptest"
+	"github.com/grafana/network-topology-exporter/internal/snmptest"
 )
 
 // PDUString: handles both string and []byte values.

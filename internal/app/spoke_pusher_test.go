@@ -12,8 +12,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.uber.org/goleak"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/federation"
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/federation"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
 )
 
 func testLogger() *slog.Logger {

@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/config"
-	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
-	snmpwalk "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
-	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
-	"github.com/colinedwardwood/network-topology-exporter/internal/snmptest"
-	"github.com/colinedwardwood/network-topology-exporter/internal/tracing"
+	"github.com/grafana/network-topology-exporter/internal/config"
+	"github.com/grafana/network-topology-exporter/internal/credentials"
+	snmpwalk "github.com/grafana/network-topology-exporter/internal/discovery/snmp"
+	"github.com/grafana/network-topology-exporter/internal/graph"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/snmptest"
+	"github.com/grafana/network-topology-exporter/internal/tracing"
 )
 
 // TestCycleHonoursTargetOverride proves the issue #74 per-target protocol

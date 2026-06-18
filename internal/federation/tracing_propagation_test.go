@@ -12,9 +12,9 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/config"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/config"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
 )
 
 // installTracing installs an always-sample SDK TracerProvider backed by a

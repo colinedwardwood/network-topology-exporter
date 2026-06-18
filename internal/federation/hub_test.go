@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/config"
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/config"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
 )
 
 // makeCert returns a self-signed certificate with the given Common Name,

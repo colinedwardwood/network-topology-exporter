@@ -15,12 +15,8 @@ body:
       label: Exporter version
       description: Run `./topology-exporter --version` or check the OCI image tag.
       options:
-        - v1.4.0-rc.1
-        - v1.3.1-rc1
-        - v1.3.0
-        - v1.2.0
-        - v1.1.0
         - v1.0.0
+        - main (unreleased)
         - Other (specify in description)
     validations:
       required: true

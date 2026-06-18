@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
 )
 
 // TestAuthConfigured reflects the flag the constructor was given.

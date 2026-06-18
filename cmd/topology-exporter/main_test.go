@@ -20,7 +20,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/app"
+	"github.com/grafana/network-topology-exporter/internal/app"
 )
 
 // TestRunVersionFlag exercises the --version short-circuit in run().

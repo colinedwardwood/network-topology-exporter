@@ -1,6 +1,6 @@
 # Stability Matrix
 
-This document is the authoritative statement of which surfaces are frozen, the semver contract that applies to each, and the measurable criteria that define v1.0 GA. It is written for operators who need to decide whether to pin a version or upgrade freely, and for contributors who need to know what constitutes a breaking change.
+This document is the authoritative statement of which surfaces are frozen, the semver contract that applies to each, and the measurable criteria for operational readiness. It is written for operators who need to decide whether to pin a version or upgrade freely, and for contributors who need to know what constitutes a breaking change.
 
 Cross-references:
 
@@ -11,17 +11,13 @@ Cross-references:
 
 ---
 
-## Pre-1.0 stability warning
+## Stability from v1.0.0
 
-Despite the existing `v1.0.0`–`v1.3.0` tags, the project follows pre-1.0 stability conventions. The five surfaces below can break between minor releases until the v1.0 GA banner is flipped. Pin exact versions in anything you care about.
+As of **v1.0.0** (2026-06-18), the five surfaces below are semver-stable.
+Breaking changes require a **major version bump** (`v2.0.0`). Additive changes
+(new optional config keys, new metrics) are minor-version changes.
 
-The path to GA: `v1.4.0-rc.1` (lab fixture capture) → `v1.5.0` (config schema freeze) → `v1.6.0` (operator readiness) → `v1.7.0` (self-observability) → `v1.0.0` (retag, banner removed). See [ROADMAP.md](../../ROADMAP.md).
-
----
-
-## The five frozen surfaces
-
-At v1.0 GA, a breaking change to any of these surfaces requires a **major version bump** (i.e. `v2.0.0`). Until GA, breaking changes in these surfaces will be signalled by a changelog entry labelled `(breaking)`.
+See [ROADMAP.md](../../ROADMAP.md) for forward-looking work.
 
 ### 1. Config schema
 
@@ -154,15 +150,14 @@ Three commitments from the ROADMAP that have measurable acceptance criteria:
 
 **What it means:** An operator who has never read the source code should be able to deploy the exporter, configure basic alerts, and diagnose common problems using the documentation in `docs/operator/` and the referenced runbooks.
 
-**Acceptance criterion:** the v1.6.0 operator-readiness milestone closes with the upgrade runbook (`docs/operator/upgrades.md`), SLO guidance (`docs/operator/slos.md`), this stability matrix, and the failure-mode coverage audit all shipped and cross-referenced from the README.
+**Acceptance criterion:** `docs/operator/upgrades.md`, `docs/operator/slos.md`, this stability matrix, and the failure-mode coverage audit are cross-referenced from the README.
 
 ---
 
 ## Deprecation policy
 
-The following policy applies at v1.0 GA. During the pre-1.0 period, breaking changes may occur without a full deprecation cycle; each is labelled `(breaking)` in the CHANGELOG.
-
-**At GA:**
+Breaking changes to any semver-stable surface require a **major version bump**.
+Within a major version:
 
 1. **Minimum overlap:** a deprecated config key, metric label value, or CLI flag must remain functional for at least **one full minor release** after the deprecation is announced.
 2. **Startup warning:** deprecated config keys emit a `WARN`-level structured log line on startup, naming the deprecated key, the replacement, and the release in which the deprecated form will be removed.
@@ -173,7 +168,7 @@ The following policy applies at v1.0 GA. During the pre-1.0 period, breaking cha
 
 ## Related documents
 
-- [`ROADMAP.md`](../../ROADMAP.md) — release plan and v1.0 GA criteria in full
+- [`ROADMAP.md`](../../ROADMAP.md) — forward-looking plan
 - [`docs/metrics.md`](../metrics.md) — full metric reference with recommended alerts
 - [`config/example.yaml`](../../config/example.yaml) — config schema reference
 - [`CONTRIBUTING.md`](../../CONTRIBUTING.md) — what constitutes a breaking change for contributors

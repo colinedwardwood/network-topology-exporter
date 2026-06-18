@@ -178,7 +178,7 @@ status:
 | `rfc4273` fallback | Any of the above; FortiOS specifically validates non-Cisco | Blocked same as above |
 
 Tracked under issue
-[#1](https://github.com/colinedwardwood/network-topology-exporter/issues/1),
+[#1](https://github.com/grafana/network-topology-exporter/issues/1),
 moved to milestone v1.3.1.
 
 ## Sign-off

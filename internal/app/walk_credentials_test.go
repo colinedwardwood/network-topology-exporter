@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/app"
-	"github.com/colinedwardwood/network-topology-exporter/internal/config"
-	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
-	"github.com/colinedwardwood/network-topology-exporter/internal/snmptest"
+	"github.com/grafana/network-topology-exporter/internal/app"
+	"github.com/grafana/network-topology-exporter/internal/config"
+	"github.com/grafana/network-topology-exporter/internal/credentials"
+	"github.com/grafana/network-topology-exporter/internal/snmptest"
 )
 
 func TestProfileToParams(t *testing.T) {

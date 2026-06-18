@@ -11,10 +11,10 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/config"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
-	"github.com/colinedwardwood/network-topology-exporter/internal/snapshot"
+	"github.com/grafana/network-topology-exporter/internal/config"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/snapshot"
 )
 
 // TestHubWriteSnapshotPersistsGraph verifies that writeSnapshot writes a file

@@ -11,7 +11,7 @@ import (
 
 	g "github.com/gosnmp/gosnmp"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/sanitize"
+	"github.com/grafana/network-topology-exporter/internal/sanitize"
 )
 
 const (

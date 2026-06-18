@@ -4,7 +4,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
 )
 
 // OutOfScope applies the LD-11 discovery-scope filter to one neighbour

@@ -1,4 +1,4 @@
-module github.com/colinedwardwood/network-topology-exporter
+module github.com/grafana/network-topology-exporter
 
 go 1.26.0
 

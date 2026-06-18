@@ -187,7 +187,7 @@ jobs:
         run: |
           go-licenses check ./... \
             --disallowed_types=forbidden,unknown \
-            --ignore github.com/colinedwardwood/network-topology-exporter
+            --ignore github.com/grafana/network-topology-exporter
 
   helm-lint:
     name: helm lint
@@ -398,9 +398,9 @@ jobs:
         run: |
           mkdir -p bin
           LDFLAGS="-s -w \
-            -X github.com/colinedwardwood/network-topology-exporter/internal/version.Version=${{ github.ref_name }} \
-            -X github.com/colinedwardwood/network-topology-exporter/internal/version.Commit=${{ github.sha }} \
-            -X github.com/colinedwardwood/network-topology-exporter/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            -X github.com/grafana/network-topology-exporter/internal/version.Version=${{ github.ref_name }} \
+            -X github.com/grafana/network-topology-exporter/internal/version.Commit=${{ github.sha }} \
+            -X github.com/grafana/network-topology-exporter/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           CGO_ENABLED=0 GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" \
             -o bin/topology-exporter-linux-amd64 ./cmd/topology-exporter
           CGO_ENABLED=0 GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" \

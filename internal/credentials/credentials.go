@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/config"
+	"github.com/grafana/network-topology-exporter/internal/config"
 )
 
 // cacheTTL is the maximum age of a cached credential entry. Entries older than

@@ -45,7 +45,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
 )
 
 // ChangeKind describes a topology mutation between two cycles.

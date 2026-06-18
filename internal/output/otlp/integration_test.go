@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
-	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
-	"github.com/colinedwardwood/network-topology-exporter/internal/otelx"
-	"github.com/colinedwardwood/network-topology-exporter/internal/output/otlp"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/graph"
+	"github.com/grafana/network-topology-exporter/internal/otelx"
+	"github.com/grafana/network-topology-exporter/internal/output/otlp"
 )
 
 // TestOTLPIntegration exercises a real export against a live OTLP receiver

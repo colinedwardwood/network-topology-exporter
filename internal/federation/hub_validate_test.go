@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
-	"github.com/colinedwardwood/network-topology-exporter/internal/limits"
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/limits"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
 )
 
 // TestValidateSpokePayload covers the semantic validation rules enforced by

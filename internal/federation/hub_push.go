@@ -18,8 +18,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
-	"github.com/colinedwardwood/network-topology-exporter/internal/tracing"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/tracing"
 )
 
 // Per-push payload caps. These bound the size of a single spoke push and are

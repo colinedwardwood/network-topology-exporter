@@ -131,7 +131,7 @@ comments for the openconnect + CML reservation walkthrough.
 
 ## Maintainer notes (for Colin)
 
-This lab closes [issue #58](https://github.com/colinedwardwood/network-topology-exporter/issues/58)
+This lab closes [issue #58](https://github.com/grafana/network-topology-exporter/issues/58)
 — IOS-XE cross-validation for the `ciscoCbgpPeer2Spec` walker in
 `internal/discovery/bgp/bgp_vendor.go` (`cbgpPeer2Table`,
 `1.3.6.1.4.1.9.9.187.1.2.5`). Column numbers were already validated

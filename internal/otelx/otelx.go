@@ -17,7 +17,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/version"
+	"github.com/grafana/network-topology-exporter/internal/version"
 )
 
 const (
@@ -26,7 +26,7 @@ const (
 	ServiceName = "network-topology-exporter"
 	// ScopeName is the instrumentation scope shared by all signals so a
 	// single instrumentation library identifies metrics, logs, and spans.
-	ScopeName = "github.com/colinedwardwood/network-topology-exporter"
+	ScopeName = "github.com/grafana/network-topology-exporter"
 )
 
 // Protocol selects the OTLP transport. It is the wire-level counterpart of

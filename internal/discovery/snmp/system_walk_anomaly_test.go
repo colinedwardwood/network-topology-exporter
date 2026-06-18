@@ -8,7 +8,7 @@ import (
 
 	gsnmp "github.com/gosnmp/gosnmp"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/snmptest"
+	"github.com/grafana/network-topology-exporter/internal/snmptest"
 )
 
 // fakeAnomalySink is a per-test WalkerMetrics implementation that captures the

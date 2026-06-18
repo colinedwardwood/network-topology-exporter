@@ -363,7 +363,7 @@ failures fan out as unbounded SNMP retries.
 
 The exporter is post-audit code: the May 2026 review
 (`docs/audits/2026-05-architectural-review.md`) drove 28 numbered
-remediation items in v1.3.0. LibreNMS hasn't had a comparable structured
+remediation items. LibreNMS hasn't had a comparable structured
 audit publicly.
 
 ## 13. When to choose which

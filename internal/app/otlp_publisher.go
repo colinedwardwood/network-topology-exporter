@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
-	"github.com/colinedwardwood/network-topology-exporter/internal/output/otlp"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/output/otlp"
 )
 
 // otlpPublisher owns the OTLP exporter plus the concurrency cap and in-flight

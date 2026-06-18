@@ -15,7 +15,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
 )
 
 // DeduplicateOOS removes duplicate OutOfScopeNeighbour entries that arise when

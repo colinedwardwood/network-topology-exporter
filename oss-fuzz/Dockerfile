@@ -15,6 +15,6 @@
 ################################################################################
 
 FROM gcr.io/oss-fuzz-base/base-builder-go
-RUN git clone --depth 1 https://github.com/colinedwardwood/network-topology-exporter.git $SRC/network-topology-exporter
+RUN git clone --depth 1 https://github.com/grafana/network-topology-exporter.git $SRC/network-topology-exporter
 WORKDIR $SRC/network-topology-exporter
 COPY build.sh $SRC/

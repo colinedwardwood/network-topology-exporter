@@ -6,7 +6,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
 )
 
 // expectedMetricNames lists every metric the exporter must expose.

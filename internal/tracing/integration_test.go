@@ -8,8 +8,8 @@ import (
 
 	"go.opentelemetry.io/otel"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/otelx"
-	"github.com/colinedwardwood/network-topology-exporter/internal/tracing"
+	"github.com/grafana/network-topology-exporter/internal/otelx"
+	"github.com/grafana/network-topology-exporter/internal/tracing"
 )
 
 // TestTracingIntegration exercises a real span export against a live OTLP trace

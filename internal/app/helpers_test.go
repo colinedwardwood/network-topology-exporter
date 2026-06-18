@@ -7,7 +7,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
 )
 
 // TestDeduplicateOOS verifies duplicate (device, port, hint) neighbours are

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
 )
 
 func bidiEdge(sd, sp, dd, dp string, proto discovery.DiscoveryProtocol) discovery.Edge {

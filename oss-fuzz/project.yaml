@@ -1,6 +1,6 @@
-homepage: "https://github.com/colinedwardwood/network-topology-exporter"
+homepage: "https://github.com/grafana/network-topology-exporter"
 language: go
-main_repo: "https://github.com/colinedwardwood/network-topology-exporter"
+main_repo: "https://github.com/grafana/network-topology-exporter"
 # REPLACE_WITH_MAINTAINER_EMAIL before submitting to google/oss-fuzz.
 # Must be a Google-account-associated email so the contact can access the
 # OSS-Fuzz dashboard and ClusterFuzz crash reports.

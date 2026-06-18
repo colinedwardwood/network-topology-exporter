@@ -15,12 +15,12 @@ import (
 	gsnmp "github.com/gosnmp/gosnmp"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/lldp"
-	snmputil "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
-	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
-	"github.com/colinedwardwood/network-topology-exporter/internal/snmptest"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/discovery/lldp"
+	snmputil "github.com/grafana/network-topology-exporter/internal/discovery/snmp"
+	"github.com/grafana/network-topology-exporter/internal/graph"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/snmptest"
 )
 
 // OID constants copied from the lldp package (unexported there).

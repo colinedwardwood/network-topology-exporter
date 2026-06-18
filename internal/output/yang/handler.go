@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"sync/atomic"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
 )
 
 // GraphSource yields the current immutable topology graph. Satisfied by
