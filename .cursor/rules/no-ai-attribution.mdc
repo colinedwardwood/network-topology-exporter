@@ -1,0 +1,8 @@
+---
+description: Never add AI attribution to commits or PRs
+alwaysApply: true
+---
+
+Never add `Co-authored-by`, `Made-with`, or any other attribution trailer naming
+Cursor, Claude, Anthropic, or other AI tools to commit messages, PR descriptions,
+or code comments.
