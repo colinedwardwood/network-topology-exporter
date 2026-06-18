@@ -21,7 +21,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.4'
-          cache: true
+          cache: ${{ github.event_name != 'pull_request' }}
 
       # gofmt is build-tag-agnostic, unlike golangci-lint's formatter pass,
       # which only analyses packages loaded under the default tag set. Without
@@ -72,7 +72,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.4'
-          cache: true
+          cache: ${{ github.event_name != 'pull_request' }}
 
       - name: integration tests
         run: go test ./tests/integration/... -tags integration -race -count=1 -timeout 60s
@@ -87,7 +87,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.4'
-          cache: true
+          cache: ${{ github.event_name != 'pull_request' }}
 
       # Short fuzz pass per target — ~30s each — runs on every push / PR.
       # Catches regressions introduced alongside other changes. The nightly
@@ -141,7 +141,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.4'
-          cache: true
+          cache: ${{ github.event_name != 'pull_request' }}
 
       - uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
         with:
@@ -156,7 +156,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.4'
-          cache: true
+          cache: ${{ github.event_name != 'pull_request' }}
 
       - name: install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4 # v1.1.4
@@ -173,7 +173,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.4'
-          cache: true
+          cache: ${{ github.event_name != 'pull_request' }}
 
       - name: install go-licenses
         run: go install github.com/google/go-licenses@v1.6.0 # v1.6.0
@@ -253,7 +253,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.4'
-          cache: true
+          cache: ${{ github.event_name != 'pull_request' }}
 
       - name: install containerlab
         run: bash -c "$(curl -sL https://get.containerlab.dev)"
@@ -276,7 +276,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.4'
-          cache: true
+          cache: ${{ github.event_name != 'pull_request' }}
 
       - name: install containerlab
         run: bash -c "$(curl -sL https://get.containerlab.dev)"
@@ -345,8 +345,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.4'
-
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+          cache: false
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
@@ -381,8 +380,6 @@ jobs:
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
             DATE=${{ github.event.head_commit.timestamp }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: sign container image (cosign keyless)
         env:
