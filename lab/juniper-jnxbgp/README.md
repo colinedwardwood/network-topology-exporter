@@ -240,7 +240,7 @@ each one means and what to do:
 
 ## Maintainer notes (for Colin)
 
-This lab closes [issue #56](https://github.com/colinedwardwood/network-topology-exporter/issues/56)
+This lab closes [issue #56](https://github.com/grafana/network-topology-exporter/issues/56)
 — real-device fixtures for the `juniperJnxBgpM2PeerSpec` walker in
 `internal/discovery/bgp/bgp_vendor.go` (`jnxBgpM2PeerTable`,
 `1.3.6.1.4.1.2636.5.1.1.2.1.1`). Walker ships with `verified: false`

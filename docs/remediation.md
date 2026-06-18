@@ -59,8 +59,8 @@ The labels and milestone we use are the ones already configured on the repo:
 - `needs-real-device` — for any fix that touches vendor MIB parsing or protocol decoding. **This label is an exit-gate**: the issue cannot close until a real-device capture has validated the fix, not just a synthetic fixture.
 
 **Milestone:**
-- Critical/High items go on the *current* milestone (today: `v1.3.0 — Post-Audit Hardening`).
-- Medium items go on `v1.4.0 — OTLP Modernization` or later depending on theme.
+- Critical/High items go on the current milestone.
+- Medium items go on a later milestone depending on theme.
 - Low items go on a future milestone or are left unmilestoned in the backlog.
 
 **Issue body template:**

@@ -3,7 +3,7 @@ SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
 BINARY      := topology-exporter
-PKG         := github.com/colinedwardwood/network-topology-exporter
+PKG         := github.com/grafana/network-topology-exporter
 VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT      := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE        := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -46,7 +46,7 @@ bench: ## Run Go benchmarks (compare across commits with benchstat)
 .PHONY: licenses
 licenses: ## Check dependency licenses (forbidden/unknown fail)
 	@command -v go-licenses >/dev/null || go install github.com/google/go-licenses@latest
-	go-licenses check ./... --disallowed_types=forbidden,unknown --ignore github.com/colinedwardwood/network-topology-exporter
+	go-licenses check ./... --disallowed_types=forbidden,unknown --ignore github.com/grafana/network-topology-exporter
 
 .PHONY: fmt
 fmt: ## Format

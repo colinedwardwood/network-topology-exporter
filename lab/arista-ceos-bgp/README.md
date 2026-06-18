@@ -12,7 +12,7 @@ the enterprise OID; column numbers (state=13, RemoteAs=10) and index
 format (`<peerInst>.<addrType>.<addrLen>.<addr...>`) come from the
 captures landed here.
 
-Related issues: [#1](https://github.com/colinedwardwood/network-topology-exporter/issues/1) (BGP4-V2 vendor fixtures), [#31](https://github.com/colinedwardwood/network-topology-exporter/issues/31) (vendor_cisco walker bugs surfaced from the cisco-iol-bgp captures).
+Related issues: [#1](https://github.com/grafana/network-topology-exporter/issues/1) (BGP4-V2 vendor fixtures), [#31](https://github.com/grafana/network-topology-exporter/issues/31) (vendor_cisco walker bugs surfaced from the cisco-iol-bgp captures).
 
 ## Prerequisites
 

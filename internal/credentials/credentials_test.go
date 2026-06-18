@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/config"
+	"github.com/grafana/network-topology-exporter/internal/config"
 )
 
 func newTestResolver(t *testing.T) *Resolver {

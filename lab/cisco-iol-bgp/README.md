@@ -2,7 +2,7 @@
 
 A 2-node Cisco IOL iBGP topology built to capture real-device SNMP
 fixtures for the BGP4-V2 / `cbgpPeer2Table` walker validation needed by
-[issue #1](https://github.com/colinedwardwood/network-topology-exporter/issues/1).
+[issue #1](https://github.com/grafana/network-topology-exporter/issues/1).
 
 ## What this lab is for
 

@@ -1,14 +1,5 @@
 # network-topology-exporter
 
-> [!WARNING]
-> **This is a test release, not a stable v1.x.** Despite the existing
-> `v1.0.0`–`v1.3.x` tags, the project follows pre-1.0 stability
-> conventions: the public surface (config schema, metric names, CLI
-> flags, on-disk snapshot format, federation API) can break between
-> minor releases. Releases use `-rc.N` suffixes to signal this.
-> Pin exact versions in anything you care about, and please file
-> issues for anything you can break.
-
 A standalone, AGPL-3.0-licensed Go exporter that discovers network topology over SNMP — walking LLDP, CDP, BGP, OSPF, FDB, IS-IS, and MPLS-TE tables — and emits five signals:
 
 - **Prometheus metrics** for device inventory and topology edges, scraped via `/metrics`.
@@ -29,9 +20,16 @@ For a side-by-side feature comparison with LibreNMS, SuzieQ, Nautobot, OpenNMS, 
 
 ## Status
 
-**Functionally complete, public surface intentionally unstable.** SNMP / LLDP / CDP / BGP / OSPF / FDB / IS-IS / MPLS-TE discovery, graph reconciliation, credential management, snapshot persistence, multi-instance federation (including opt-in hub high availability), optional OTLP push, and optional RFC 8345 YANG output are all implemented and covered by unit, integration, and end-to-end tests. The project ships against test deployments and welcomes adversarial feedback — see the pre-release notice at the top of this README.
+**v1.0.0 — initial Grafana release.** SNMP / LLDP / CDP / BGP / OSPF / FDB /
+IS-IS / MPLS-TE discovery, graph reconciliation, credential management,
+snapshot persistence, multi-instance federation (including opt-in hub high
+availability), optional OTLP push, and optional RFC 8345 YANG output are
+implemented and covered by unit, integration, and end-to-end tests.
 
-The path to a real v1.0 GA — what's left, the per-release plan, and what's intentionally out of scope — is in [ROADMAP.md](ROADMAP.md).
+The config schema, metric names, CLI flags, on-disk snapshot format, and
+federation API are semver-stable from v1.0.0 — see
+[`docs/operator/stability.md`](docs/operator/stability.md). Future work is
+tracked in [ROADMAP.md](ROADMAP.md).
 
 ## Quickstart
 
@@ -63,7 +61,7 @@ registry-restricted and air-gapped environments:
 1. **GHCR (default):**
 
    ```bash
-   docker pull ghcr.io/colinedwardwood/network-topology-exporter:latest
+   docker pull ghcr.io/grafana/network-topology-exporter:latest
    ```
 
 2. **Offline tarball (air-gapped)** — each GitHub Release attaches a

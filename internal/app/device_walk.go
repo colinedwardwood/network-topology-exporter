@@ -11,17 +11,17 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/config"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/bgp"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/cdp"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/fdb"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/isis"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/lldp"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/mpls"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/ospf"
-	snmpwalk "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/config"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/discovery/bgp"
+	"github.com/grafana/network-topology-exporter/internal/discovery/cdp"
+	"github.com/grafana/network-topology-exporter/internal/discovery/fdb"
+	"github.com/grafana/network-topology-exporter/internal/discovery/isis"
+	"github.com/grafana/network-topology-exporter/internal/discovery/lldp"
+	"github.com/grafana/network-topology-exporter/internal/discovery/mpls"
+	"github.com/grafana/network-topology-exporter/internal/discovery/ospf"
+	snmpwalk "github.com/grafana/network-topology-exporter/internal/discovery/snmp"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
 )
 
 // enabledModules returns the canonical 7-element protocol-walker list, gated

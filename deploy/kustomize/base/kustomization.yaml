@@ -24,8 +24,8 @@ labels:
       app.kubernetes.io/managed-by: kustomize
 
 # Pin the container image. Override the tag per environment with:
-#   kustomize edit set image ghcr.io/colinedwardwood/network-topology-exporter=:1.6.0
+#   kustomize edit set image ghcr.io/grafana/network-topology-exporter=:1.0.0
 images:
-  - name: ghcr.io/colinedwardwood/network-topology-exporter
-    newName: ghcr.io/colinedwardwood/network-topology-exporter
+  - name: ghcr.io/grafana/network-topology-exporter
+    newName: ghcr.io/grafana/network-topology-exporter
     newTag: latest

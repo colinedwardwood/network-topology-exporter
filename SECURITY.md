@@ -2,15 +2,11 @@
 
 ## Supported versions
 
-The project has not yet reached a stable v1.0 GA (see the pre-release notice in [README.md](README.md)). Until the stability banner is removed, only the current minor release receives security fixes.
-
 | Version series | Supported |
 |---|---|
-| Current minor (latest release / RC tag, e.g. `v1.3.1-rc1`) | Yes — patches are applied and a new RC is cut |
-| Previous minor | Best-effort: critical-severity issues are backported if the fix is self-contained; lower severity is not |
+| Current minor (latest release, e.g. `v1.0.0`) | Yes — security patches are applied and a new patch release is cut |
+| Previous minor | Security fixes only |
 | Any version two or more minors behind | Not supported |
-
-When v1.0 GA ships, this table will be updated to: current minor = fully supported; previous minor = security fixes only.
 
 ## Reporting a vulnerability
 
@@ -18,7 +14,7 @@ When v1.0 GA ships, this table will be updated to: current minor = fully support
 
 Use the GitHub **Private Security Advisory** path:
 
-1. Open [https://github.com/colinedwardwood/network-topology-exporter/security/advisories/new](https://github.com/colinedwardwood/network-topology-exporter/security/advisories/new) — or navigate to the repository on GitHub, click **Security** → **Report a vulnerability**.
+1. Open [https://github.com/grafana/network-topology-exporter/security/advisories/new](https://github.com/grafana/network-topology-exporter/security/advisories/new) — or navigate to the repository on GitHub, click **Security** → **Report a vulnerability**.
 2. Fill in the advisory form: affected versions, reproduction steps, and your assessment of severity (CVSSv3 vector is appreciated but not required).
 3. Submit. The advisory is private by default; only you and the maintainers can see it.
 

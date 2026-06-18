@@ -102,7 +102,7 @@ Replace `60` with your `discovery.interval` in seconds.
       network_topology_discovery_devices_total for timeout/failed counts,
       and network_topology_discovery_module_duration_seconds per module.
       See docs/operator/troubleshooting.md §5 and docs/operator/scale.md.
-    runbook_url: "https://github.com/colinedwardwood/network-topology-exporter/blob/main/docs/operator/troubleshooting.md#5-discovery-cycle-too-slow"
+    runbook_url: "https://github.com/grafana/network-topology-exporter/blob/main/docs/operator/troubleshooting.md#5-discovery-cycle-too-slow"
 
 - alert: TopologyCycleHeadroomPageSlow
   # Burn rate 6× for 6h = ~5% of 30-day budget consumed in 6h. Page.
@@ -223,7 +223,7 @@ The SLO is zero drops over 7 days. Any drop violates the SLO, so the page alert 
       the background writer could not start. Check disk space, NFS mount
       health, and I/O latency on the snapshot volume.
       See docs/operator/troubleshooting.md §8.
-    runbook_url: "https://github.com/colinedwardwood/network-topology-exporter/blob/main/docs/operator/troubleshooting.md#8-snapshot-issues"
+    runbook_url: "https://github.com/grafana/network-topology-exporter/blob/main/docs/operator/troubleshooting.md#8-snapshot-issues"
 
 - alert: TopologySnapshotDropsTicket
   # Any drop at all over 1h (same zero tolerance, longer window for ticket).
@@ -336,7 +336,7 @@ Eviction deletes both per-spoke series, so the page alert must combine `spoke_up
       Check spoke health, mTLS certificate validity, and network connectivity
       to the hub federation listener on port 9101.
       See docs/operator/federation.md § FederationSpokeDown runbook entry.
-    runbook_url: "https://github.com/colinedwardwood/network-topology-exporter/blob/main/docs/operator/federation.md#federationspokedown"
+    runbook_url: "https://github.com/grafana/network-topology-exporter/blob/main/docs/operator/federation.md#federationspokedown"
 
 - alert: TopologySpokeDownTicket
   # Budget alert: more than 1 spoke currently reports liveness 0.

@@ -18,15 +18,15 @@ import (
 	gsnmp "github.com/gosnmp/gosnmp"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/app"
-	"github.com/colinedwardwood/network-topology-exporter/internal/app/httpx"
-	"github.com/colinedwardwood/network-topology-exporter/internal/config"
-	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
-	snmpwalk "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
-	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
-	"github.com/colinedwardwood/network-topology-exporter/internal/snmptest"
+	"github.com/grafana/network-topology-exporter/internal/app"
+	"github.com/grafana/network-topology-exporter/internal/app/httpx"
+	"github.com/grafana/network-topology-exporter/internal/config"
+	"github.com/grafana/network-topology-exporter/internal/credentials"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
+	snmpwalk "github.com/grafana/network-topology-exporter/internal/discovery/snmp"
+	"github.com/grafana/network-topology-exporter/internal/graph"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/snmptest"
 )
 
 func systemPDUs(sysName string) []gsnmp.SnmpPDU {

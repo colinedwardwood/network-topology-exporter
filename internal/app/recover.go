@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"runtime/debug"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
 )
 
 // recoverGoroutine is the shared panic-recovery body for the exporter's

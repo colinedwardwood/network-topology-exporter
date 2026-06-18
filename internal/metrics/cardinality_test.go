@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
 )
 
 func TestCardinalityBudget(t *testing.T) {

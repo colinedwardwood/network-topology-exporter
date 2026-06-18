@@ -5,7 +5,7 @@
 # collector agent already in your stack (Promtail, Alloy, Fluentd, etc.).
 # See README.md for the full metric reference and docs/operator/ for runbooks.
 #
-# This file is the authoritative schema document for the config (ROADMAP v1.5.0).
+# This file is the authoritative schema document for the config.
 # Every accepted YAML key path is listed here (active or commented-out).
 # Keys intentionally absent from the active section use sensible defaults:
 #   listen.addr                         ":9100"
@@ -150,7 +150,7 @@ modules:
     enabled: true              # default false; CISCO-CDP-MIB
   bgp:
     enabled: false             # default false; RFC 4273 BGP4-MIB (IPv4) + vendor BGP4-V2 tables (IPv6)
-    # disable_v2_mib: false    # default false since v1.3.0 (v2 walkers enabled).
+    # disable_v2_mib: false    # default false (v2 walkers enabled).
     #                          # With v2 enabled, the BGP walker picks a vendor
     #                          # table based on sysObjectID and falls back to
     #                          # RFC 4273 if the vendor walk is empty:
@@ -165,7 +165,6 @@ modules:
     #                          # failure modes via network_topology_bgp_walker_outcome_total
     #                          # (labels walker_drift / malformed_index / mib_unimplemented),
     #                          # so silent zero-edge dropouts are alertable.
-    #                          # Replaces the removed v1.3.0 `use_v2_mib` key (removed in v1.5.0).
   ospf:
     enabled: false             # default false; RFC 4750 OSPF-MIB
   fdb:
@@ -249,13 +248,12 @@ snapshot:
 #     tls_cert:    /etc/topology-exporter/pki/hub.crt
 #     tls_key:     /etc/topology-exporter/pki/hub.key
 #
-#     # Cross-site device name handling. Default false (strict) since v1.3.0:
+#     # Cross-site device name handling. Default false (strict):
 #     # device names are only lowercased for matching — FQDN suffixes are
 #     # preserved so "core-sw.dc1" and "core-sw.dc2" remain distinct. Set to
 #     # true ONLY for single-site deployments where mixed short/FQDN forms of
 #     # the same device must reconcile (e.g. one spoke reports "core-01" while
 #     # another reports "core-01.internal.corp" for the same physical device).
-#     # Replaces the removed v1.3.0 `strict_device_name_matching` key (removed in v1.5.0).
 #     # loose_device_name_matching: false
 #
 #     # Graph size admission control for the hub's combined graph.
@@ -300,11 +298,10 @@ snapshot:
 #     heartbeat_cycles: 10            # default 10; emit a full graph push every N cycles even without changes
 #     # protocol selects the OTLP transport: http (default) or grpc.
 #     # The payload encoding is always protobuf (the OpenTelemetry Go SDK
-#     # exporters do not implement OTLP/JSON) — a wire-format change from the
-#     # pre-v1.5.0 hand-rolled JSON path. Receivers must accept protobuf.
+#     # exporters do not implement OTLP/JSON). Receivers must accept protobuf.
 #     protocol: http                  # default "http"; http | grpc
 #     # traces: opt-in OpenTelemetry tracing of the exporter's own discovery
-#     # cycle (v1.7.0, issue #68). Disabled by default. When enabled, spans are
+#     # cycle. Disabled by default. When enabled, spans are
 #     # exported over the SAME endpoint + protocol + auth as the metrics/logs
 #     # above — tracing has no endpoint of its own. See docs/operator/tracing.md.
 #     traces:

@@ -21,7 +21,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.4'
-          cache: true
+          cache: false
 
       # gofmt is build-tag-agnostic, unlike golangci-lint's formatter pass,
       # which only analyses packages loaded under the default tag set. Without
@@ -72,7 +72,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.4'
-          cache: true
+          cache: false
 
       - name: integration tests
         run: go test ./tests/integration/... -tags integration -race -count=1 -timeout 60s
@@ -87,7 +87,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.4'
-          cache: true
+          cache: false
 
       # Short fuzz pass per target — ~30s each — runs on every push / PR.
       # Catches regressions introduced alongside other changes. The nightly
@@ -141,7 +141,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.4'
-          cache: true
+          cache: false
 
       - uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
         with:
@@ -156,7 +156,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.4'
-          cache: true
+          cache: false
 
       - name: install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4 # v1.1.4
@@ -173,7 +173,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.4'
-          cache: true
+          cache: false
 
       - name: install go-licenses
         run: go install github.com/google/go-licenses@v1.6.0 # v1.6.0
@@ -187,7 +187,7 @@ jobs:
         run: |
           go-licenses check ./... \
             --disallowed_types=forbidden,unknown \
-            --ignore github.com/colinedwardwood/network-topology-exporter
+            --ignore github.com/grafana/network-topology-exporter
 
   helm-lint:
     name: helm lint
@@ -236,8 +236,6 @@ jobs:
             VERSION=ci
             COMMIT=${{ github.sha }}
             DATE=${{ github.event.head_commit.timestamp }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
   e2e-test:
     name: e2e tests (containerlab)
@@ -253,7 +251,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.4'
-          cache: true
+          cache: false
 
       - name: install containerlab
         run: bash -c "$(curl -sL https://get.containerlab.dev)"
@@ -276,7 +274,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.4'
-          cache: true
+          cache: false
 
       - name: install containerlab
         run: bash -c "$(curl -sL https://get.containerlab.dev)"
@@ -328,6 +326,12 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build-test, integration-test, lint, helm-lint, docker]
+    env:
+      REF_NAME: ${{ github.ref_name }}
+      COMMIT_SHA: ${{ github.sha }}
+      SBOM_FILE: network-topology-exporter-${{ github.ref_name }}.spdx.json
+      OFFLINE_TARBALL: network-topology-exporter-${{ github.ref_name }}-offline.tar.gz
+      OFFLINE_STAGING: offline/network-topology-exporter-${{ github.ref_name }}
     permissions:
       contents: write       # create GitHub release
       packages: write       # push to ghcr.io
@@ -339,8 +343,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.4'
-
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+          cache: false
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
@@ -375,8 +378,6 @@ jobs:
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
             DATE=${{ github.event.head_commit.timestamp }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: sign container image (cosign keyless)
         env:
@@ -395,12 +396,15 @@ jobs:
           push-to-registry: true
 
       - name: go build release binaries
+        env:
+          REF_NAME: ${{ env.REF_NAME }}
+          COMMIT_SHA: ${{ env.COMMIT_SHA }}
         run: |
           mkdir -p bin
           LDFLAGS="-s -w \
-            -X github.com/colinedwardwood/network-topology-exporter/internal/version.Version=${{ github.ref_name }} \
-            -X github.com/colinedwardwood/network-topology-exporter/internal/version.Commit=${{ github.sha }} \
-            -X github.com/colinedwardwood/network-topology-exporter/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            -X github.com/grafana/network-topology-exporter/internal/version.Version=${REF_NAME} \
+            -X github.com/grafana/network-topology-exporter/internal/version.Commit=${COMMIT_SHA} \
+            -X github.com/grafana/network-topology-exporter/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           CGO_ENABLED=0 GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" \
             -o bin/topology-exporter-linux-amd64 ./cmd/topology-exporter
           CGO_ENABLED=0 GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" \
@@ -432,21 +436,21 @@ jobs:
         with:
           image: ghcr.io/${{ github.repository }}@${{ steps.build_push.outputs.digest }}
           format: spdx-json
-          output-file: network-topology-exporter-${{ github.ref_name }}.spdx.json
+          output-file: ${{ env.SBOM_FILE }}
           upload-artifact: false
           upload-release-assets: false
 
       - name: attest image SBOM
         env:
           DIGEST: ${{ steps.build_push.outputs.digest }}
-          SBOM: network-topology-exporter-${{ github.ref_name }}.spdx.json
+          SBOM: ${{ env.SBOM_FILE }}
         run: |
           cosign attest --yes --type spdxjson --predicate "${SBOM}" \
             "ghcr.io/${{ github.repository }}@${DIGEST}"
 
       - name: sign SBOM (cosign keyless)
         env:
-          SBOM: network-topology-exporter-${{ github.ref_name }}.spdx.json
+          SBOM: ${{ env.SBOM_FILE }}
         run: |
           cosign sign-blob --yes \
             --output-signature "${SBOM}.sig" \
@@ -459,9 +463,12 @@ jobs:
       # Helm-free Kustomize overlay tree.
       - name: assemble offline tarball
         env:
-          TARBALL: network-topology-exporter-${{ github.ref_name }}-offline.tar.gz
+          TARBALL: ${{ env.OFFLINE_TARBALL }}
+          STAGING_DIR: ${{ env.OFFLINE_STAGING }}
+          SBOM_FILE: ${{ env.SBOM_FILE }}
+          REF_NAME: ${{ env.REF_NAME }}
         run: |
-          staging="offline/network-topology-exporter-${{ github.ref_name }}"
+          staging="${STAGING_DIR}"
           mkdir -p "${staging}/bin" "${staging}/config" "${staging}/deploy"
           cp bin/topology-exporter-linux-amd64 \
              bin/topology-exporter-linux-amd64.sig \
@@ -471,14 +478,14 @@ jobs:
              bin/topology-exporter-linux-arm64.cert \
              "${staging}/bin/"
           cp config/example.yaml "${staging}/config/"
-          cp network-topology-exporter-${{ github.ref_name }}.spdx.json "${staging}/"
+          cp "${SBOM_FILE}" "${staging}/"
           cp -R deploy/helm/topology-exporter "${staging}/deploy/helm-chart"
           cp -R deploy/kustomize "${staging}/deploy/kustomize"
-          tar -czf "${TARBALL}" -C offline "network-topology-exporter-${{ github.ref_name }}"
+          tar -czf "${TARBALL}" -C offline "network-topology-exporter-${REF_NAME}"
 
       - name: sign offline tarball (cosign keyless)
         env:
-          TARBALL: network-topology-exporter-${{ github.ref_name }}-offline.tar.gz
+          TARBALL: ${{ env.OFFLINE_TARBALL }}
         run: |
           cosign sign-blob --yes \
             --output-signature "${TARBALL}.sig" \
@@ -495,10 +502,10 @@ jobs:
             bin/topology-exporter-linux-arm64
             bin/topology-exporter-linux-arm64.sig
             bin/topology-exporter-linux-arm64.cert
-            network-topology-exporter-${{ github.ref_name }}-offline.tar.gz
-            network-topology-exporter-${{ github.ref_name }}-offline.tar.gz.sig
-            network-topology-exporter-${{ github.ref_name }}-offline.tar.gz.cert
-            network-topology-exporter-${{ github.ref_name }}.spdx.json
-            network-topology-exporter-${{ github.ref_name }}.spdx.json.sig
-            network-topology-exporter-${{ github.ref_name }}.spdx.json.cert
+            ${{ env.OFFLINE_TARBALL }}
+            ${{ env.OFFLINE_TARBALL }}.sig
+            ${{ env.OFFLINE_TARBALL }}.cert
+            ${{ env.SBOM_FILE }}
+            ${{ env.SBOM_FILE }}.sig
+            ${{ env.SBOM_FILE }}.cert
           generate_release_notes: true

@@ -6,7 +6,7 @@ package federation
 import (
 	"time"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
 )
 
 // SpokePayload is the wire type pushed from a spoke to the hub after each

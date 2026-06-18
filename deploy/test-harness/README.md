@@ -4,7 +4,7 @@ Turnkey stack to scrape metrics and logs from the exporter and ship them to Graf
 
 ## Quickstart
 
-> The exporter image is published to `ghcr.io/colinedwardwood/network-topology-exporter`. The harness pins the current tester build (`:1.3.1-rc1`) so every tester is on the same image — Compose will pull it on first `up`, no local build required. Bump the tag in `docker-compose.yml` when a new release candidate ships.
+> The exporter image is published to `ghcr.io/grafana/network-topology-exporter`. The harness pins `:1.0.0` so every tester is on the same image — Compose will pull it on first `up`, no local build required. Bump the tag in `docker-compose.yml` when a new release ships.
 
 1. **Configure the exporter:**
    ```bash

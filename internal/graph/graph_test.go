@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
 )
 
 // LD-14: a unidirectional edge expires once it has been unconfirmed for ttl

@@ -22,7 +22,7 @@ import (
 	g "github.com/gosnmp/gosnmp"
 	"golang.org/x/time/rate"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
 )
 
 // WalkerMetrics is the observability sink for per-protocol walker outcomes.

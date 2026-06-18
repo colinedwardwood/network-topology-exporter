@@ -13,7 +13,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/app"
+	"github.com/grafana/network-topology-exporter/internal/app"
 )
 
 func main() {

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
-	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/graph"
 )
 
 // spokesSnapshot returns a shallow copy of h.spokes. Caller must hold h.mu.

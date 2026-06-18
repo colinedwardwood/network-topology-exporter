@@ -117,7 +117,7 @@ record per physical/logical link with a `Direction` flag, so:
 home in base RFC 8345/8346. They are the exporter's reconciliation provenance
 and are too useful to drop. They are carried under a small **vendor
 augmentation module** (`ntx-topology`, namespace
-`https://github.com/colinedwardwood/network-topology-exporter/yang/ntx-topology`)
+`https://github.com/grafana/network-topology-exporter/yang/ntx-topology`)
 that adds:
 
 - `link/ntx-topology:discovery-protocol` (enum mirroring `DiscoveryProtocol`)

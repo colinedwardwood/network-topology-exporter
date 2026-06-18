@@ -6,7 +6,7 @@ import (
 
 	gsnmp "github.com/gosnmp/gosnmp"
 
-	snmputil "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
+	snmputil "github.com/grafana/network-topology-exporter/internal/discovery/snmp"
 )
 
 // TestWalkFdbTableCorruptStatusReported (#170): a corrupt dot1dTpFdbStatus PDU

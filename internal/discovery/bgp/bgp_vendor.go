@@ -45,8 +45,8 @@ import (
 
 	gsnmp "github.com/gosnmp/gosnmp"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
-	snmputil "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
+	snmputil "github.com/grafana/network-topology-exporter/internal/discovery/snmp"
 )
 
 // vendorIndexDecoder extracts the BGP peer's remote IP address from the

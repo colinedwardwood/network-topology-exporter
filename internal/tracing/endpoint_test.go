@@ -6,7 +6,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/otelx"
+	"github.com/grafana/network-topology-exporter/internal/otelx"
 )
 
 // Endpoint parsing tests (TestEndpointURL / TestEndpointHostInsecure) live in

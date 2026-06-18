@@ -2,11 +2,11 @@ apiVersion: v2
 name: topology-exporter
 description: Network topology discovery Prometheus exporter (SNMP/LLDP/CDP/BGP/OSPF/FDB)
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
-home: https://github.com/colinedwardwood/network-topology-exporter
+version: 1.0.0
+appVersion: "1.0.0"
+home: https://github.com/grafana/network-topology-exporter
 sources:
-  - https://github.com/colinedwardwood/network-topology-exporter
+  - https://github.com/grafana/network-topology-exporter
 keywords:
   - network
   - topology

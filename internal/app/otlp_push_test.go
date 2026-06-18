@@ -13,9 +13,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/app"
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
-	"github.com/colinedwardwood/network-topology-exporter/internal/output/otlp"
+	"github.com/grafana/network-topology-exporter/internal/app"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/output/otlp"
 )
 
 // TestOtlpPushDropsWhenSemaphoreFull verifies that Push increments the

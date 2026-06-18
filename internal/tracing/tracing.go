@@ -32,7 +32,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/otelx"
+	"github.com/grafana/network-topology-exporter/internal/otelx"
 )
 
 // ScopeName is the instrumentation scope reported on every span emitted by

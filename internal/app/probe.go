@@ -12,11 +12,11 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/config"
-	"github.com/colinedwardwood/network-topology-exporter/internal/credentials"
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
-	snmpwalk "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
-	"github.com/colinedwardwood/network-topology-exporter/internal/tracing"
+	"github.com/grafana/network-topology-exporter/internal/config"
+	"github.com/grafana/network-topology-exporter/internal/credentials"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
+	snmpwalk "github.com/grafana/network-topology-exporter/internal/discovery/snmp"
+	"github.com/grafana/network-topology-exporter/internal/tracing"
 )
 
 // CredentialCandidate pairs a fully-populated snmpwalk.Params with the name of

@@ -149,7 +149,7 @@ kubectl kustomize deploy/kustomize/overlays/standalone
   ```sh
   cd deploy/kustomize/overlays/standalone
   kustomize edit set image \
-    ghcr.io/colinedwardwood/network-topology-exporter=ghcr.io/colinedwardwood/network-topology-exporter:1.6.0
+    ghcr.io/grafana/network-topology-exporter=ghcr.io/grafana/network-topology-exporter:1.0.0
   ```
 
   (or edit `images:` in `base/kustomization.yaml`).

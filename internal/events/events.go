@@ -15,7 +15,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/graph"
+	"github.com/grafana/network-topology-exporter/internal/graph"
 )
 
 // Logger writes EdgeChange records to a slog.Logger.

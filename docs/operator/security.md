@@ -94,7 +94,7 @@ tls_server_config:
 
 `client_allowed_sans` pins which scraper identities are accepted — a leaked cert with an unexpected SAN is rejected at the TLS layer before the request body is parsed. The Prometheus exporter-toolkit handles cert reload-on-change automatically, so SAN rotation does not require an exporter restart.
 
-The `listen.tls_cert_file` and `listen.tls_key_file` fields were removed in v1.5.0. Migrate to `listen.web_config_file` (set `tls_server_config.cert_file` / `key_file` to the same paths). Configs using the removed keys will fail to load with a parse error.
+Use `listen.web_config_file` for TLS termination (set `tls_server_config.cert_file` / `key_file` to your cert paths). Legacy per-field TLS keys are not supported.
 
 ## Verifying release artefact provenance
 
@@ -105,36 +105,36 @@ Every release artefact (Go binaries + multi-arch container image) is signed via 
 ```bash
 # Verify the keyless cosign signature
 cosign verify \
-  --certificate-identity-regexp '^https://github.com/colinedwardwood/network-topology-exporter/.github/workflows/' \
+  --certificate-identity-regexp '^https://github.com/grafana/network-topology-exporter/.github/workflows/' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-  ghcr.io/colinedwardwood/network-topology-exporter:VERSION
+  ghcr.io/grafana/network-topology-exporter:VERSION
 
 # Verify the SLSA provenance attestation
 gh attestation verify \
-  oci://ghcr.io/colinedwardwood/network-topology-exporter:VERSION \
-  --owner colinedwardwood
+  oci://ghcr.io/grafana/network-topology-exporter:VERSION \
+  --owner grafana
 ```
 
-Replace `VERSION` with the tag you are deploying (e.g. `v1.3.0`).
+Replace `VERSION` with the tag you are deploying (e.g. `v1.0.0`).
 
 ### Binary (downloaded from a GitHub Release)
 
 ```bash
 # Download the artefacts
-curl -LO https://github.com/colinedwardwood/network-topology-exporter/releases/download/VERSION/topology-exporter-linux-amd64
-curl -LO https://github.com/colinedwardwood/network-topology-exporter/releases/download/VERSION/topology-exporter-linux-amd64.sig
-curl -LO https://github.com/colinedwardwood/network-topology-exporter/releases/download/VERSION/topology-exporter-linux-amd64.cert
+curl -LO https://github.com/grafana/network-topology-exporter/releases/download/VERSION/topology-exporter-linux-amd64
+curl -LO https://github.com/grafana/network-topology-exporter/releases/download/VERSION/topology-exporter-linux-amd64.sig
+curl -LO https://github.com/grafana/network-topology-exporter/releases/download/VERSION/topology-exporter-linux-amd64.cert
 
 # Verify the keyless cosign signature
 cosign verify-blob \
   --signature topology-exporter-linux-amd64.sig \
   --certificate topology-exporter-linux-amd64.cert \
-  --certificate-identity-regexp '^https://github.com/colinedwardwood/network-topology-exporter/.github/workflows/' \
+  --certificate-identity-regexp '^https://github.com/grafana/network-topology-exporter/.github/workflows/' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   topology-exporter-linux-amd64
 
 # Verify the SLSA provenance attestation
-gh attestation verify topology-exporter-linux-amd64 --owner colinedwardwood
+gh attestation verify topology-exporter-linux-amd64 --owner grafana
 ```
 
 If either verification fails the artefact is not authentic — do not deploy it. Open a security advisory via GitHub Security Advisories on this repository before proceeding.

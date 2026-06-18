@@ -49,8 +49,8 @@ import (
 
 	gsnmp "github.com/gosnmp/gosnmp"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
-	snmputil "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
+	snmputil "github.com/grafana/network-topology-exporter/internal/discovery/snmp"
 )
 
 // Walker label constants. Keep these in sync with the metric's documented

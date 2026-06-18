@@ -7,8 +7,8 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/federation"
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/federation"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
 )
 
 // SpokePushDrainTimeout bounds the single final push attempt at shutdown so a

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
 )
 
 const defaultNetworkID = "network-topology-exporter"

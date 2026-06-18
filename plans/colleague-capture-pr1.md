@@ -2817,7 +2817,7 @@ Create `lab/cisco-iosxe-bgp/vendor.conf`:
 ```bash
 VENDOR_NAME="cisco-iosxe"
 VENDOR_DISPLAY_NAME="Cisco IOS-XE"
-ISSUE_REF="https://github.com/colinedwardwood/network-topology-exporter/issues/58"
+ISSUE_REF="https://github.com/grafana/network-topology-exporter/issues/58"
 LAB_DIR_REL="lab/cisco-iosxe-bgp"
 
 EXPECTED_SYSOBJECTID_PREFIX="1.3.6.1.4.1.9"
@@ -2874,7 +2874,7 @@ Read the current `lab/cisco-iosxe-bgp/README.md` first (the existing DevNet-focu
 
 Real-device SNMP capture for the **`vendor_cisco`** walker
 (`internal/discovery/bgp/bgp_vendor.go`) on Cisco IOS-XE.
-Closes [issue #58](https://github.com/colinedwardwood/network-topology-exporter/issues/58).
+Closes [issue #58](https://github.com/grafana/network-topology-exporter/issues/58).
 
 ## What this lab is for
 

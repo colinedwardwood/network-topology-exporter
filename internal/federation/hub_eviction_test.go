@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/config"
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/config"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
 )
 
 // TestHubEvictionRemovesStaleSpoke verifies that a spoke whose lastSeen

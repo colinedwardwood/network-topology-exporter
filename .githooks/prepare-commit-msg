@@ -1,0 +1,10 @@
+#!/bin/sh
+# Strip AI attribution trailers Cursor or other agents may inject.
+# Installed via: git config core.hooksPath .githooks
+sed -i '' \
+  -e '/cursoragent@cursor\.com/Id' \
+  -e '/^Co-[Aa]uthored-[Bb]y:.*[Cc]ursor/Id' \
+  -e '/^Co-[Aa]uthored-[Bb]y:.*[Cc]laude/Id' \
+  -e '/^Co-[Aa]uthored-[Bb]y:.*anthropic\.com/Id' \
+  -e '/^Made-with:.*[Cc]ursor/Id' \
+  "$1"

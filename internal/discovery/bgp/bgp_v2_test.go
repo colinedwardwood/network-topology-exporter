@@ -9,8 +9,8 @@ import (
 
 	gsnmp "github.com/gosnmp/gosnmp"
 
-	snmputil "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
-	"github.com/colinedwardwood/network-topology-exporter/internal/snmptest"
+	snmputil "github.com/grafana/network-topology-exporter/internal/discovery/snmp"
+	"github.com/grafana/network-topology-exporter/internal/snmptest"
 )
 
 // Real-device capture files (snmpwalk -On -Oe), loaded directly by the vendor

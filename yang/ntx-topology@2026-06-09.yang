@@ -1,13 +1,13 @@
 module ntx-topology {
   yang-version 1.1;
-  namespace "https://github.com/colinedwardwood/network-topology-exporter/yang/ntx-topology";
+  namespace "https://github.com/grafana/network-topology-exporter/yang/ntx-topology";
   prefix ntx;
 
   import ietf-network { prefix nw; }
   import ietf-network-topology { prefix nt; }
 
   organization "network-topology-exporter";
-  contact "https://github.com/colinedwardwood/network-topology-exporter";
+  contact "https://github.com/grafana/network-topology-exporter";
   description
     "Exporter-specific augmentations carrying reconciliation provenance that has
      no home in base RFC 8345/8346: per-link discovery protocol, link kind,

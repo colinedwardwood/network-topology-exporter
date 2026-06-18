@@ -5,8 +5,8 @@ package federation
 // no behaviour change.
 
 import (
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
 )
 
 // publishMetrics atomically swaps the Topology collector snapshot and, on the

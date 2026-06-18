@@ -120,7 +120,7 @@ The exporter now listens on `:9100`. Skip to **2.3 Verify**.
 docker run --rm -p 9100:9100 \
   -e SNMP_COMMUNITY=public \
   -v "$PWD/config.yaml:/etc/topology-exporter/config.yaml:ro" \
-  ghcr.io/colinedwardwood/network-topology-exporter:latest
+  ghcr.io/grafana/network-topology-exporter:latest
 ```
 
 The container reads `/etc/topology-exporter/config.yaml` by default (the

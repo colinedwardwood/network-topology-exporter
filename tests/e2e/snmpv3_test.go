@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery/lldp"
-	snmpwalk "github.com/colinedwardwood/network-topology-exporter/internal/discovery/snmp"
+	"github.com/grafana/network-topology-exporter/internal/discovery/lldp"
+	snmpwalk "github.com/grafana/network-topology-exporter/internal/discovery/snmp"
 )
 
 // snmpV3Params returns walk parameters for the authPriv USM user created in

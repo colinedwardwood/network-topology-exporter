@@ -149,7 +149,7 @@ each one means and what to do:
 ## Maintainer notes (for Colin)
 
 **Closed (2026-06): real-device capture landed.** This lab supported
-[issue #57](https://github.com/colinedwardwood/network-topology-exporter/issues/57)
+[issue #57](https://github.com/grafana/network-topology-exporter/issues/57)
 — real-device fixtures for the `nokiaTBgpPeerSpec` walker in
 `internal/discovery/bgp/bgp_vendor.go`. A Nokia colleague captured a live SR-OS
 25.7.R2 (7750 SR): modern SR-OS serves the next-gen `tBgpPeerNgTable`

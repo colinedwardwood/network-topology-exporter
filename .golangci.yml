@@ -29,7 +29,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/colinedwardwood/network-topology-exporter
+        - github.com/grafana/network-topology-exporter
 
 issues:
   max-issues-per-linter: 0

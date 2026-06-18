@@ -12,8 +12,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/limits"
-	"github.com/colinedwardwood/network-topology-exporter/internal/metrics"
+	"github.com/grafana/network-topology-exporter/internal/limits"
+	"github.com/grafana/network-topology-exporter/internal/metrics"
 )
 
 // labelKeyPattern is the canonical Prometheus / OpenMetrics label-name shape:

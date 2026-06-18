@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/colinedwardwood/network-topology-exporter/internal/discovery"
+	"github.com/grafana/network-topology-exporter/internal/discovery"
 )
 
 // Every Go wire constant must have a matching enum in ntx-topology.yang, so the

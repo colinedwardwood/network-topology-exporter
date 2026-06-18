@@ -138,7 +138,7 @@ type YANGOutputConfig struct {
 
 Concretely defined (the committed mapping doc left these `TBD`):
 
-- **namespace:** `https://github.com/colinedwardwood/network-topology-exporter/yang/ntx-topology`
+- **namespace:** `https://github.com/grafana/network-topology-exporter/yang/ntx-topology`
 - **prefix:** `ntx` · **revision:** `2026-06-09`
 - **imports:** `ietf-network` (`nw`), `ietf-network-topology` (`nt`)
 - **augment targets** (absolute schema-tree paths, each step prefixed by the module
